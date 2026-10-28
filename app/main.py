@@ -1947,7 +1947,8 @@ async def myads_page(request: Request, msg: str | None = None, show_hidden: bool
     return render(request, "myads.html", ads=ads, msg=msg, myadverts_url=my_ads.MYADVERTS_URL, cur_ad=cur_ad,
                   show_active=show_active, active_count=len(active) + len(expired),
                   hidden_count=len(hidden), show_hidden=show_hidden, sold_count=len(sold), show_sold=show_sold,
-                  inactive_count=len(inactive), show_inactive=show_inactive, sections=sections)
+                  inactive_count=len(inactive), show_inactive=show_inactive, sections=sections,
+                  vinted_ok=site_accounts.state("vinted")["logged_in"] is True)
 
 
 def _hx(request: Request) -> bool:
@@ -2197,6 +2198,13 @@ async def myads_cleanup(request: Request):
         return back(f"/myads?msg={quote(t('No ads selected'), safe='')}")
     n = my_ads.enqueue_cleanup(ids)
     return back(f"/myads?msg={quote(t('Clean-up of {n} ads started – it runs in the background', n=n), safe='')}")
+
+
+@app.post("/myads/{ad_id}/vinted")
+async def myads_vinted(request: Request, ad_id: str):
+    """The own ad as a draft on Vinted (services/crosspost.py), as a background job."""
+    from app.services import crosspost
+    return _queued(request, 1 if crosspost.enqueue(ad_id) else 0)
 
 
 @app.post("/myads/{ad_id}/deactivate")

@@ -17,10 +17,11 @@
   {{ ui.pending('ad:' ~ a.ad_id,
        {'delete': _("Deleting…"), 'deactivate': _("Deactivating…"), 'activate': _("Activating…"), 'edit': _("Saving…"),
         'photos': _("Saving the photos…"), 'sold': _("Marking as sold…"), 'reserved': _("Marking as reserved…"),
-        'unreserve': _("Removing the reservation…")}.get(a.pending_action, _("In progress…")),
+        'unreserve': _("Removing the reservation…"), 'vinted': _("Saving as a draft on Vinted…")}.get(a.pending_action, _("In progress…")),
        {'delete': _("Queued: delete"), 'deactivate': _("Queued: deactivate"), 'activate': _("Queued: activate"),
         'edit': _("Queued: save"), 'photos': _("Queued: save the photos"), 'sold': _("Queued: mark as sold"),
-        'reserved': _("Queued: mark as reserved"), 'unreserve': _("Queued: remove the reservation")}.get(a.pending_action, _("queued"))) }}
+        'reserved': _("Queued: mark as reserved"), 'unreserve': _("Queued: remove the reservation"),
+        'vinted': _("Queued: draft on Vinted")}.get(a.pending_action, _("queued"))) }}
 {%- endmacro %}
 {# marked sold here (sold workflow): sold, even while willhaben still says active #}
 {% macro status_pill(a) -%}
@@ -151,6 +152,27 @@
   <section class="flex flex-col gap-2.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
     <div class="flex flex-wrap items-center justify-between gap-2">{{ ui.eyebrow(_("Sale")) }}<a class="link link-primary text-[12.5px] no-underline" href="/sold/{{ a.ad_id }}?kind={{ a.sale_status or 'sold' }}{% if a.sale_conversation_id %}&buyer={{ a.sale_conversation_id }}{% endif %}">{{ _("Sale page: stock, the other buyers") }} →</a></div>
     {% with p = sale_panel(a.ad_id, a.sale_conversation_id), target = '#myads-detail', next = '/myads?ad=' ~ a.ad_id ~ keep, oob = '#myads-rows,#myads-chips,#myads-count', inline = true %}{% include "_sale_actions.html" %}{% endwith %}
+  </section>
+  {% endif %}
+
+  {# the ad also on Vinted (services/crosspost.py): a draft there the owner publishes on Vinted, its state read back #}
+  {% if not a.replaced_by and (a.vinted or vinted_ok) %}
+  <section id="myad-vinted" class="flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 px-5 py-4">
+    {{ ui.eyebrow(_("Vinted")) }}
+    {% if a.vinted and a.vinted.id %}
+      {% set vstate = {'draft': _("Draft – publish it on Vinted"), 'active': _("Online"), 'reserved': _("Reserved"),
+                       'sold': _("Sold"), 'hidden': _("Hidden"), 'gone': _("No longer on Vinted")}.get(a.vinted.state, a.vinted.state) %}
+      <div class="flex flex-wrap items-center justify-between gap-2 text-[13.5px]">
+        <span>{{ vstate }}{% if a.vinted.catalog %} <span class="text-muted">· {{ a.vinted.catalog }}</span>{% endif %}</span>
+        {% if a.vinted.url %}<a class="link link-primary no-underline" href="{{ a.vinted.url }}" target="_blank" rel="noopener">{{ _("Open on Vinted") }} →</a>{% endif %}
+      </div>
+    {% elif not a.pending_action %}
+      <form method="post" action="/myads/{{ a.ad_id }}/vinted" hx-post="/myads/{{ a.ad_id }}/vinted" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML"
+            class="flex flex-wrap items-center justify-between gap-2">
+        <small class="text-[12.5px] text-muted">{{ _("Title, text, price and photos as a draft in your Vinted account; Claude picks the category and the condition. You check it and publish it on Vinted.") }}</small>
+        <button class="btn btn-sm">{{ _("Save as a draft on Vinted") }}</button>
+      </form>
+    {% endif %}
   </section>
   {% endif %}
 

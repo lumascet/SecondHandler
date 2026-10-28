@@ -1057,6 +1057,11 @@ def start_update(label: str | None = None) -> jobs.Job:
 
 async def scheduled_update() -> None:
     await start_update(t("Daily update of my ads")).task
+    from app.services import crosspost
+    try:
+        await crosspost.refresh()            # the state of the ads also on Vinted (draft, online, sold …)
+    except Exception as e:  # noqa: BLE001 - Vinted logged out, slow: tomorrow again
+        log.info("vinted state of the linked ads not read: %s", e)
 
 
 async def _run_update(job: jobs.Job) -> str:

@@ -232,6 +232,8 @@ class MyAd(SQLModel, table=True):
     relist: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))  # a piece sold with PayLivery, more are
     #   left: willhaben takes the ad offline, the app puts it online again as a new ad (my_ads.relist). {since, checks,
     #   tries, draft: the willhaben draft of the copy once presaved}
+    vinted: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))  # the ad also on Vinted
+    #   (services/crosspost.py): {id, url, state draft|active|reserved|sold|hidden|gone, catalog, at, checked}
 
 
 class Sale(SQLModel, table=True):
