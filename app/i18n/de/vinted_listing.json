@@ -53,5 +53,7 @@
  "None of the selected ads is on Vinted": "Keine der gewählten Anzeigen ist auf Vinted",
  "only on Vinted": "nur auf Vinted",
  "Reading Vinted": "Lese Vinted",
- "{n} only on Vinted": "{n} nur auf Vinted"
+ "{n} only on Vinted": "{n} nur auf Vinted",
+ "Delete „{title}“ on willhaben for good? willhaben cannot bring it back.": "„{title}“ auf willhaben endgültig löschen? willhaben kann sie nicht wiederherstellen.",
+ "Delete the selected ads on willhaben for good? willhaben cannot bring them back.": "Die gewählten Anzeigen auf willhaben endgültig löschen? willhaben kann sie nicht wiederherstellen."
 }

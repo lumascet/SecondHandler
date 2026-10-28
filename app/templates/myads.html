@@ -30,6 +30,7 @@
   {%- elif a.sale_status == 'reserved' %}{{ ui.pill(_("reserved"), 'warn') }}
   {%- elif a.status == 'active' %}{{ ui.pill(_("active"), 'ok') }}
   {%- elif a.status == 'expired' %}{{ ui.pill(_("expired"), 'bad') }}
+  {%- elif a.status == 'draft' %}{{ ui.pill(_("Draft"), 'warn') }}
   {%- elif a.status in ('sold', 'reserved') or a.sale_status %}{{ ui.pill(_("sold") if (a.status == 'sold' or a.sale_status == 'sold') else _("reserved"), 'warn') }}
   {%- else %}{{ ui.pill(a.status if a.status and a.status != 'unknown' else '?') }}{% endif -%}
 {%- endmacro %}
@@ -75,7 +76,7 @@
     {% if show_hidden %}<button class="btn btn-xs" formaction="/myads/bulk/unhide" hx-post="/myads/bulk/unhide" data-act="unhide" :disabled="!picked.length">{{ _("Show again") }}</button>{% endif %}
     {% if vinted_ok %}<button class="btn btn-xs" formaction="/myads/bulk/vinted-sync" hx-post="/myads/bulk/vinted-sync" data-act="vinted-sync" :disabled="!picked.length" title="{{ _('Title, text and price kept the same on both sites (a change on either side goes to the other); hidden on Vinted while the ad is not for sale on willhaben. Runs every hour by itself.') }}">{{ ui.site_mark('vinted', 12) }}{{ _("Sync") }}</button>
     <button class="btn btn-xs" formaction="/myads/bulk/vinted" hx-post="/myads/bulk/vinted" data-act="vinted" :disabled="!picked.length" title="{{ _('Title, text, price and photos as a draft in your Vinted account; Claude picks the category and the condition. You check it and publish it on Vinted.') }}">{{ ui.site_mark('vinted', 12) }}{{ _("Also on Vinted") }}</button>{% endif %}
-    <button class="btn btn-xs btn-outline btn-error bg-base-100" formaction="/myads/bulk/delete" hx-post="/myads/bulk/delete" data-act="delete" :disabled="!picked.length">{{ _("Delete") }}</button>
+    <button class="btn btn-xs btn-outline btn-error bg-base-100" formaction="/myads/bulk/delete" hx-post="/myads/bulk/delete" hx-confirm="{{ _('Delete the selected ads on willhaben for good? willhaben cannot bring them back.') }}" data-act="delete" :disabled="!picked.length">{{ _("Delete") }}</button>
     <button type="button" class="btn btn-ghost btn-xs" id="sel-done" @click="mode(false)">{{ _("Done") }}</button>
   </form>
 
@@ -177,7 +178,7 @@
     <a class="btn whitespace-nowrap max-sm:px-2 max-sm:text-[13px]" href="/myads/{{ a.ad_id }}/edit">{{ _("Edit") }}</a>
     {% if a.status == 'active' %}<form method="post" action="/myads/{{ a.ad_id }}/deactivate" hx-post="/myads/{{ a.ad_id }}/deactivate"><button class="btn w-full whitespace-nowrap max-sm:px-2 max-sm:text-[13px]" title="{{ _('Take this ad offline on willhaben. You can activate it again.') }}">{{ _("Deactivate") }}</button></form>
     {% elif a.status not in ('sold', 'reserved') %}<form method="post" action="/myads/bulk/activate" hx-post="/myads/bulk/activate"><input type="hidden" name="ids" value="{{ a.ad_id }}"><button class="btn w-full whitespace-nowrap max-sm:px-2 max-sm:text-[13px]" title="{{ _('Put this ad online again on willhaben. If willhaben offers no “Activate”, it is republished as a new ad.') }}">{{ _("Activate") }}</button></form>{% endif %}
-    <form method="post" action="/myads/{{ a.ad_id }}/delete" class="col-span-2 sm:ml-auto" hx-post="/myads/{{ a.ad_id }}/delete"><button class="btn btn-ghost w-full text-error hover:bg-bad-soft" title="{{ _('Deletes the ad on willhaben for good – it waits a few seconds in the queue, where you can still take it back.') }}">{{ _("Delete") }}</button></form>
+    <form method="post" action="/myads/{{ a.ad_id }}/delete" class="col-span-2 sm:ml-auto" hx-post="/myads/{{ a.ad_id }}/delete" hx-confirm="{{ _('Delete „{title}“ on willhaben for good? willhaben cannot bring it back.', title=a.heading or a.ad_id) }}" data-confirm-delete><button class="btn btn-ghost w-full text-error hover:bg-bad-soft" title="{{ _('Deletes the ad on willhaben for good – it waits a few seconds in the queue, where you can still take it back.') }}">{{ _("Delete") }}</button></form>
   </div>
   {% endif %}
   {# sold / reserved: one click does it here and on willhaben (_sale_actions.html); the sale page has the ledger and

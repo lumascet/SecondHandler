@@ -1942,7 +1942,9 @@ async def myads_page(request: Request, msg: str | None = None, show_hidden: bool
     cutoff = int(get_setting("myads_expired_days") or 0)
     reserved = lambda a: a.status == "reserved" or a.sale_status == "reserved"   # noqa: E731
     sold = [a for a in ads if my_ads.is_sold(a) or reserved(a)]
-    active = [a for a in ads if a not in sold and a.status == "active"]
+    # a draft only on Vinted is still to be dealt with (publish it, or put it on willhaben): with the active ones,
+    # not hidden under "Deactivated" (10-28: "I don't see Vinted only ads")
+    active = [a for a in ads if a not in sold and (a.status == "active" or a.status == "draft")]
     expired = [a for a in ads if a not in sold and my_ads.is_expired(a, cutoff)]
     inactive = [a for a in ads if a not in sold and a not in active and a not in expired]
     show_active = show_active or not (show_inactive or show_sold)

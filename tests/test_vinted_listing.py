@@ -618,3 +618,28 @@ def test_deleting_on_willhaben_keeps_the_ad_on_vinted():
         assert row.heading == "Annke C800" and row.status == "draft" and row.image_url == "https://i/c.jpg"
         assert row.vinted["origin"] == "vinted" and "synced_wh" not in row.vinted
         assert row.url == "https://www.vinted.at/items/10576/edit"
+
+
+
+def test_a_vinted_draft_shows_in_the_normal_list():
+    with session() as db:
+        db.add(MyAd(ad_id="vinted-960", heading="Annke C800", status="draft",
+                    vinted={"id": "960", "state": "draft", "origin": "vinted"}))
+        db.commit()
+    from app.main import app
+    with TestClient(app) as c:
+        page = c.get("/myads").text
+    row = page[page.index('id="row-vinted-960"'):page.index('id="row-vinted-960"') + 3000]
+    assert "Draft" in row and 'data-row-site="vinted"' in row
+
+
+def test_delete_asks_first():
+    """10-28: a tap meant for Vinted deleted an ad on willhaben, which cannot be undone there."""
+    with session() as db:
+        db.add(MyAd(ad_id="970", heading="Router", status="active"))
+        db.commit()
+    from app.main import app
+    with TestClient(app) as c:
+        page = c.get("/myads?ad=970").text
+    assert 'data-confirm-delete' in page and 'hx-confirm="Delete „Router“ on willhaben for good?' in page
+    assert 'hx-post="/myads/bulk/delete" hx-confirm=' in page
