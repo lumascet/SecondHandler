@@ -140,6 +140,21 @@ def safe_next(target: str | None) -> str:
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
+def debug_login(headers: Any, client: str | None) -> bool:
+    """The debug login (DEBUG_TOKEN): the X-Debug-Token header with that token, sent straight from the home network.
+    A request the reverse proxy forwarded (X-Forwarded-*: it may come from the internet) never counts, nor one from a
+    public address."""
+    token = get_settings().debug_token
+    sent = headers.get("x-debug-token") or ""
+    if not token or len(token) < 16 or not sent or headers.get("x-forwarded-for") or headers.get("x-forwarded-host"):
+        return False
+    try:
+        ip = ipaddress.ip_address(client or "")
+    except ValueError:
+        return False
+    return (ip.is_private or ip.is_loopback) and secrets.compare_digest(sent.encode(), token.encode())
+
+
 def cross_site(method: str, headers: Any) -> bool:
     """A state-changing browser request from another origin (CSRF): its Origin names another host than the one it was
     sent to, or the browser says cross-site. Scripts with an Authorization header and requests without these browser

@@ -167,6 +167,9 @@ class DashboardAuth(BaseHTTPMiddleware):
             return await call_next(request)
         if auth.valid_token(request.cookies.get(auth.COOKIE)) or auth.valid_basic(request.headers.get("authorization", "")):
             return await call_next(request)
+        if auth.debug_login(request.headers, request.client.host if request.client else None):
+            log.info("debug login: %s %s", request.method, request.url.path)
+            return await call_next(request)
         target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
         login = f"/login?next={quote(target, safe='')}"
         if request.headers.get("hx-request"):                       # htmx fragment: reload the whole page to the login

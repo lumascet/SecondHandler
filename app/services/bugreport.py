@@ -338,7 +338,7 @@ def carrier_login_values() -> tuple[list[str], list[str]]:
 def known_secrets() -> list[str]:
     """Secret values from the environment and DATA_DIR (*-token, *-secret, *.json credential files)."""
     s = get_settings()
-    out = [s.dashboard_password or "", s.ha_token or "", s.claude_code_oauth_token or "", s.telegram_bot_token or "",
+    out = [s.dashboard_password or "", s.debug_token or "", s.ha_token or "", s.claude_code_oauth_token or "", s.telegram_bot_token or "",
            os.environ.get("VNC_PASSWORD", ""), os.environ.get("HA_TOKEN", ""), os.environ.get("ANTHROPIC_API_KEY", "")]
     d = s.data_dir
     try:

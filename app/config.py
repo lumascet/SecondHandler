@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     # Optional HTTP Basic auth for dashboard + API (recommended: the app can send messages for you).
     dashboard_user: str = "admin"
     dashboard_password: str | None = None
+    # A login for scripts on the home network while debugging (header X-Debug-Token, app/auth.debug_login): only
+    # straight from a private address, never through the reverse proxy. Unset = off.
+    debug_token: str | None = None
 
     @property
     def db_path(self) -> Path:

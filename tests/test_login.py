@@ -215,3 +215,23 @@ def test_without_a_password_the_public_address_needs_the_telegram_login(monkeypa
     for local in ("http://localhost:8000", "http://10.0.1.8:8010", "http://agent.local"):
         monkeypatch.setattr(get_settings(), "public_url", local)
         assert auth.public_host() is None
+
+
+def test_the_debug_login_only_straight_from_the_home_network(pw, monkeypatch):
+    token = "d" * 32
+    ok = {"x-debug-token": token}
+    assert not auth.debug_login(ok, "192.168.0.2")                         # off without DEBUG_TOKEN
+    monkeypatch.setattr(get_settings(), "debug_token", token)
+    assert auth.debug_login(ok, "192.168.0.2") and auth.debug_login(ok, "127.0.0.1")
+    assert not auth.debug_login(ok, "8.8.8.8")                             # a public address
+    assert not auth.debug_login({**ok, "x-forwarded-for": "203.0.113.9"}, "172.18.0.5")   # through the proxy
+    assert not auth.debug_login({**ok, "x-forwarded-host": "app.example.org"}, "172.18.0.5")
+    assert not auth.debug_login({"x-debug-token": "x" * 32}, "192.168.0.2")
+    assert not auth.debug_login({}, "192.168.0.2") and not auth.debug_login(ok, None)
+    monkeypatch.setattr(get_settings(), "debug_token", "short")
+    assert not auth.debug_login({"x-debug-token": "short"}, "192.168.0.2")  # too short a token is no login
+    monkeypatch.setattr(get_settings(), "debug_token", token)
+    with TestClient(app, client=("192.168.0.2", 5000)) as c:
+        assert c.get("/myads", headers=ok).status_code == 200
+        assert c.get("/myads").status_code == 401
+        assert c.get("/myads", headers={**ok, "x-forwarded-for": "203.0.113.9"}).status_code == 401
