@@ -650,7 +650,7 @@ async def test_an_item_published_on_vinted_itself_is_seen_by_sync_now_and_not_pu
     _setup(monkeypatch, tmp_path)
     with session() as db:
         db.add(MyAd(ad_id="vinted-990", heading="Annke C800", status="draft",
-                    vinted={"id": "990", "state": "draft", "origin": "vinted"}))
+                    vinted={"id": "990", "state": "draft", "origin": "vinted", "error": "Zugang verweigert"}))
         db.commit()
     FakeUpload.listed = [{"id": 990, "title": "Annke C800"}]                      # live on Vinted now
     from app.services import jobs as jobs_mod
@@ -660,7 +660,7 @@ async def test_an_item_published_on_vinted_itself_is_seen_by_sync_now_and_not_pu
     await runs[0](None)
     with session() as db:
         row = db.get(MyAd, "vinted-990")
-        assert row.status == "active" and row.vinted["state"] == "active"
+        assert row.status == "active" and row.vinted["state"] == "active" and row.vinted["error"] is None
         row.vinted = {**row.vinted, "state": "draft"}                            # still stale somewhere
         db.add(row)
         db.commit()

@@ -398,8 +398,9 @@ def _import_vinted_only(items: list[dict[str, Any]], complete: bool) -> int:
             row.heading = str(it.get("title") or row.heading or "")[:120]
             row.image_url = _image_of(it) or row.image_url
             row.status, row.url = VINTED_STATUS.get(state, state), item_url(iid, state)
+            # read fine: an error of an earlier step (a refused publish) no longer applies
             row.vinted = {**(row.vinted or {}), "id": iid, "state": state, "url": item_url(iid, state), "origin": "vinted",
-                          "checked": utcnow().isoformat()}
+                          "checked": utcnow().isoformat(), "error": None}
             row.last_checked_at = utcnow()
             db.add(row)
         if complete:                                      # gone from Vinted: gone here
