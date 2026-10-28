@@ -515,7 +515,14 @@ class Upload:
 
     async def open_edit(self, item_id: int | str) -> dict[str, Any]:
         """Go to the item's edit page and return the item from its page data (with photo_ids)."""
-        await self.page.goto(f"{ORIGIN}/items/{int(item_id)}/edit", wait_until="domcontentloaded", timeout=30000)
+        url = f"{ORIGIN}/items/{int(item_id)}/edit"
+        try:
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:  # noqa: BLE001 - 10-28: the load was aborted once (net::ERR_ABORTED): once more
+            if "ERR_ABORTED" not in str(e):
+                raise
+            await self.page.wait_for_timeout(1500)
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await self.page.wait_for_timeout(1500)
         item = item_from_payload(next_payload(await self.page.content()), item_id)
         if item is None:
