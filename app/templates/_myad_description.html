@@ -1,8 +1,11 @@
 {# My ads → panel: the ad as buyers see it on willhaben (GET /myads/<id>/description, swapped into #myad-description):
-   price and condition, every photo, pickup and delivery options, the text, then the price check with its Geizhals
-   rating (the ad viewer's price section, loaded after this). d: the public ad page (anonymous, cached briefly). #}
+   price and condition, every photo, pickup and delivery options, the text (the price check sits above, in the panel).
+   d: the public ad page (anonymous, cached briefly). #}
 {% import "_ui.html" as ui %}
-{{ ui.eyebrow(_("As buyers see it")) }}
+{# "Reload" here, where it acts: fetches the ad from willhaben anew (otherwise a copy up to 5 minutes old) #}
+<div class="flex items-center justify-between gap-2">{{ ui.eyebrow(_("As buyers see it")) }}
+  <button type="button" class="link link-primary inline-flex items-center gap-1 text-[12.5px] no-underline" title="{{ _('Fetch the ad from willhaben again (otherwise a copy up to 5 minutes old is shown)') }}"
+          hx-get="/myads/{{ a.ad_id }}/description?refresh=1" hx-target="#myad-description" hx-swap="innerHTML" hx-disabled-elt="this"><span class="busy:hidden">{{ ui.icon('refresh', 13) }}</span><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ _("Reload") }}</button></div>
 {% if error %}<p class="m-0 text-[13px] text-error">{{ error }}</p>
 {% elif not d %}<p class="m-0 text-[13px] text-muted">{{ _("willhaben shows no text for this ad (offline or under review).") }}</p>
 {% else %}

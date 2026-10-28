@@ -132,23 +132,26 @@
       {% if a.pending_action %}<div class="mt-1.5">{{ pending_note(a) }}</div>{% endif %}
     </div>
   </div>
-  {# where the ad is listed: one line per site, each with its own state and steps (willhaben's ad page and editor,
-     "Reload" fetches "As buyers see it" anew; Vinted: services/crosspost.py) #}
+  {# where the ad is listed: one line per site, each with its own state and steps (willhaben's ad page and editor;
+     Vinted: services/crosspost.py) #}
   <div class="flex flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 px-4 py-3" data-listings>
-    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]" data-listing="willhaben">
-      <span class="inline-flex w-[88px] items-center gap-1.5 font-medium">{{ ui.site_mark('willhaben', 14) }}willhaben</span>
+    {# two columns per line: the site, then its steps; steps that wrap line up under the steps, not under the
+       site's name (360 px phones, 10-28) #}
+    <div class="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-x-2 text-[13px]" data-listing="willhaben">
+      <span class="inline-flex min-h-6 items-center gap-1.5 font-medium">{{ ui.site_mark('willhaben', 14) }}willhaben</span>
+      <div class="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1">
       {% if wh %}
       <a class="link link-primary inline-flex items-center gap-1 no-underline" href="{{ a.url }}" target="_blank" rel="noopener">{{ _("Open") }}{{ ui.icon('external', 13) }}</a>
       <a class="link link-primary inline-flex items-center gap-1 no-underline" href="https://www.willhaben.at/iad/anzeige-bearbeiten/marktplatz?adId={{ a.ad_id }}&amp;adTypeId=67" target="_blank" rel="noopener">{{ _("Edit there") }}{{ ui.icon('external', 13) }}</a>
-    <button type="button" class="link link-primary inline-flex items-center gap-1 no-underline" title="{{ _('Fetch the ad from willhaben again (otherwise a copy up to 5 minutes old is shown)') }}"
-            hx-get="/myads/{{ a.ad_id }}/description?refresh=1" hx-target="#myad-description" hx-swap="innerHTML" hx-disabled-elt="this"><span class="busy:hidden">{{ ui.icon('refresh', 13) }}</span><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ _("Reload") }}</button>
       {% else %}
       <span class="text-muted">{{ _("not listed") }}</span>
       {% if not a.pending_action %}<form method="post" action="/myads/{{ a.ad_id }}/willhaben"><button class="btn btn-xs" title="{{ _('Title, text, price and photos into a new listing draft for willhaben: check the category there and publish it. The two then stay in step.') }}">{{ _("Also on willhaben") }}</button></form>{% endif %}
       {% endif %}
+      </div>
     </div>
-    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]" data-listing="vinted" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML">
-      <span class="inline-flex w-[88px] items-center gap-1.5 font-medium">{{ ui.site_mark('vinted', 14) }}Vinted</span>
+    <div class="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-x-2 text-[13px]" data-listing="vinted" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML">
+      <span class="inline-flex min-h-6 items-center gap-1.5 font-medium">{{ ui.site_mark('vinted', 14) }}Vinted</span>
+      <div class="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1">
       {% if a.vinted and a.vinted.id %}
       {% set vstate = {'draft': _("Draft"), 'active': _("Online"), 'reserved': _("Reserved"), 'sold': _("Sold"),
                        'hidden': _("Hidden"), 'gone': _("No longer on Vinted")}.get(a.vinted.state, a.vinted.state) %}
@@ -162,6 +165,7 @@
       <span class="text-muted">{{ _("not listed") }}</span>
       {% if vinted_ok and not a.pending_action and not a.replaced_by %}<form method="post" action="/myads/{{ a.ad_id }}/vinted" hx-post="/myads/{{ a.ad_id }}/vinted"><button class="btn btn-xs" title="{{ _('Title, text, price and photos as a draft in your Vinted account; Claude picks the category and the condition. You check it and publish it on Vinted.') }}">{{ _("Also on Vinted") }}</button></form>{% endif %}
       {% endif %}
+      </div>
     </div>
     {% if a.vinted and a.vinted.error %}<small class="text-[12.5px] text-error" data-vinted-error>{{ a.vinted.error }}</small>{% endif %}
   </div>
