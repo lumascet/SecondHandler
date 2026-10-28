@@ -725,7 +725,7 @@ def test_the_panel_loads_the_ads_text(monkeypatch):
         assert "Erste Zeile\nZweite &lt;Zeile&gt;" in frag 
         assert frag.count('<img src="https://img.example/') == 2 and 'x-text="(i + 1)' in frag and "€ 40" in frag and "1040 Wien" in frag
         assert "PayLivery Post" in frag and "€ 3,49" in frag and "€ 5,70" in frag
-        assert 'hx-get="/hits/ad/1/deal"' in frag                                # the price check with Geizhals
+        assert "/deal" not in frag and "/hits/ad/willhaben/1/deal" in panel     # one price check: the ad's own, above
         assert "HTTP 500" in c.get("/myads/2/description").text
         assert "shows no text" in c.get("/myads/3/description").text
         assert c.get("/myads/9/description").status_code == 404

@@ -350,6 +350,10 @@ class Upload:
             await self.close()
             raise ListingError("not logged in to Vinted")
         self.user_id = await self.page.evaluate(_JS_USER)
+        if self.user_id:                 # the upload page opened logged in: that is the login check too
+            from app.services import site_accounts
+            if site_accounts.state("vinted")["logged_in"] is not True:
+                site_accounts._save("vinted", True)
         return self
 
     async def __aexit__(self, *exc) -> None:

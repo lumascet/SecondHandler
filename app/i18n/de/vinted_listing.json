@@ -46,5 +46,10 @@
  "{title}: changed on willhaben and on Vinted since the last sync – willhaben's version is now on both": "{title}: seit dem letzten Abgleich auf willhaben und auf Vinted geändert – jetzt steht die willhaben-Fassung auf beiden",
  "Not an ad only on Vinted": "Keine Anzeige nur auf Vinted",
  "Taken over from Vinted": "Von Vinted übernommen",
- "Not copied: {error}": "Nicht übernommen: {error}"
+ "Not copied: {error}": "Nicht übernommen: {error}",
+ "Sync {n} ads with Vinted": "{n} Anzeigen mit Vinted abgleichen",
+ "All selected ads are on Vinted already": "Alle gewählten Anzeigen sind schon auf Vinted",
+ "Syncing {n} ads with Vinted": "Gleiche {n} Anzeigen mit Vinted ab",
+ "None of the selected ads is on Vinted": "Keine der gewählten Anzeigen ist auf Vinted",
+ "only on Vinted": "nur auf Vinted"
 }

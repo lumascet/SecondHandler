@@ -238,7 +238,8 @@ def test_the_button_on_the_ad_page_queues_the_draft(monkeypatch):
     queued = []
     monkeypatch.setattr(crosspost, "enqueue", lambda ad_id: queued.append(ad_id) or True)
     with TestClient(app) as c:
-        assert "Also on Vinted" not in c.get("/myads?ad=502").text     # Vinted not logged in
+        set_setting("account_vinted", '{"logged_in": false}')
+        assert "Also on Vinted" not in c.get("/myads?ad=502").text     # Vinted logged out
         set_setting("account_vinted", '{"logged_in": true}')
         assert "Also on Vinted" in c.get("/myads?ad=502").text
         c.post("/myads/502/vinted")
@@ -249,7 +250,9 @@ def test_the_button_on_the_ad_page_queues_the_draft(monkeypatch):
             db.add(row)
             db.commit()
         page = c.get("/myads?ad=502").text
-        assert "Also on Vinted" not in page and "https://www.vinted.at/items/9" in page
+        listing = page[page.index('data-listing="vinted"'):page.index('data-listing="vinted"') + 3000]
+        assert "Also on Vinted" not in listing and "https://www.vinted.at/items/9" in listing
+        assert 'formaction="/myads/bulk/vinted-sync"' in page             # the bulk bar: several at once
 
 
 async def _no_content(ad_id):
@@ -499,3 +502,23 @@ def test_the_page_shows_each_site_and_no_willhaben_steps_for_a_vinted_only_ad():
         assert "/myads/503/deactivate" in detail and "Sync now" in detail and "hidden while the ad is not for sale" in detail
         row = page[page.index('id="row-503"'):page.index('id="row-503"') + 3000]
         assert 'data-row-site="willhaben"' in row and 'data-row-site="vinted"' in row
+
+
+
+def test_several_ads_at_once(monkeypatch):
+    with session() as db:
+        db.add(MyAd(ad_id="801", heading="A", status="active", vinted={"id": "1", "state": "active"}))
+        db.add(MyAd(ad_id="802", heading="B", status="active"))
+        db.commit()
+    synced, created = [], []
+    from app.services import jobs
+    monkeypatch.setattr(jobs, "submit", lambda kind, label, run, **kw: synced.append((kind, label, kw.get("keys"))))
+    monkeypatch.setattr(crosspost, "enqueue", lambda ad_id: created.append(ad_id) or True)
+    assert crosspost.schedule_sync_many(["801", "802"]) == 1 and synced[0][0] == "vinted-sync"   # only the linked one
+    assert crosspost.enqueue_many(["801", "802"]) == 1 and created == ["802"]                   # only the new one
+    from app.main import app
+    with TestClient(app) as c:
+        r = c.post("/myads/bulk/vinted-sync", data={"ids": ["801", "802"]}, follow_redirects=False)
+        assert "Syncing" in r.headers["location"]
+        r = c.post("/myads/bulk/vinted", data={"ids": ["801"]}, follow_redirects=False)
+        assert "already" in r.headers["location"]

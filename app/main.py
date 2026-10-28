@@ -1964,7 +1964,7 @@ async def myads_page(request: Request, msg: str | None = None, show_hidden: bool
                   show_active=show_active, active_count=len(active) + len(expired),
                   hidden_count=len(hidden), show_hidden=show_hidden, sold_count=len(sold), show_sold=show_sold,
                   inactive_count=len(inactive), show_inactive=show_inactive, sections=sections,
-                  vinted_ok=site_accounts.state("vinted")["logged_in"] is True)
+                  vinted_ok=site_accounts.state("vinted")["logged_in"] is not False)   # unknown: try it
 
 
 def _hx(request: Request) -> bool:
@@ -2175,12 +2175,20 @@ async def myads_photos_save(ad_id: str, order: list[str] = Form(default=[]),
 
 @app.post("/myads/bulk/{action}")
 async def myads_bulk(request: Request, action: str):
-    if action not in ("activate", "deactivate", "delete", "hide", "unhide"):
+    if action not in ("activate", "deactivate", "delete", "hide", "unhide", "vinted", "vinted-sync"):
         raise HTTPException(404)
     form = await request.form()
     ids = [str(i) for i in form.getlist("ids") if str(i).isdigit()]
     if not ids:
         return _myads_back(request, t("No ads selected"), form=form)
+    if action in ("vinted", "vinted-sync"):   # the selected ads on Vinted: drafts for the new ones / one sync job
+        from app.services import crosspost
+        if action == "vinted":
+            n = crosspost.enqueue_many(ids)
+            return _myads_back(request, "" if n else t("All selected ads are on Vinted already"), form=form)
+        n = crosspost.schedule_sync_many(ids)
+        return _myads_back(request, t("Syncing {n} ads with Vinted", n=n) if n
+                           else t("None of the selected ads is on Vinted"), form=form)
     if action in ("hide", "unhide"):          # only this list: nothing happens on willhaben, so no queue
         for ad_id in ids:
             my_ads.set_hidden(ad_id, action == "hide")

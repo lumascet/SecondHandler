@@ -66,8 +66,5 @@
     {% elif d.paylivery_enabled %}PayLivery{% else %}{{ _("pickup only (no PayLivery)") }}{% endif %}</span>
 </div>
 {% if d.description %}<p class="m-0 whitespace-pre-line text-[13.5px] leading-relaxed">{{ d.description }}</p>{% endif %}
-{# the price check of the ad viewer: comparable ads, Geizhals' new price and the rating #}
-<section class="flex flex-col gap-2" hx-get="/hits/ad/{{ a.ad_id }}/deal" hx-trigger="load" hx-swap="outerHTML">
-  {{ ui.skel_deal() }}
-</section>
+{# no price check here: the ad's own one (with the seller's view) sits above this section, once (10-28: twice) #}
 {% endif %}

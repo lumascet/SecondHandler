@@ -287,7 +287,7 @@ def _linked(only: list[str] | None = None) -> dict[str, dict[str, Any]]:
 
 def _vinted_on() -> bool:
     from app.services import site_accounts
-    return site_accounts.state("vinted")["logged_in"] is True
+    return site_accounts.state("vinted")["logged_in"] is not False     # unknown (no check yet): try it
 
 
 async def _willhaben_content(ad_id: str) -> tuple[str, str, float | None] | None:
@@ -509,14 +509,31 @@ async def to_willhaben(ad_id: str) -> int:
 
 def schedule_sync(ad_id: str) -> None:
     """Sync one linked ad soon, as a quiet background job (after the app changed it on willhaben)."""
-    if not _linked([ad_id]):
-        return
+    schedule_sync_many([ad_id])
+
+
+def schedule_sync_many(ad_ids: list[str]) -> int:
+    """Sync these ads (the linked ones among them) as one background job – one Vinted tab for all. Returns how many
+    are linked; 0 queues nothing."""
+    ids = [i for i in dict.fromkeys(ad_ids) if i in _linked(list(ad_ids)) and not vinted_only(i)]
+    if not ids:
+        return 0
 
     async def run(job: jobs.Job) -> str:
-        done = await sync([ad_id])
+        done = await sync(ids)
         return t("Vinted: {changes}", changes=", ".join(f"{k} {n}" for k, n in done.items())) if done \
             else t("Vinted: nothing to change")
-    jobs.submit("vinted-sync", t("Sync with Vinted"), run, current=f"ad:{ad_id}", quiet=True, reuse_queued=True)
+    one = len(ids) == 1
+    jobs.submit("vinted-sync", t("Sync with Vinted") if one else t("Sync {n} ads with Vinted", n=len(ids)), run,
+                current=f"ad:{ids[0]}" if one else None, keys=None if one else [f"ad:{i}" for i in ids],
+                quiet=True, reuse_queued=one)
+    return len(ids)
+
+
+def enqueue_many(ad_ids: list[str]) -> int:
+    """"Also on Vinted" for several ads: a draft job each for those not on Vinted yet. Returns how many."""
+    linked = _linked(list(ad_ids))
+    return sum(enqueue(i) for i in dict.fromkeys(ad_ids) if i not in linked and not vinted_only(i))
 
 
 async def scheduled_sync() -> None:
