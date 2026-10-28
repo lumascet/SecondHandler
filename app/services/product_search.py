@@ -1128,9 +1128,21 @@ def get(search_id: int) -> ProductSearch | None:
 
 
 def recent(limit: int = RECENT) -> list[ProductSearch]:
+    """The latest searches, each text once (its newest run; one running or waiting for answers always shows):
+    the same search run again listed every run (10-28)."""
     with session() as db:
-        return list(db.exec(select(ProductSearch).order_by(col(ProductSearch.started_at).desc(),
-                                                           col(ProductSearch.id).desc()).limit(limit)))
+        rows = list(db.exec(select(ProductSearch).order_by(col(ProductSearch.started_at).desc(),
+                                                           col(ProductSearch.id).desc()).limit(limit * 4)))
+    out, seen = [], set()
+    for row in rows:
+        key = " ".join((row.description or "").lower().split())
+        if key in seen and not (is_running(row) or row.status == "asking"):
+            continue
+        seen.add(key)
+        out.append(row)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def is_running(row: ProductSearch | None) -> bool:

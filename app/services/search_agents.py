@@ -464,6 +464,8 @@ async def _search_all(specs: list[tuple[SearchSpec, dict[str, Any] | None]], wid
     ads: list[tuple[Listing, dict[str, Any] | None]] = []
     seen: set[tuple[str, str]] = set()
     rows, errors, first_exc, ok, held = 0, [], None, [], []
+    failed: list[tuple[int, str]] = []
+    skipped = 0
     n = len(specs)
     for i, (spec, q) in enumerate(specs, 1):
         try:
@@ -474,11 +476,11 @@ async def _search_all(specs: list[tuple[SearchSpec, dict[str, Any] | None]], wid
             continue
         except PlatformError as e:
             log.warning("agent search %s/%s (%s) failed: %s", i, n, spec.keyword, e)
-            errors.append(t("search {i}/{n} failed: {error}", i=i, n=n, error=e) if n > 1 else str(e))
+            failed.append((i, str(e)))
             first_exc = first_exc or e
             if isinstance(e, Blocked):
                 if i < n:
-                    errors.append(t("remaining searches skipped: {k}", k=n - i))
+                    skipped = n - i
                 break
             continue
         ok.append(q)
@@ -491,7 +493,22 @@ async def _search_all(specs: list[tuple[SearchSpec, dict[str, Any] | None]], wid
                 continue
             seen.add((spec.platform, ad.ad_id))
             ads.append((ad, q))
+    errors = failure_lines(failed, n)
+    if skipped:
+        errors.append(t("remaining searches skipped: {k}", k=skipped))
     return ads, rows, errors, first_exc, ok, held
+
+
+def failure_lines(failed: list[tuple[int, str]], n: int) -> list[str]:
+    """The failed searches as lines, one per kind of error: "3 of 12 searches failed: eBay …" rather than the same
+    sentence for each search (10-28: an agent card listed eBay's answer three times)."""
+    if n <= 1:
+        return [err for _, err in failed]
+    by_error: dict[str, list[int]] = {}
+    for i, err in failed:
+        by_error.setdefault(err, []).append(i)
+    return [t("search {i}/{n} failed: {error}", i=idx[0], n=n, error=err) if len(idx) == 1
+            else t("{k} of {n} searches failed: {error}", k=len(idx), n=n, error=err) for err, idx in by_error.items()]
 
 
 def _apply(hit: Hit, ad: Listing) -> None:

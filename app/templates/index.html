@@ -77,8 +77,10 @@
         <span class="block truncate font-medium">{{ h.heading }}</span>
         {% set meta = [h.location, (h.published_at|ago) if h.published_at else none]|select|list %}
         {% if meta %}<span class="block text-[12.5px] text-muted">{{ meta|join(' · ') }}</span>{% endif %}
+        {# shipping under the title: beside the price it took the row's width on a phone (10-28) #}
+        <span class="block">{{ ui.ship(h, 'text-[12px]') }}</span>
       </span>
-      <span class="flex flex-col items-end gap-0.5 text-right"><span class="font-semibold whitespace-nowrap tabular-nums">{{ h.price_display or (h.price|eur) }}</span>{{ ui.ship(h, 'text-[12px]') }}</span>
+      <span class="self-start font-semibold whitespace-nowrap tabular-nums">{{ h.price_display or (h.price|eur) }}</span>
     </a>
     {% else %}<p class="px-4 py-3.5 text-muted">{{ _("No new hits.") }}</p>{% endfor %}
   </section>

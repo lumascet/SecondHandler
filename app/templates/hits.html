@@ -6,7 +6,7 @@
 {% macro multi(name, values, labels, chosen, all_label, n_label, aria) %}
 {% set picked = chosen|list %}{% set on = (picked if picked else values)|list %}
 <details class="relative max-sm:w-full" data-multi="{{ name }}">
-  <summary class="select select-sm w-auto min-w-[150px] max-w-[260px] cursor-pointer list-none bg-base-100 max-sm:w-full max-sm:max-w-none" aria-label="{{ aria }}">
+  <summary class="select select-sm w-auto min-w-[150px] max-w-[260px] cursor-pointer list-none bg-base-100 max-sm:w-full max-sm:min-w-0 max-sm:max-w-none" aria-label="{{ aria }}">
     <span class="truncate">{% if not picked %}{{ all_label }}{% elif picked|length == 1 %}{% for v in values %}{% if v == picked[0] %}{{ labels[loop.index0] }}{% endif %}{% endfor %}{% else %}{{ n_label.replace('{n}', picked|length|string) }}{% endif %}</span></summary>
   <div class="absolute top-full left-0 z-30 mt-1 flex max-h-80 w-72 max-w-[calc(100vw-2rem)] flex-col gap-0.5 overflow-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
     <div class="mb-1 flex gap-1.5 border-b border-base-300 pb-1.5"><button type="button" class="btn btn-xs" data-multi-all>{{ _("All") }}</button><button type="button" class="btn btn-xs" data-multi-none>{{ _("None") }}</button></div>
@@ -56,7 +56,8 @@
   document.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('details[data-multi]')) open = e.target.open ? e.target.dataset.multi : (open === e.target.dataset.multi ? null : open); }, true);
   document.addEventListener('htmx:afterSettle', () => { if (open) { const d = document.querySelector(`details[data-multi="${open}"]`); if (d) d.open = true; } });
 })();</script>
-<form method="get" action="/hits" class="mb-3.5 flex flex-wrap items-center gap-2.5" hx-get="/hits" hx-trigger="change" {{ swap|safe }}>
+{# phone: the filters two by two (six full-width rows filled the first screen, 10-28) #}
+<form method="get" action="/hits" class="mb-3.5 flex flex-wrap items-center gap-2.5 max-sm:grid max-sm:grid-cols-2 max-sm:gap-2" hx-get="/hits" hx-trigger="change" {{ swap|safe }}>
   {# the states (New, Saved …): several at once; the counts next to them; "Being checked" only while there are such hits #}
   {% set tabs = [('new', _('New'))] + ([('pending', _('Being checked'))] if 'pending' in view.states or state_counts.get('pending') else []) + [('saved', _('Saved')), ('seen', _('Seen')), ('ignored', _('Ignored')), ('filtered', _('Filtered out'))] %}
   {% set slabels = [] %}{% for s, label in tabs %}{% set _x = slabels.append(label ~ (' · ' ~ state_counts.get(s) if state_counts.get(s) else '')) %}{% endfor %}
@@ -126,7 +127,6 @@
       {% set show_agent = not agent_id and agents.get(h.agent_id) %}
       {% if show_agent or platform_ids %}<div class="pointer-events-none absolute top-2 right-2 left-10 flex items-center gap-1.5 max-sm:hidden">
         {% if show_agent %}<span class="badge badge-sm min-w-0 max-w-full shrink overflow-hidden border-0 bg-black/55 font-medium leading-5 text-white" title="{{ agents[h.agent_id].name }}"><span class="min-w-0 truncate">{{ agents[h.agent_id].name }}</span></span>{% endif %}
-        {% if platform_ids %}<span class="badge badge-sm ml-auto max-w-[45%] shrink-0 overflow-hidden border-0 bg-black/55 font-medium leading-5 text-white"><span class="min-w-0 truncate">{{ platform_name(h.platform) }}</span></span>{% endif %}
       </div>{% endif %}
     </a>
     <div class="flex min-w-0 flex-col gap-1.5 sm:px-3.5 sm:pt-3 sm:pb-1.5">
@@ -171,8 +171,9 @@
         {%- if h.location or h.postcode %}{{ sep() }}<span data-hit-place>{{ h.location or h.postcode }}{% if h.postcode and h.location and h.postcode not in h.location %} ({{ h.postcode }}){% endif %}</span>{% endif %}
         {%- if km is not none %}{{ sep() }}<span data-km class="{{ 'text-warning' if far else '' }}">{{ _("{n} km", n=km|round|int) }}</span>{% endif %}
         {%- if h.is_private == false %}{{ sep() }}<span>{{ _("dealer") }}</span>{% endif %}
-        {%- if not agent_id and agents.get(h.agent_id) %}<span class="sm:hidden" data-hit-origin>{{ sep() }}{{ agents[h.agent_id].name }}</span>{% endif %}
         {{- sep() }}<span data-hit-when><span data-found{% if view.sort in ('newest', 'oldest') %} class="font-medium text-base-content"{% endif %} title="{{ (_('published {ago}', ago=h.published_at|ago) ~ ' · ') if h.published_at else '' }}{{ _('found {ago}', ago=h.first_seen_at|ago) }}">{{ _("found {ago}", ago=h.first_seen_at|ago) }}</span>{% if h.bumped_count %} · {{ _("bumped {n}×", n=h.bumped_count) }}{% endif %}</span>
+        {#- the agent last: on wide screens the card's corner names it, and a hidden first part left a lone "·" #}
+        {%- if not agent_id and agents.get(h.agent_id) %}<span class="sm:hidden" data-hit-origin> · {{ agents[h.agent_id].name }}</span>{% endif %}
       </div>
       {% with sync_error=none, can_sync=hit_can_sync(h) %}{% include "_hit_status.html" %}{% endwith %}
     </div>

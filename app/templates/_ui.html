@@ -98,7 +98,8 @@
 {# shipping next to a price (app/platforms/shipping_info.py): "+ € 4,90 shipping", "free shipping", "pickup only";
    nothing when the site states nothing. x: a hit, listing, ad page or result dict #}
 {% macro ship(x, cls='') -%}
-{%- set text = shipping_label(x) %}{% if text %}<span class="text-[12.5px] font-normal tracking-normal whitespace-nowrap text-muted {{ cls }}" title="{{ _('Shipping as the site states it (eBay: to your postcode)') }}">{{ text }}</span>{% endif %}
+{#- wraps between its parts (shipping · buyer protection), never inside an amount: on a narrow card it ran out of it #}
+{%- set text = shipping_label(x) %}{% if text %}<span class="text-[12.5px] font-normal tracking-normal text-muted {{ cls }}" title="{{ _('Shipping as the site states it (eBay: to your postcode)') }}">{% for part in text.split(' · ') %}<span class="whitespace-nowrap">{{ part }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</span>{% endif %}
 {%- endmacro %}
 
 {# a result card's shipping: what the list stated, or, when it stated no price and the site's ad page may, that page

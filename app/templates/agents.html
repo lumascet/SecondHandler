@@ -67,7 +67,8 @@
         <div class="flex items-center justify-between gap-2.5">
           <a href="/hits?agent_id={{ a.id }}&state=all" class="min-w-0 truncate text-[15px] font-semibold text-base-content no-underline hover:underline">{{ a.name }}</a>
           {% set site_ids = agent_sites(a) %}{% set site_names = [] %}{% for pid in site_ids %}{% set _x = site_names.append(platform_name(pid)) %}{% endfor %}
-          {% if platforms_multi() %}{{ ui.pill(site_names|join(' · '), '', false, 'shrink-0') }}{% endif %}
+          {# the sites as their marks: a pill of names squeezed the agent's name to nothing (10-28) #}
+          {% if platforms_multi() %}<span class="ml-auto flex shrink-0 items-center gap-1" title="{{ site_names|join(' · ') }}" data-agent-sites>{% for pid in site_ids %}{{ ui.site_mark(pid, 14) }}{% endfor %}</span>{% endif %}
           {% if counts.get(a.id) %}<a href="/hits?agent_id={{ a.id }}" class="badge badge-sm h-5 shrink-0 border-0 bg-primary font-semibold whitespace-nowrap text-primary-content no-underline">{{ _("{n} new", n=counts.get(a.id)) }}</a>
           {% elif not a.enabled %}{{ ui.pill(_("paused"), '', false, 'shrink-0') }}{% endif %}
         </div>
