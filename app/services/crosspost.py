@@ -555,6 +555,62 @@ def link_willhaben(vinted_ad: str, wh_ad_id: str) -> None:
 CONDITIONS = {6: "Neu", 1: "Neu", 2: "Gebraucht", 3: "Gebraucht", 4: "Gebraucht"}
 
 
+# Vinted's parcel sizes (1 small ≤0.5 kg, 2 medium ≤1 kg, 3 large ≤2 kg) as willhaben's PayLivery sizes: S takes up
+# to 3 kg with every carrier, M the bigger box
+PAYLIVERY_SIZE = {1: "S", 2: "S", 3: "M"}
+
+
+def wh_shipping(package_size_id: Any) -> dict[str, Any]:
+    """How an item from Vinted goes onto willhaben: shipped with PayLivery (it is sold shipped there), pickup too
+    when that is the owner's usual handover (10-28: it went on without PayLivery)."""
+    from app.services import selling
+    usual = selling.handover()
+    size = PAYLIVERY_SIZE.get(int(package_size_id)) if str(package_size_id or "").isdigit() else None
+    return {"handover": "shipping" if usual == "shipping" else "both", "paylivery": True, "size": size or "S",
+            "carrier": None}
+
+
+async def turn_on_paylivery(ad_id: str) -> str:
+    """PayLivery for an own willhaben ad that has none (shipping as for an item from Vinted): the delivery step of
+    willhaben's own form on the ad as it is."""
+    from app.willhaben import insert
+    from app.willhaben.session import get_session
+
+    sess = get_session()
+    ad = await insert.get_own_ad(sess, ad_id)
+    if not isinstance(ad, dict) or not ad.get("adId"):
+        raise vl.ListingError(t("Ad not found"))
+    current = await insert.shipping_of(sess, ad)
+    if current.get("paylivery"):
+        return t("PayLivery is on already")
+    with session() as db:
+        row = db.get(MyAd, ad_id)
+    res = await insert.set_delivery(sess, ad, wh_shipping((row.vinted or {}).get("package") if row else None))
+    opt = res.get("option") or {}
+    return t("PayLivery on: {size} {carrier}", size=opt.get("size") or "", carrier=opt.get("carrier") or "").strip()
+
+
+def enqueue_paylivery(ad_id: str) -> bool:
+    from app.services.my_ads import _mark, _unmark
+
+    row = _mark(ad_id, "edit")
+    if row is None:
+        return False
+
+    async def run(job: jobs.Job) -> str:
+        try:
+            msg = await turn_on_paylivery(ad_id)
+        except Exception as e:
+            _unmark(ad_id, t("PayLivery not turned on: {error}", error=e))
+            raise
+        _unmark(ad_id)
+        return msg
+
+    jobs.submit("myads-paylivery", t("PayLivery for „{title}“", title=(row.heading or ad_id)[:60]), run,
+                current=f"ad:{ad_id}", on_cancel=lambda: _unmark(ad_id), quiet=True)
+    return True
+
+
 async def auto_willhaben(ad_id: str) -> str:
     """An ad only on Vinted straight onto willhaben: its listing draft (to_willhaben), willhaben's suggested category
     and the owner's usual handover, published as a background job; once online the two are one ad (link_willhaben).
@@ -573,7 +629,8 @@ async def auto_willhaben(ad_id: str) -> str:
     d = await ad_creator.prepare_willhaben(draft_id)
     if not (d.wh_plan or {}).get("options"):
         raise vl.ListingError(t("willhaben suggests no category for it – pick one on draft #{id}", id=draft_id))
-    if not ad_creator.enqueue_publish(draft_id, 0, {}, None):
+    v = _linked([ad_id]).get(ad_id) or {}
+    if not ad_creator.enqueue_publish(draft_id, 0, {}, wh_shipping(v.get("package"))):
         with session() as db:
             d = db.get(AdDraft, draft_id)
         raise vl.ListingError(d.error or t("Not published on willhaben"))
@@ -624,6 +681,7 @@ async def to_willhaben(ad_id: str) -> int:
     async with vl.Upload() as up:
         item = await up.open_edit(v["id"])
     vl.check_text(item.get("title"), item.get("description"))
+    _set(ad_id, package=item.get("packageSizeId"))     # its parcel size: PayLivery on willhaben (wh_shipping)
     cond = next((a.get("ids") or [None] for a in item.get("itemAttributes") or [] if a.get("code") == "condition"),
                 [None])[0]
     with session() as db:

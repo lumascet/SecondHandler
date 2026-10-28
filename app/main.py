@@ -2240,6 +2240,15 @@ async def myads_to_willhaben(request: Request, ad_id: str):
     return _queued(request, 1 if crosspost.enqueue_willhaben(ad_id) else 0)   # straight online, as a job
 
 
+@app.post("/myads/{ad_id}/paylivery")
+async def myads_paylivery(request: Request, ad_id: str):
+    """PayLivery for an own ad that has none (the delivery step of willhaben's form), as a background job."""
+    from app.services import crosspost
+    if not ad_id.isdigit():
+        raise HTTPException(400)
+    return _queued(request, 1 if crosspost.enqueue_paylivery(ad_id) else 0)
+
+
 @app.post("/myads/{ad_id}/vinted/publish")
 async def myads_vinted_publish(request: Request, ad_id: str):
     from app.services import crosspost

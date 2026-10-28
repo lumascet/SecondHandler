@@ -66,7 +66,8 @@
   <span class="text-muted">{{ _("Pickup") }}</span><span>{{ d.location or d.place or _("no place given") }}</span>
   <span class="text-muted">{{ _("Delivery") }}</span>
   <span>{% if d.shipping_options %}{% for o in d.shipping_options %}<span class="block">PayLivery {{ o.name }}{% if o.point is not none %} · {{ _("pickup point {price}", price=o.point|eur) }}{% endif %}{% if o.home is not none %} · {{ _("to the door {price}", price=o.home|eur) }}{% endif %}</span>{% endfor %}<span class="block text-[12px] text-muted">{{ _("The buyer pays shipping and the buyer protection fee.") }}</span>
-    {% elif d.paylivery_enabled %}PayLivery{% else %}{{ _("pickup only (no PayLivery)") }}{% endif %}</span>
+    {% elif d.paylivery_enabled %}PayLivery{% else %}{{ _("pickup only (no PayLivery)") }}
+      <form method="post" action="/myads/{{ a.ad_id }}/paylivery" hx-post="/myads/{{ a.ad_id }}/paylivery" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML" class="mt-1"><button class="btn btn-xs" data-paylivery-on title="{{ _('Shipping with PayLivery on willhaben for this ad (parcel size S, or M for a large parcel)') }}">{{ _("Turn on PayLivery") }}</button></form>{% endif %}</span>
 </div>
 {% if d.description %}<p class="m-0 whitespace-pre-line text-[13.5px] leading-relaxed">{{ d.description }}</p>{% endif %}
 {# no price check here: the ad's own one (with the seller's view) sits above this section, once (10-28: twice) #}

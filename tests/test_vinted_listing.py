@@ -700,9 +700,12 @@ async def test_list_on_willhaben_publishes_with_the_suggested_category(monkeypat
                                                                        "fields": []}]})
     published = []
     monkeypatch.setattr(ad_creator, "prepare_willhaben", prepare)
-    monkeypatch.setattr(ad_creator, "enqueue_publish", lambda did, opt, vals, ship: published.append((did, opt)) or True)
+    monkeypatch.setattr(ad_creator, "enqueue_publish",
+                        lambda did, opt, vals, ship: published.append((did, opt, ship)) or True)
     msg = await crosspost.auto_willhaben("vinted-777")
     assert published and published[0][1] == 0 and "draft #" in msg
+    ship = published[0][2]                                       # 10-28: it went on without PayLivery
+    assert ship["paylivery"] is True and ship["size"] == "S" and ship["handover"] in ("both", "shipping")
     with session() as db:
         d = db.get(AdDraft, published[0][0])
         assert d.condition == "Gebraucht" and d.vinted_ad == "vinted-777"         # Vinted's condition 3: "Gut"
@@ -768,3 +771,42 @@ def test_the_ad_viewer_reads_a_long_description_too():
             '{"name":"attributes","data":{"attributes":[]}}]}\n' + f'103:T{len(TEXT.encode()):x},{TEXT}')
     d = vinted.parse_item(page, "778")
     assert d.description == TEXT
+
+
+
+def test_vinted_parcel_sizes_as_paylivery_sizes():
+    assert crosspost.wh_shipping(1)["size"] == "S" and crosspost.wh_shipping(3)["size"] == "M"
+    assert crosspost.wh_shipping(None)["size"] == "S" and crosspost.wh_shipping("x")["paylivery"] is True
+    set_setting("sell_handover", "shipping")
+    assert crosspost.wh_shipping(2)["handover"] == "shipping"
+    set_setting("sell_handover", "pickup")
+    assert crosspost.wh_shipping(2)["handover"] == "both"           # pickup stays possible, shipping is added
+
+
+async def test_turning_on_paylivery_for_an_ad_without(monkeypatch):
+    from app.willhaben import insert, session as wsession
+    with session() as db:
+        db.add(MyAd(ad_id="1632", heading="Annke C800", status="active", vinted={"id": "9", "package": 3}))
+        db.commit()
+    calls = []
+
+    async def own(s, ad_id):
+        return {"adId": int(ad_id), "heading": "Annke C800"}
+
+    async def shipping_of(s, ad):
+        return {"handover": "pickup"}
+
+    async def set_delivery(s, ad, shipping):
+        calls.append(shipping)
+        return {"option": {"size": shipping["size"], "carrier": "Post"}}
+    monkeypatch.setattr(wsession, "get_session", lambda: object())
+    monkeypatch.setattr(insert, "get_own_ad", own)
+    monkeypatch.setattr(insert, "shipping_of", shipping_of)
+    monkeypatch.setattr(insert, "set_delivery", set_delivery)
+    assert await crosspost.turn_on_paylivery("1632") == "PayLivery on: M Post"
+    assert calls[0]["paylivery"] is True and calls[0]["size"] == "M"
+
+    async def has(s, ad):
+        return {"handover": "both", "paylivery": True, "size": "S"}
+    monkeypatch.setattr(insert, "shipping_of", has)
+    assert await crosspost.turn_on_paylivery("1632") == "PayLivery is on already" and len(calls) == 1
