@@ -731,7 +731,7 @@ def test_the_panel_loads_the_ads_text(monkeypatch):
         assert c.get("/myads/9/description").status_code == 404
         # "Reload" fetches anew, in the section it reloads; the link opens willhaben's own editor
         assert 'hx-get="/myads/1/description?refresh=1"' in frag and "/edit\"" not in frag
-        assert 'href="https://www.willhaben.at/iad/anzeige-bearbeiten/marktplatz?adId=1&amp;adTypeId=67"' in panel
+        assert "anzeige-bearbeiten" not in panel                     # "Edit" here reaches both sites (10-28)
         refreshed.clear()
         c.get("/myads/1/description?refresh=1")
         assert refreshed == [True]

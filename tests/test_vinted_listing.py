@@ -261,7 +261,7 @@ def test_the_button_on_the_ad_page_queues_the_draft(monkeypatch):
         page = c.get("/myads?ad=502").text
         listing = page[page.index('data-listing="vinted"'):page.index('data-listing="vinted"') + 3000]
         assert "/vinted\" hx-post" not in listing and "https://www.vinted.at/items/9" in listing
-        assert 'formaction="/myads/bulk/vinted-sync"' in page             # the bulk bar: several at once
+        assert 'formaction="/myads/bulk/vinted"' in page                  # the bulk bar: several at once
 
 
 async def _no_content(ad_id):
@@ -509,7 +509,10 @@ def test_the_page_shows_each_site_and_no_willhaben_steps_for_a_vinted_only_ad():
         assert 'value="vinted-950"' not in page                            # no bulk checkbox: willhaben steps only
         page = c.get("/myads?ad=503").text
         detail = page[page.index('id="myads-detail"'):]
-        assert "/myads/503/deactivate" in detail and "Sync now" in detail and "hidden while the ad is not for sale" in detail
+        assert "/myads/503/deactivate" in detail and "hidden while the ad is not for sale" in detail
+        assert "Sync now" not in detail and "Edit there" not in detail          # both sites follow by themselves
+        listing = detail[detail.index('data-listing="willhaben"'):detail.index('data-listing="vinted"')]
+        assert ">Online<" in listing and "Open" in listing                       # the same on each site's line
         row = page[page.index('id="row-503"'):page.index('id="row-503"') + 3000]
         assert 'data-row-site="willhaben"' in row and 'data-row-site="vinted"' in row
 

@@ -67,5 +67,7 @@
  "PayLivery not turned on: {error}": "PayLivery nicht eingeschaltet: {error}",
  "PayLivery for „{title}“": "PayLivery für „{title}“",
  "Shipping with PayLivery on willhaben for this ad (parcel size S, or M for a large parcel)": "Versand mit PayLivery auf willhaben für diese Anzeige (Paketgröße S, bei großem Paket M)",
- "Turn on PayLivery": "PayLivery einschalten"
+ "Turn on PayLivery": "PayLivery einschalten",
+ "In review": "In Prüfung",
+ "Expired": "Abgelaufen"
 }
