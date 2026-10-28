@@ -17,7 +17,7 @@
   {{ ui.pending('ad:' ~ a.ad_id,
        {'delete': _("Deleting…"), 'deactivate': _("Deactivating…"), 'activate': _("Activating…"), 'edit': _("Saving…"),
         'photos': _("Saving the photos…"), 'sold': _("Marking as sold…"), 'reserved': _("Marking as reserved…"),
-        'unreserve': _("Removing the reservation…"), 'vinted': _("Working on Vinted…")}.get(a.pending_action, _("In progress…")),
+        'unreserve': _("Removing the reservation…"), 'vinted': _("Working on Vinted / willhaben…")}.get(a.pending_action, _("In progress…")),
        {'delete': _("Queued: delete"), 'deactivate': _("Queued: deactivate"), 'activate': _("Queued: activate"),
         'edit': _("Queued: save"), 'photos': _("Queued: save the photos"), 'sold': _("Queued: mark as sold"),
         'reserved': _("Queued: mark as reserved"), 'unreserve': _("Queued: remove the reservation"),
@@ -75,7 +75,7 @@
     <button class="btn btn-xs" formaction="/myads/bulk/hide" hx-post="/myads/bulk/hide" data-act="hide" :disabled="!picked.length" title="{{ _('Only from this list – the ads stay online on willhaben') }}">{{ _("Hide from list") }}</button>
     {% if show_hidden %}<button class="btn btn-xs" formaction="/myads/bulk/unhide" hx-post="/myads/bulk/unhide" data-act="unhide" :disabled="!picked.length">{{ _("Show again") }}</button>{% endif %}
     {% if vinted_ok %}<button class="btn btn-xs" formaction="/myads/bulk/vinted-sync" hx-post="/myads/bulk/vinted-sync" data-act="vinted-sync" :disabled="!picked.length" title="{{ _('Title, text and price kept the same on both sites (a change on either side goes to the other); hidden on Vinted while the ad is not for sale on willhaben. Runs every hour by itself.') }}">{{ ui.site_mark('vinted', 12) }}{{ _("Sync") }}</button>
-    <button class="btn btn-xs" formaction="/myads/bulk/vinted" hx-post="/myads/bulk/vinted" data-act="vinted" :disabled="!picked.length" title="{{ _('Title, text, price and photos as a draft in your Vinted account; Claude picks the category and the condition. You check it and publish it on Vinted.') }}">{{ ui.site_mark('vinted', 12) }}{{ _("Also on Vinted") }}</button>{% endif %}
+    <button class="btn btn-xs" formaction="/myads/bulk/vinted" hx-post="/myads/bulk/vinted" data-act="vinted" :disabled="!picked.length" title="{{ _('Title, text, price and photos as a draft in your Vinted account; Claude picks the category and the condition. You check it and publish it on Vinted.') }}">{{ ui.site_mark('vinted', 12) }}{{ _("List") }}</button>{% endif %}
     <button class="btn btn-xs btn-outline btn-error bg-base-100" formaction="/myads/bulk/delete" hx-post="/myads/bulk/delete" hx-confirm="{{ _('Delete the selected ads on willhaben for good? willhaben cannot bring them back.') }}" data-act="delete" :disabled="!picked.length">{{ _("Delete") }}</button>
     <button type="button" class="btn btn-ghost btn-xs" id="sel-done" @click="mode(false)">{{ _("Done") }}</button>
   </form>
@@ -146,7 +146,7 @@
       <a class="link link-primary inline-flex items-center gap-1 no-underline" href="https://www.willhaben.at/iad/anzeige-bearbeiten/marktplatz?adId={{ a.ad_id }}&amp;adTypeId=67" target="_blank" rel="noopener">{{ _("Edit there") }}{{ ui.icon('external', 13) }}</a>
       {% else %}
       <span class="text-muted">{{ _("not listed") }}</span>
-      {% if not a.pending_action %}<form method="post" action="/myads/{{ a.ad_id }}/willhaben"><button class="btn btn-xs" title="{{ _('Title, text, price and photos into a new listing draft for willhaben: check the category there and publish it. The two then stay in step.') }}">{{ _("Also on willhaben") }}</button></form>{% endif %}
+      {% if not a.pending_action %}<form method="post" action="/myads/{{ a.ad_id }}/willhaben"><button class="btn btn-xs" title="{{ _('Title, text, price and photos straight onto willhaben, in the category willhaben suggests; then the two stay in step.') }}">{{ _("List") }}</button></form>{% endif %}
       {% endif %}
       </div>
     </div>
@@ -164,7 +164,7 @@
       {% endif %}
       {% else %}
       <span class="text-muted">{{ _("not listed") }}</span>
-      {% if vinted_ok and not a.pending_action and not a.replaced_by %}<form method="post" action="/myads/{{ a.ad_id }}/vinted" hx-post="/myads/{{ a.ad_id }}/vinted"><button class="btn btn-xs" title="{{ _('Title, text, price and photos as a draft in your Vinted account; Claude picks the category and the condition. You check it and publish it on Vinted.') }}">{{ _("Also on Vinted") }}</button></form>{% endif %}
+      {% if vinted_ok and not a.pending_action and not a.replaced_by %}<form method="post" action="/myads/{{ a.ad_id }}/vinted" hx-post="/myads/{{ a.ad_id }}/vinted"><button class="btn btn-xs" title="{{ _('Title, text, price and photos as a draft in your Vinted account; Claude picks the category and the condition. You check it and publish it on Vinted.') }}">{{ _("List") }}</button></form>{% endif %}
       {% endif %}
       </div>
     </div>

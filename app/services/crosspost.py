@@ -4,8 +4,8 @@ upload page suggests them (platforms/vinted_listing.py). The owner checks the dr
 Vinted); the link stays on the ad (MyAd.vinted).
 
 An ad is one thing on several sites: My ads shows each site it is listed on. Items only in the Vinted account show
-up there too ("vinted-<id>"); "Also on willhaben" copies one into a listing draft for willhaben (to_willhaben), and
-once published the two are one ad.
+up there too ("vinted-<id>"); "List" on its willhaben line puts it there (auto_willhaben; by itself when the sync finds one
+online on Vinted), and once published the two are one ad.
 
 sync() keeps the two sites in step, hourly and right after the app changes an ad:
 - title, text and price are the same on both: the side that changed since the last sync wins (a change on Vinted is
@@ -235,7 +235,7 @@ async def to_vinted(ad_id: str, job: jobs.Job | None = None) -> str:
 
 
 def enqueue(ad_id: str) -> bool:
-    """"Also on Vinted" as a background job (lane ads). False: the ad waits for another action or is gone."""
+    """"List" on the Vinted line as a background job (lane ads). False: the ad waits for another action or is gone."""
     from app.services.my_ads import _mark, _unmark
 
     row = _mark(ad_id, "vinted")
@@ -359,13 +359,13 @@ async def _to_willhaben(ad_id: str, title: str, text: str, price: float | None) 
 
 def vinted_only_row(row: MyAd) -> MyAd:
     """The ad as an ad only on Vinted, for when its willhaben ad is gone (deleted there): the Vinted item stays
-    listed here, with "Also on willhaben" to put it there again."""
+    listed here, with "List" on its willhaben line to put it there again."""
     v = dict(row.vinted or {})
     status = VINTED_STATUS.get(v.get("state") or "", "active")
     return MyAd(ad_id=f"{VINTED_ONLY}{v['id']}", heading=row.heading, image_url=row.image_url, status=status,
                 url=item_url(v["id"], v.get("state")), published_at=row.published_at, parcel=row.parcel,
                 quantity=row.quantity, vinted={**{k: val for k, val in v.items() if not k.startswith("synced")},
-                                               "origin": "vinted"})
+                                               "origin": "vinted", "wh_deleted": True})
 
 
 def _image_of(item: dict[str, Any]) -> str | None:
@@ -434,6 +434,8 @@ async def sync(only: list[str] | None = None) -> dict[str, int]:
         # the ads only on Vinted follow their Vinted state on every sync, "Sync now" too (10-28: an item published on
         # Vinted itself still showed as a draft here, and "Publish" was refused); new ones are taken in as well
         counts["new"] = _import_vinted_only(listed, complete)
+        for due in _auto_willhaben_due():          # only on Vinted and online there: onto willhaben too
+            counts["to_willhaben"] += enqueue_willhaben(due)
         items = {str(i.get("id")): i for i in listed}
         for ad_id, v in linked.items():
             if vinted_only(ad_id):
@@ -541,6 +543,67 @@ def link_willhaben(vinted_ad: str, wh_ad_id: str) -> None:
         db.commit()
 
 
+# Vinted's condition ids (seen on the upload page) as willhaben's form names them
+CONDITIONS = {6: "Neu", 1: "Neu", 2: "Gebraucht", 3: "Gebraucht", 4: "Gebraucht"}
+
+
+async def auto_willhaben(ad_id: str) -> str:
+    """An ad only on Vinted straight onto willhaben: its listing draft (to_willhaben), willhaben's suggested category
+    and the owner's usual handover, published as a background job; once online the two are one ad (link_willhaben).
+    One try per item (vinted.wh_draft); a refusal stays on the ad and on the draft page."""
+    from app.db import AdDraft
+    from app.services import ad_creator
+
+    v = _linked([ad_id]).get(ad_id) or {}
+    if v.get("wh_draft"):
+        with session() as db:
+            d = db.get(AdDraft, int(v["wh_draft"]))
+        if d is not None and d.status != "discarded":
+            raise vl.ListingError(t("Already being put on willhaben: draft #{id}", id=d.id))
+    draft_id = await to_willhaben(ad_id)
+    _set(ad_id, wh_draft=draft_id, error=None)
+    d = await ad_creator.prepare_willhaben(draft_id)
+    if not (d.wh_plan or {}).get("options"):
+        raise vl.ListingError(t("willhaben suggests no category for it – pick one on draft #{id}", id=draft_id))
+    if not ad_creator.enqueue_publish(draft_id, 0, {}, None):
+        with session() as db:
+            d = db.get(AdDraft, draft_id)
+        raise vl.ListingError(d.error or t("Not published on willhaben"))
+    return t("Being published on willhaben (draft #{id})", id=draft_id)
+
+
+def enqueue_willhaben(ad_id: str) -> bool:
+    """"List" on the willhaben line as a background job: straight online, no draft to open."""
+    from app.services.my_ads import _mark, _unmark
+
+    row = _mark(ad_id, "vinted")
+    if row is None:
+        return False
+
+    async def run(job: jobs.Job) -> str:
+        try:
+            msg = await auto_willhaben(ad_id)
+        except Exception as e:
+            _set(ad_id, error=t("Not on willhaben: {error}", error=e))
+            _unmark(ad_id)
+            raise
+        _unmark(ad_id)
+        return msg
+
+    jobs.submit("myads-willhaben", t("„{title}“ onto willhaben", title=(row.heading or ad_id)[:60]), run,
+                current=f"ad:{ad_id}", on_cancel=lambda: _unmark(ad_id), quiet=True)
+    return True
+
+
+def _auto_willhaben_due() -> list[str]:
+    """Ads only on Vinted that go onto willhaben by themselves: online on Vinted, not tried yet, not deleted on
+    willhaben by the owner (that ad stays off willhaben until "List" is pressed)."""
+    with session() as db:
+        rows = db.exec(select(MyAd).where(col(MyAd.ad_id).like(f"{VINTED_ONLY}%"), MyAd.status == "active")).all()
+        return [r.ad_id for r in rows if not (r.vinted or {}).get("wh_draft") and not (r.vinted or {}).get("wh_deleted")
+                and not r.pending_action]
+
+
 async def to_willhaben(ad_id: str) -> int:
     """An ad only on Vinted as a listing draft for willhaben: its title, text, price and photos, unchanged (no Claude
     rewrite), for the owner to check the category and publish. Returns the draft id."""
@@ -552,9 +615,12 @@ async def to_willhaben(ad_id: str) -> int:
         raise vl.ListingError(t("Not an ad only on Vinted"))
     async with vl.Upload() as up:
         item = await up.open_edit(v["id"])
+    cond = next((a.get("ids") or [None] for a in item.get("itemAttributes") or [] if a.get("code") == "condition"),
+                [None])[0]
     with session() as db:
         d = AdDraft(input_text=t("Taken over from Vinted"), title=str(item.get("title") or "")[:80],
                     description=item.get("description") or "", vinted_ad=ad_id,
+                    condition=CONDITIONS.get(int(cond)) if cond is not None else None,
                     price_suggestion=float(item["price"]) if item.get("price") not in (None, "") else None)
         db.add(d)
         db.commit()
@@ -594,7 +660,7 @@ def schedule_sync_many(ad_ids: list[str]) -> int:
 
 
 def enqueue_many(ad_ids: list[str]) -> int:
-    """"Also on Vinted" for several ads: a draft job each for those not on Vinted yet. Returns how many."""
+    """"List" on Vinted for several ads: a draft job each for those not on Vinted yet. Returns how many."""
     linked = _linked(list(ad_ids))
     return sum(enqueue(i) for i in dict.fromkeys(ad_ids) if i not in linked and not vinted_only(i))
 

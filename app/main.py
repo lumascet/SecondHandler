@@ -2235,14 +2235,9 @@ async def myads_vinted(request: Request, ad_id: str):
 
 @app.post("/myads/{ad_id}/willhaben")
 async def myads_to_willhaben(request: Request, ad_id: str):
-    """An ad only on Vinted as a listing draft for willhaben (its own text and photos), opened to publish."""
-    from app.platforms.vinted_listing import ListingError
+    """An ad only on Vinted onto willhaben: its own text and photos, willhaben's category, published as a job."""
     from app.services import crosspost
-    try:
-        draft_id = await crosspost.to_willhaben(ad_id)
-    except (ListingError, SessionUnavailable) as e:
-        return _myads_back(request, t("Not copied: {error}", error=e))
-    return back(f"/new-ad/{draft_id}")
+    return _queued(request, 1 if crosspost.enqueue_willhaben(ad_id) else 0)   # straight online, as a job
 
 
 @app.post("/myads/{ad_id}/vinted/publish")

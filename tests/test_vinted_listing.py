@@ -248,9 +248,9 @@ def test_the_button_on_the_ad_page_queues_the_draft(monkeypatch):
     monkeypatch.setattr(crosspost, "enqueue", lambda ad_id: queued.append(ad_id) or True)
     with TestClient(app) as c:
         set_setting("account_vinted", '{"logged_in": false}')
-        assert "Also on Vinted" not in c.get("/myads?ad=502").text     # Vinted logged out
+        assert "/vinted\" hx-post" not in c.get("/myads?ad=502").text     # Vinted logged out
         set_setting("account_vinted", '{"logged_in": true}')
-        assert "Also on Vinted" in c.get("/myads?ad=502").text
+        assert "/vinted\" hx-post" in c.get("/myads?ad=502").text
         c.post("/myads/502/vinted")
         assert queued == ["502"]
         with session() as db:
@@ -260,7 +260,7 @@ def test_the_button_on_the_ad_page_queues_the_draft(monkeypatch):
             db.commit()
         page = c.get("/myads?ad=502").text
         listing = page[page.index('data-listing="vinted"'):page.index('data-listing="vinted"') + 3000]
-        assert "Also on Vinted" not in listing and "https://www.vinted.at/items/9" in listing
+        assert "/vinted\" hx-post" not in listing and "https://www.vinted.at/items/9" in listing
         assert 'formaction="/myads/bulk/vinted-sync"' in page             # the bulk bar: several at once
 
 
@@ -453,6 +453,7 @@ async def test_changed_on_both_sites_willhaben_wins_and_says_so(monkeypatch, tmp
 async def test_items_only_on_vinted_show_up_in_my_ads(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     monkeypatch.setattr(crosspost, "_vinted_on", lambda: True)
+    monkeypatch.setattr(crosspost, "enqueue_willhaben", lambda ad_id: False)   # onto willhaben: its own test
     FakeUpload.listed = [
         {"id": 900, "title": "Lego Technic 42115", "price": {"amount": "120.0"}, "photo": {"url": "https://i/1.jpg"}},
         {"id": 901, "title": "Alte Jacke", "is_closed": True},                     # sold long ago: not taken in
@@ -503,7 +504,7 @@ def test_the_page_shows_each_site_and_no_willhaben_steps_for_a_vinted_only_ad():
     with TestClient(app) as c:
         page = c.get("/myads?ad=vinted-950").text
         detail = page[page.index('id="myads-detail"'):]
-        assert 'data-listing="willhaben"' in detail and "Also on willhaben" in detail and "Open" in detail
+        assert 'data-listing="willhaben"' in detail and "/willhaben\"" in detail and "Open" in detail
         assert "/myads/vinted-950/deactivate" not in detail and "auto-renew" not in detail and "myad-description" not in detail
         assert 'value="vinted-950"' not in page                            # no bulk checkbox: willhaben steps only
         page = c.get("/myads?ad=503").text
@@ -666,3 +667,48 @@ async def test_an_item_published_on_vinted_itself_is_seen_by_sync_now_and_not_pu
         db.commit()
     FakeUpload.item = {**vl.item_from_payload(EDIT_PAYLOAD, 777), "id": 990, "isDraft": False}
     assert await crosspost.publish("vinted-990") == "Already online on Vinted" and FakeUpload.published == []
+
+
+async def test_an_item_only_on_vinted_goes_onto_willhaben_by_itself(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(crosspost, "_vinted_on", lambda: True)
+    queued = []
+    monkeypatch.setattr(crosspost, "enqueue_willhaben", lambda ad_id: queued.append(ad_id) or True)
+    with session() as db:
+        db.add(MyAd(ad_id="vinted-981", heading="Deleted on willhaben", status="active",
+                    vinted={"id": "981", "state": "active", "origin": "vinted", "wh_deleted": True}))
+        db.commit()
+    FakeUpload.listed = [{"id": 980, "title": "Lego Technic 42115"}, {"id": 981, "title": "Deleted on willhaben"},
+                         {"id": 982, "title": "Draft only", "is_draft": True}]
+    done = await crosspost.sync()
+    assert queued == ["vinted-980"] and done["to_willhaben"] == 1     # not the deleted one, not a draft
+
+
+async def test_list_on_willhaben_publishes_with_the_suggested_category(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    with session() as db:
+        db.add(MyAd(ad_id="vinted-777", heading="Mini PC i5", status="active",
+                    vinted={"id": "777", "state": "active", "origin": "vinted"}))
+        db.commit()
+    FakeUpload.item = {**vl.item_from_payload(EDIT_PAYLOAD, 777), "photo_urls": ["https://i/a.jpg"]}
+    from app.db import AdDraft
+    from app.services import ad_creator
+    monkeypatch.setattr(ad_creator, "save_images", lambda did, files: [f"/x/{n}" for n, _ in files])
+
+    async def prepare(draft_id, query=None):
+        return ad_creator.update_draft(draft_id, wh_plan={"options": [{"path": [{"code": "c1", "label": "PCs"}],
+                                                                       "fields": []}]})
+    published = []
+    monkeypatch.setattr(ad_creator, "prepare_willhaben", prepare)
+    monkeypatch.setattr(ad_creator, "enqueue_publish", lambda did, opt, vals, ship: published.append((did, opt)) or True)
+    msg = await crosspost.auto_willhaben("vinted-777")
+    assert published and published[0][1] == 0 and "draft #" in msg
+    with session() as db:
+        d = db.get(AdDraft, published[0][0])
+        assert d.condition == "Gebraucht" and d.vinted_ad == "vinted-777"         # Vinted's condition 3: "Gut"
+        assert db.get(MyAd, "vinted-777").vinted["wh_draft"] == d.id
+    try:
+        await crosspost.auto_willhaben("vinted-777")                               # one try per item
+        raise AssertionError("no error")
+    except vl.ListingError as e:
+        assert "Already" in str(e)
