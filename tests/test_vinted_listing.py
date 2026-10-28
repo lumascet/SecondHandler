@@ -712,3 +712,59 @@ async def test_list_on_willhaben_publishes_with_the_suggested_category(monkeypat
         raise AssertionError("no error")
     except vl.ListingError as e:
         assert "Already" in str(e)
+
+
+TEXT = "Verkaufe eine Annke C800 in Weiß.\n\nÜbergabe möglich – Größe 12 × 9 cm."
+REF_PAYLOAD = ('5:[{"item":{"id":778,"title":"Annke C800","description":"$103","colorIds":[12],"catalogId":4058,'
+               '"packageSizeId":2,"brand":{"id":3,"title":"Camera"},"brandId":3,"currency":"EUR","price":50,'
+               '"itemAttributes":[{"ids":[6],"code":"condition"}],"isDraft":false},"photos":[{"id":95,"url":"u"}]}]\n'
+               f'103:T{len(TEXT.encode()):x},{TEXT}104:["$","div",null,{{}}]\n')
+
+
+def test_a_long_text_kept_apart_in_the_page_data_is_read():
+    """10-28: the description was "$103" – a reference to a text row of the page data – and went to willhaben so."""
+    from app.platforms.vinted import is_ref, rsc_text
+    assert rsc_text(REF_PAYLOAD, "$103") == TEXT                     # length in bytes: umlauts count twice
+    assert rsc_text(REF_PAYLOAD, "$$5 Rabatt") == "$5 Rabatt" and rsc_text(REF_PAYLOAD, "$999") == "$999"
+    assert is_ref("$103") and not is_ref("$$5") and not is_ref("Preis: $5")
+    item = vl.item_from_payload(REF_PAYLOAD, 778)
+    assert item["description"] == TEXT and item["photo_ids"] == [95]
+
+
+def test_a_reference_is_never_sent():
+    item = vl.item_from_payload(REF_PAYLOAD.replace(f"103:T{len(TEXT.encode()):x},", "103:X"), 778)
+    assert item["description"] == "$103"                             # not resolvable
+    try:
+        vl.edit_body(item, "s")
+        raise AssertionError("sent")
+    except vl.ListingError as e:
+        assert "reference" in str(e)
+
+
+async def test_the_sync_puts_the_real_text_where_a_reference_landed(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    with session() as db:
+        db.add(MyAd(ad_id="1632", heading="Annke C800", status="active", vinted={"id": "778", "state": "active"}))
+        db.commit()
+
+    async def wh(ad_id):
+        return "Annke C800", "$103", 50.0                           # what willhaben got
+    fixed = []
+
+    async def to_wh(ad_id, title, text, price):
+        fixed.append(text)
+        return title, text, price
+    monkeypatch.setattr(crosspost, "_willhaben_content", wh)
+    monkeypatch.setattr(crosspost, "_to_willhaben", to_wh)
+    FakeUpload.item = vl.item_from_payload(REF_PAYLOAD, 778)
+    FakeUpload.listed = [{"id": 778, "title": "Annke C800", "price": {"amount": "50.0"}}]
+    assert await crosspost.sync() == {"to_willhaben": 1}
+    assert fixed == [TEXT] and FakeUpload.edits == []                # Vinted keeps its text, willhaben gets it
+
+
+def test_the_ad_viewer_reads_a_long_description_too():
+    from app.platforms import vinted
+    page = ('1:{"plugins":[{"name":"description","data":{"description":"$103"}},'
+            '{"name":"attributes","data":{"attributes":[]}}]}\n' + f'103:T{len(TEXT.encode()):x},{TEXT}')
+    d = vinted.parse_item(page, "778")
+    assert d.description == TEXT

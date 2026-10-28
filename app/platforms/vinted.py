@@ -166,6 +166,39 @@ def parse_catalog(text: str, host: str = HOST) -> SearchPage:
     return SearchPage(rows_found=int(total) if isinstance(total, int) else len(ads), ads=ads)
 
 
+# Vinted's pages are React Server Components: a long text is a row of its own ("103:T436,<text>", the length in hex
+# bytes) and the object holds only "$103" (10-28: a camera's description went to willhaben as "$103"). A string that
+# really starts with "$" is written "$$…".
+_REF = re.compile(r"^\$([0-9a-f]+)$")
+
+
+def is_ref(value: Any) -> bool:
+    """An unresolved reference ("$103") instead of a text: never to be shown or sent anywhere."""
+    return isinstance(value, str) and bool(_REF.match(value.strip()))
+
+
+def rsc_text(payload: str, value: Any) -> Any:
+    """`value` with a reference resolved to its text row of `payload` (unchanged when it is none or not found)."""
+    if not isinstance(value, str):
+        return value
+    if value.startswith("$$"):
+        return value[1:]
+    m = _REF.match(value)
+    if not m:
+        return value
+    row = re.search(r"(?:^|\n)%s:T([0-9a-f]+)," % re.escape(m.group(1)), payload or "")
+    if not row:
+        return value
+    size, out, used = int(row.group(1), 16), [], 0
+    for ch in payload[row.end():]:
+        n = len(ch.encode("utf-8"))
+        if used + n > size:
+            break
+        out.append(ch)
+        used += n
+    return "".join(out)
+
+
 def _plugins(text: str) -> dict[str, dict[str, Any]]:
     """The item page's plugins by name (the first block that has them)."""
     for m in _PLUGINS.finditer(text or ""):
@@ -204,11 +237,12 @@ def parse_item(text: str, ad_id: str, host: str = HOST, now: datetime | None = N
     if not plugins:
         return None
     summary = plugins.get("summary") or {}
-    title = next((e.get("value") for ln in summary.get("lines") or [] for e in ln.get("elements") or []
-                  if e.get("style") == "title"), None)
+    title = rsc_text(text, next((e.get("value") for ln in summary.get("lines") or [] for e in ln.get("elements") or []
+                                 if e.get("style") == "title"), None))
     attrs = {a.get("code"): (a.get("data") or {}) for a in (plugins.get("attributes") or {}).get("attributes") or []
              if isinstance(a, dict)}
-    description = clean_text((plugins.get("description") or {}).get("description")) or ""
+    description = rsc_text(text, (plugins.get("description") or {}).get("description"))
+    description = "" if is_ref(description) else (clean_text(description) or "")
     facts = [f"{a.get('title')}: {a.get('value')}" for code, a in attrs.items()
              if code != "upload_date" and a.get("title") and a.get("value")]
     if facts:

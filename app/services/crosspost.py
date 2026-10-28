@@ -347,6 +347,7 @@ async def _to_willhaben(ad_id: str, title: str, text: str, price: float | None) 
     """Save Vinted's title, text and price on willhaben; returns what willhaben keeps."""
     from app.willhaben import insert
     from app.willhaben.session import get_session
+    vl.check_text(title, text)
     after = await insert.edit_own_ad(get_session(), ad_id, heading=title, description=text, price=price)
     with session() as db:
         row = db.get(MyAd, ad_id)
@@ -500,6 +501,11 @@ async def _sync_content(up: vl.Upload, ad_id: str, v: dict[str, Any], wh: tuple[
            float(current["price"]) if current.get("price") not in (None, "") else None)
     wh_key, vin_key = content_key(*wh), content_key(*vin)
     way = decide(wh_key, vin_key, v.get("synced_wh"), v.get("synced_vin"))
+    from app.platforms.vinted import is_ref
+    if is_ref(wh[1]) and not is_ref(vin[1]):
+        way = "to_willhaben"                # willhaben got a reference instead of the text (10-28): Vinted's is right
+    elif is_ref(vin[1]):
+        raise vl.ListingError("Vinted's text was not read (only a reference to it) – nothing changed")
     if way == "to_willhaben":
         after = await _to_willhaben(ad_id, *vin)
         _set(ad_id, synced_wh=content_key(*after), synced_vin=vin_key)
@@ -615,6 +621,7 @@ async def to_willhaben(ad_id: str) -> int:
         raise vl.ListingError(t("Not an ad only on Vinted"))
     async with vl.Upload() as up:
         item = await up.open_edit(v["id"])
+    vl.check_text(item.get("title"), item.get("description"))
     cond = next((a.get("ids") or [None] for a in item.get("itemAttributes") or [] if a.get("code") == "condition"),
                 [None])[0]
     with session() as db:

@@ -269,6 +269,9 @@ def item_from_payload(payload: str, item_id: int | str) -> dict[str, Any] | None
         item, end = dec.raw_decode(payload, i)
     except ValueError:
         return None
+    from app.platforms.vinted import rsc_text
+    for key in ("title", "description"):     # long texts are rows of their own: "$103" (10-28)
+        item[key] = rsc_text(payload, item.get(key))
     j = payload.find('"photos":[', end)
     photos: list[int] = []
     if 0 <= j < end + 400:
@@ -282,6 +285,13 @@ def item_from_payload(payload: str, item_id: int | str) -> dict[str, Any] | None
     else:
         urls = []
     return {**item, "photo_ids": photos, "photo_urls": [u for u in urls if u]}
+
+
+def check_text(title: Any, description: Any) -> None:
+    """Never send a reference instead of a text (10-28: "$103" became a willhaben ad's description)."""
+    from app.platforms.vinted import is_ref
+    if is_ref(title) or is_ref(description):
+        raise ListingError("the text was not read from Vinted (only a reference to it) – nothing sent")
 
 
 def edit_body(item: dict[str, Any], session_id: str, *, title: str | None = None, description: str | None = None,
@@ -305,6 +315,7 @@ def edit_body(item: dict[str, Any], session_id: str, *, title: str | None = None
         "item_attributes": [{"code": a.get("code"), "ids": list(a.get("ids") or [])}
                             for a in item.get("itemAttributes") or [] if a.get("code")],
         "manufacturer": item.get("manufacturer"), "manufacturer_labelling": item.get("manufacturerLabel")}
+    check_text(body["title"], body["description"])
     key = "draft" if item.get("isDraft") else "item"
     return {key: body, "push_up": False, "parcel": None, "upload_session_id": session_id}
 
