@@ -373,3 +373,13 @@ def test_a_renewed_ad_takes_its_vinted_item_along():
     assert new.vinted == {"id": "9", "state": "active"}
     with session() as db:
         assert db.get(MyAd, "701").vinted is None
+
+
+def test_the_page_data_comes_from_the_html():
+    """The page's own variable is not visible to the app's scripts: the item is read from the HTML."""
+    import json as _json
+    html = ('<script>self.__next_f.push([1,' + _json.dumps(EDIT_PAYLOAD[:60]) + '])</script>'
+            '<script>self.__next_f.push([1,' + _json.dumps(EDIT_PAYLOAD[60:]) + '])</script>')
+    assert vl.next_payload(html) == EDIT_PAYLOAD
+    assert vl.item_from_payload(vl.next_payload(html), 777)["photo_ids"] == [91, 92]
+    assert vl.next_payload("<html></html>") == ""

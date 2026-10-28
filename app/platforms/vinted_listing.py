@@ -223,6 +223,22 @@ def price_text(price: float | None) -> str | None:
     return f"{price:.2f}".rstrip("0").rstrip(".") if price else None
 
 
+_NEXT_CHUNK = re.compile(r'self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)')
+
+
+def next_payload(html: str) -> str:
+    """The page data of Vinted's Next.js page, read from its HTML (self.__next_f.push([1, "…"]) chunks). From the
+    HTML, not the page's variable: the app's browser runs its scripts in a world of their own, where the page's
+    variables are not visible (10-28: the item was "not found")."""
+    out = []
+    for chunk in _NEXT_CHUNK.findall(html or ""):
+        try:
+            out.append(json.loads(f'"{chunk}"'))
+        except ValueError:
+            continue
+    return "".join(out)
+
+
 def item_from_payload(payload: str, item_id: int | str) -> dict[str, Any] | None:
     """The item and its photo ids out of the edit page's data ({…, "photos": [{id}…]})."""
     dec = json.JSONDecoder()
@@ -463,8 +479,7 @@ class Upload:
         """Go to the item's edit page and return the item from its page data (with photo_ids)."""
         await self.page.goto(f"{ORIGIN}/items/{int(item_id)}/edit", wait_until="domcontentloaded", timeout=30000)
         await self.page.wait_for_timeout(1500)
-        payload = await self.page.evaluate("() => (self.__next_f || []).map(x => (x && x[1]) || '').join('')")
-        item = item_from_payload(payload or "", item_id)
+        item = item_from_payload(next_payload(await self.page.content()), item_id)
         if item is None:
             raise ListingError(f"Vinted item {item_id} not found on its edit page")
         return item

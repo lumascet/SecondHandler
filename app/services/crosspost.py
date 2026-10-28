@@ -325,9 +325,10 @@ async def sync(only: list[str] | None = None) -> dict[str, int]:
                                                                      title=title, description=text, price=price))
                             counts["updated"] += 1
                         _set(ad_id, synced=key)
-            except vl.ListingError as e:
+            except vl.ListingError as e:          # the state read is kept, the step is tried again next time
                 log.warning("vinted sync of %s failed: %s", ad_id, e)
-                _set(ad_id, error=str(e)[:300])
+                _set(ad_id, state=state, url=item_url(v["id"], state), checked=utcnow().isoformat(),
+                     error=str(e)[:300])
                 continue
             _set(ad_id, state=state, url=item_url(v["id"], state), checked=utcnow().isoformat(), error=None)
     return {k: n for k, n in counts.items() if n}
