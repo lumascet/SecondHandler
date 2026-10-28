@@ -14,6 +14,18 @@ Seen 2026-10-28 (a capture of saving a draft on www.vinted.at/items/new, logged 
        errors: [{field, value}]}
   GET  /api/v2/wardrobe/<user id>/items?page=1&per_page=20   {items: [{id, title, is_draft, is_closed, is_reserved,
        is_hidden, price.amount, url}]}
+Seen 2026-10-28 on a draft and a live item (clicked through in the app's browser):
+  PUT  /api/v2/item_upload/drafts/<id>             {draft: {...the draft, id set}, parcel, upload_session_id}
+  POST /api/v2/item_upload/drafts/<id>/completion  the same + push_up: false – publishes it (the item keeps the id);
+       400 errors: [{field: "color", value: "Wähle ein Farbe …"}] – a colour is required in some categories
+  PUT  /api/v2/item_upload/items/<id>              {item: {...the same fields}, push_up: false, parcel, upload_session_id}
+  PUT  /api/v2/items/<id>/is_hidden                {is_hidden: true|false}
+  POST /api/v2/item_upload/suggestions/attributes  {title, description, category_id, …} -> {prefill_brand {id, title},
+       colors [{id, title}], …} – what the page prefills; brand_id 1 is "no brand"
+  POST api.vinted.at/shipping-estimation/external/package_sizes/suggestion {catalog_id, title, …} -> {package_size_id}
+  The edit page (/items/<id>/edit) carries the item in its page data: {id, title, description, colorIds, catalogId,
+  packageSizeId, brand {id, title}, brandId, price, itemAttributes [{ids, code}], isDraft, …} and its photos [{id}].
+  Reserving needs another member to reserve for; marking sold and deleting were not tried.
 They need Vinted's cookie, CSRF token and anon id, which only its own web app has: a tab of the app's browser opens
 the upload page and makes the calls from inside it, with the token the page carries. Only a draft is saved – the
 owner looks at it on Vinted and publishes it there. Not seen yet: the photo upload's answer (the page's own upload
@@ -156,14 +168,15 @@ def package_size(sizes: list[dict[str, Any]] | None, weight_kg: float | None) ->
 
 def draft_body(*, title: str, description: str, price: float | None, catalog_id: int, session_id: str,
                brand: dict[str, Any] | None = None, package_size_id: int | None = None,
-               photo_ids: list[int] | None = None, attributes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+               photo_ids: list[int] | None = None, attributes: list[dict[str, Any]] | None = None,
+               color_ids: list[int] | None = None) -> dict[str, Any]:
     """The draft as Vinted's upload page sends it (seen 2026-10-28)."""
     return {"draft": {
         "id": None, "currency": "EUR", "temp_uuid": session_id, "title": title.strip()[:100],
         "description": description.strip()[:2000], "brand_id": int(brand["id"]) if brand else None,
         "brand": str(brand["title"]) if brand else None, "catalog_id": int(catalog_id), "isbn": None, "ai_photo": False,
-        "price": (f"{price:.2f}".rstrip("0").rstrip(".") if price else None), "package_size_id": package_size_id,
-        "shipment_prices": {"domestic": None, "international": None}, "color_ids": [],
+        "price": price_text(price), "package_size_id": package_size_id,
+        "shipment_prices": {"domestic": None, "international": None}, "color_ids": list(color_ids or [])[:2],
         "assigned_photos": [{"id": int(i), "orientation": 0} for i in photo_ids or []],
         "measurement_length": None, "measurement_width": None, "item_attributes": attributes or [],
         "manufacturer": None, "manufacturer_labelling": None},
@@ -190,6 +203,72 @@ def photo_id(body: Any) -> int | None:
     return None
 
 
+def upload_name(body: bytes | None) -> str | None:
+    """The file name in a photo upload's multipart body (photo[file]; filename="foto2.jpg")."""
+    m = re.search(rb'filename="([^"]+)"', body or b"")
+    return m.group(1).decode("utf-8", "replace") if m else None
+
+
+def ordered_photo_ids(files: list[str], got: dict[str, int]) -> list[int]:
+    """The uploaded photos' ids in the order of the files; raises when one is missing (a draft without its cover or
+    with a photo short is not what the ad shows)."""
+    from pathlib import PurePath
+    ids = [got.get(PurePath(f).name) for f in files]
+    if None in ids:
+        raise ListingError(f"{sum(i is not None for i in ids)} of {len(files)} photos uploaded to Vinted")
+    return [int(i) for i in ids]
+
+
+def price_text(price: float | None) -> str | None:
+    return f"{price:.2f}".rstrip("0").rstrip(".") if price else None
+
+
+def item_from_payload(payload: str, item_id: int | str) -> dict[str, Any] | None:
+    """The item and its photo ids out of the edit page's data ({…, "photos": [{id}…]})."""
+    dec = json.JSONDecoder()
+    i = payload.find('{"id":%s,"title":' % int(item_id))
+    if i < 0:
+        return None
+    try:
+        item, end = dec.raw_decode(payload, i)
+    except ValueError:
+        return None
+    j = payload.find('"photos":[', end)
+    photos: list[int] = []
+    if 0 <= j < end + 400:
+        try:
+            raw, _ = dec.raw_decode(payload, j + len('"photos":'))
+            photos = [int(ph["id"]) for ph in raw if isinstance(ph, dict) and ph.get("id")]
+        except ValueError:
+            pass
+    return {**item, "photo_ids": photos}
+
+
+def edit_body(item: dict[str, Any], session_id: str, *, title: str | None = None, description: str | None = None,
+              price: float | None = None) -> dict[str, Any]:
+    """The whole item as the edit page saves it, with title, text and price changed where given (a partial body is
+    not what the page sends). Draft or item, by the item's isDraft."""
+    brand = item.get("brand") or {}
+    body = {
+        "id": int(item["id"]), "currency": item.get("currency") or "EUR", "temp_uuid": session_id,
+        "title": (title if title is not None else item.get("title") or "").strip()[:100],
+        "description": (description if description is not None else item.get("description") or "").strip()[:2000],
+        "brand_id": item.get("brandId"), "brand": (brand.get("title") or None), "catalog_id": item.get("catalogId"),
+        "isbn": item.get("isbn"), "ai_photo": bool(item.get("isAiPhoto")),
+        "price": price_text(price if price is not None else float(item.get("price") or 0)),
+        "package_size_id": item.get("packageSizeId"),
+        "shipment_prices": {"domestic": item.get("domesticShipmentPrice"),
+                            "international": item.get("internationalShipmentPrice")},
+        "color_ids": list(item.get("colorIds") or []),
+        "assigned_photos": [{"id": i, "orientation": 0} for i in item.get("photo_ids") or []],
+        "measurement_length": item.get("measurementLength"), "measurement_width": item.get("measurementWidth"),
+        "item_attributes": [{"code": a.get("code"), "ids": list(a.get("ids") or [])}
+                            for a in item.get("itemAttributes") or [] if a.get("code")],
+        "manufacturer": item.get("manufacturer"), "manufacturer_labelling": item.get("manufacturerLabel")}
+    key = "draft" if item.get("isDraft") else "item"
+    return {key: body, "push_up": False, "parcel": None, "upload_session_id": session_id}
+
+
 def find_draft(items: list[dict[str, Any]], title: str, known: set[int]) -> dict[str, Any] | None:
     """The draft just saved in the wardrobe list: a draft with this title that was not there before."""
     want = title.strip()[:100].lower()
@@ -214,7 +293,8 @@ def item_state(item: dict[str, Any]) -> str:
 class Upload:
     """One open upload page of Vinted in a tab of the app's browser (async with)."""
 
-    def __init__(self) -> None:
+    def __init__(self, url: str = NEW_URL) -> None:
+        self.url = url
         self.page = None
         self.session_id: str | None = None
         self.user_id: str | None = None
@@ -243,7 +323,7 @@ class Upload:
             if m := re.search(r"upload_session_id[=\"':\s]+([0-9a-f-]{36})", text):
                 self.session_id = m.group(1)
         self.page.on("request", seen)
-        await self.page.goto(NEW_URL, wait_until="domcontentloaded", timeout=30000)
+        await self.page.goto(self.url, wait_until="domcontentloaded", timeout=30000)
         if "/member/" in self.page.url or "signup" in self.page.url or "login" in self.page.url:
             from app.services import site_accounts
             site_accounts._save("vinted", False)
@@ -305,37 +385,39 @@ class Upload:
         return (data or {}).get("package_sizes") or []
 
     async def photos(self, files: list[str]) -> list[int]:
-        """Upload the photos through the page's own file field and return their ids from the page's upload answers."""
+        """Upload the photos through the page's own file field and return their ids in the order of `files` (the
+        first is the cover). The page uploads them side by side and the answers come in any order (10-28: the cover
+        came second), so each answer is matched to its file by the file name its request carried."""
         files = files[:MAX_PHOTOS]
         if not files:
             return []
-        got: list[Any] = []
+        got: dict[str, int] = {}
+        failed: list[int] = []
 
         def is_upload(r) -> bool:
-            return r.request.method == "POST" and "photo" in r.url.lower() and "api" in r.url
+            return r.request.method == "POST" and "/api/v2/photos" in r.url
 
         async def on_response(r) -> None:
-            if is_upload(r):
-                try:
-                    got.append((r.status, json.loads(await r.text())))
-                except Exception:  # noqa: BLE001 - no JSON
-                    got.append((r.status, None))
+            if not is_upload(r):
+                return
+            name = upload_name(r.request.post_data_buffer)
+            try:
+                body = json.loads(await r.text())
+            except Exception:  # noqa: BLE001 - no JSON
+                body = None
+            if (pid := photo_id(body)) is not None and name:
+                got[name] = pid
+            else:
+                failed.append(r.status)
         self.page.on("response", on_response)
         field = self.page.locator("input[type=file]").first
         await field.wait_for(state="attached", timeout=PHOTO_TIMEOUT_MS)
         await field.set_input_files(files)
         for _ in range(PHOTO_TIMEOUT_MS // 500):
-            if len(got) >= len(files):
+            if len(got) + len(failed) >= len(files):
                 break
             await self.page.wait_for_timeout(500)
-        if got:      # its shape is not known for sure yet: the first answer's keys go to the log
-            first = got[0][1]
-            log.info("vinted: photo upload answered HTTP %s, keys %s", got[0][0],
-                     sorted(first) if isinstance(first, dict) else type(first).__name__)
-        ids = [i for _, b in got if (i := photo_id(b)) is not None]
-        if len(ids) < len(files):
-            raise ListingError(f"{len(ids)} of {len(files)} photos uploaded to Vinted")
-        return ids
+        return ordered_photo_ids(files, got)
 
     async def wardrobe(self) -> list[dict[str, Any]]:
         if not self.user_id:
@@ -357,6 +439,51 @@ class Upload:
 
     async def save_draft(self, body: dict[str, Any]) -> tuple[int, Any, str]:
         return await self.call("POST", f"{API}/item_upload/drafts", body)
+
+    async def suggestions(self, catalog_id: int, title: str, description: str) -> dict[str, Any]:
+        """What the page prefills for this text: prefill_brand, colors (best first)."""
+        status, data, _ = await self.call("POST", f"{API}/item_upload/suggestions/attributes", {
+            "title": title, "description": description, "category_id": catalog_id,
+            "suggested_category_id": catalog_id, "image_metadata": [], "upload_session_id": self.session_id or "",
+            "attributes": [{"code": "category", "ids": [str(catalog_id)]}], "suggested_legacy_category_id": catalog_id})
+        return data if status == 200 and isinstance(data, dict) else {}
+
+    async def suggested_package(self, catalog_id: int, title: str, description: str) -> int | None:
+        try:
+            status, data, _ = await self.call(
+                "POST", "https://api.vinted.at/shipping-estimation/external/package_sizes/suggestion",
+                {"catalog_id": catalog_id, "upload_session_id": self.session_id or "", "title": title,
+                 "description": description})
+        except Exception:  # noqa: BLE001 - the parcel size is then asked on publishing
+            return None
+        pid = (data or {}).get("package_size_id") if status == 200 and isinstance(data, dict) else None
+        return int(pid) if pid else None
+
+    async def open_edit(self, item_id: int | str) -> dict[str, Any]:
+        """Go to the item's edit page and return the item from its page data (with photo_ids)."""
+        await self.page.goto(f"{ORIGIN}/items/{int(item_id)}/edit", wait_until="domcontentloaded", timeout=30000)
+        await self.page.wait_for_timeout(1500)
+        payload = await self.page.evaluate("() => (self.__next_f || []).map(x => (x && x[1]) || '').join('')")
+        item = item_from_payload(payload or "", item_id)
+        if item is None:
+            raise ListingError(f"Vinted item {item_id} not found on its edit page")
+        return item
+
+    async def save_item(self, item_id: int | str, body: dict[str, Any]) -> None:
+        kind = "drafts" if "draft" in body else "items"
+        status, _, text = await self.call("PUT", f"{API}/item_upload/{kind}/{int(item_id)}", body)
+        if status not in (200, 201):
+            raise ListingError(f"Vinted did not save the item: {errors_of(text) or status}")
+
+    async def set_hidden(self, item_id: int | str, hidden: bool) -> None:
+        status, _, text = await self.call("PUT", f"{API}/items/{int(item_id)}/is_hidden", {"is_hidden": hidden})
+        if status not in (200, 201):
+            raise ListingError(f"Vinted did not {'hide' if hidden else 'show'} the item: {errors_of(text) or status}")
+
+    async def publish(self, draft_id: int | str, body: dict[str, Any]) -> None:
+        status, _, text = await self.call("POST", f"{API}/item_upload/drafts/{int(draft_id)}/completion", body)
+        if status not in (200, 201):
+            raise ListingError(errors_of(text) or f"HTTP {status}")
 
 
 def new_session_id() -> str:

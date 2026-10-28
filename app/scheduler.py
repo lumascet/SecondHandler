@@ -180,6 +180,9 @@ def start() -> None:
     scheduler.add_job(watch_saved_job, IntervalTrigger(hours=2, jitter=600), id="hits-watch-saved",
                       replace_existing=True, max_instances=1, coalesce=True,   # saved hits: price drops, sold, gone
                       next_run_time=datetime.now().astimezone() + timedelta(minutes=30))
+    from app.services import crosspost
+    scheduler.add_job(crosspost.scheduled_sync, IntervalTrigger(hours=1, jitter=300), id="vinted-sync",
+                      replace_existing=True, max_instances=1, coalesce=True)   # the ads also on Vinted: in step
     from app.services import chat_done
     scheduler.add_job(chat_done.check_job, IntervalTrigger(minutes=30, jitter=300), id="chat-done",
                       replace_existing=True, max_instances=1, coalesce=True,   # chats Claude judges over

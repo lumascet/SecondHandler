@@ -341,7 +341,18 @@ async def _run_bulk(job: jobs.Job, action: str, ad_ids: list[str]) -> str:
     return line + (" · " + t("{n} failed (see the ads)", n=len(res["failed"])) if res["failed"] else "")
 
 
+def _vinted_follows(ad_ids: list[str]) -> None:
+    """An ad the app just changed on willhaben: its Vinted item follows (a quiet job; nothing without a link)."""
+    from app.services import crosspost
+    for ad_id in ad_ids:
+        try:
+            crosspost.schedule_sync(ad_id)
+        except RuntimeError:                  # no running event loop (a test calling it directly)
+            pass
+
+
 def _clear_pending(ad_ids: list[str]) -> None:
+    _vinted_follows(ad_ids)
     with session() as db:
         for ad_id in ad_ids:
             row = db.get(MyAd, ad_id)
@@ -388,6 +399,8 @@ def _mark(ad_id: str, action: str, payload: dict[str, Any] | None = None) -> MyA
 
 
 def _unmark(ad_id: str, error: str | None = None, payload: Any = False) -> None:
+    if error is None:
+        _vinted_follows([ad_id])
     with session() as db:
         row = db.get(MyAd, ad_id)
         if row is not None:
@@ -841,13 +854,14 @@ def _move_to_new_id(old_id: str, new_id: str) -> MyAd:
     replaced, auto-renew off) because buyer chats keep pointing at the old id and still need its auto-reply
     settings."""
     keep = ("heading", "image_url", "auto_renew", "auto_reply", "auto_reply_instructions", "published_at", "min_price",
-            "parcel", "quantity")
+            "parcel", "quantity", "vinted")
     with session() as db:
         old = db.get(MyAd, old_id)
         new = db.get(MyAd, new_id) or MyAd(ad_id=new_id)
         for k in keep:
             if hasattr(old, k):
                 setattr(new, k, getattr(old, k))
+        old.vinted = None                 # the Vinted item follows the live copy (services/crosspost.sync)
         new.url, new.status = f"https://www.willhaben.at/iad/object?adId={new_id}", "active"
         new.last_action = t("republished (was {id})", id=old_id)
         old.replaced_by, old.auto_renew, old.status = new_id, False, "replaced"
@@ -1059,7 +1073,7 @@ async def scheduled_update() -> None:
     await start_update(t("Daily update of my ads")).task
     from app.services import crosspost
     try:
-        await crosspost.refresh()            # the state of the ads also on Vinted (draft, online, sold …)
+        await crosspost.sync()               # the ads also on Vinted: state, text and price in step
     except Exception as e:  # noqa: BLE001 - Vinted logged out, slow: tomorrow again
         log.info("vinted state of the linked ads not read: %s", e)
 

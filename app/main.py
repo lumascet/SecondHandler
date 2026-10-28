@@ -2223,6 +2223,19 @@ async def myads_vinted(request: Request, ad_id: str):
     return _queued(request, 1 if crosspost.enqueue(ad_id) else 0)
 
 
+@app.post("/myads/{ad_id}/vinted/publish")
+async def myads_vinted_publish(request: Request, ad_id: str):
+    from app.services import crosspost
+    return _queued(request, 1 if crosspost.enqueue_publish(ad_id) else 0)
+
+
+@app.post("/myads/{ad_id}/vinted/sync")
+async def myads_vinted_sync(request: Request, ad_id: str):
+    from app.services import crosspost
+    crosspost.schedule_sync(ad_id)
+    return _myads_back(request, "")
+
+
 @app.post("/myads/{ad_id}/deactivate")
 async def myads_deactivate(request: Request, ad_id: str):
     return _queued(request, my_ads.enqueue("deactivate", [ad_id]))

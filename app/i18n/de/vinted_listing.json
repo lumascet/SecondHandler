@@ -13,7 +13,6 @@
  "Saved as a draft on Vinted: {path}": "Als Entwurf auf Vinted gespeichert: {path}",
  "Not on Vinted: {error}": "Nicht auf Vinted: {error}",
  "„{title}“ as a draft on Vinted": "„{title}“ als Entwurf auf Vinted",
- "Saving as a draft on Vinted…": "Speichere als Entwurf auf Vinted…",
  "Queued: draft on Vinted": "Wartet: Entwurf auf Vinted",
  "Vinted": "Vinted",
  "Draft – publish it on Vinted": "Entwurf – auf Vinted veröffentlichen",
@@ -23,5 +22,19 @@
  "Open on Vinted": "Auf Vinted öffnen",
  "Title, text, price and photos as a draft in your Vinted account; Claude picks the category and the condition. You check it and publish it on Vinted.": "Titel, Text, Preis und Fotos als Entwurf in deinem Vinted-Konto; Claude wählt Kategorie und Zustand. Du prüfst ihn und veröffentlichst ihn auf Vinted.",
  "Save as a draft on Vinted": "Als Entwurf auf Vinted speichern",
- "Translating …": "Übersetze …"
+ "Translating …": "Übersetze …",
+ "Working on Vinted…": "Arbeite auf Vinted…",
+ "hidden while the ad is not for sale on willhaben": "verborgen, solange die Anzeige auf willhaben nicht zu haben ist",
+ "Publish the draft on Vinted as it stands there": "Den Entwurf so auf Vinted veröffentlichen, wie er dort steht",
+ "Publish on Vinted": "Auf Vinted veröffentlichen",
+ "Title, text and price from willhaben; hidden on Vinted while the ad is not for sale. Runs every hour by itself.": "Titel, Text und Preis von willhaben; auf Vinted verborgen, solange die Anzeige nicht zu haben ist. Läuft auch stündlich von selbst.",
+ "Sold on Vinted": "Auf Vinted verkauft",
+ "{title}: {state} on Vinted – reserved on willhaben": "{title}: auf Vinted {state} – auf willhaben reserviert",
+ "Vinted: {changes}": "Vinted: {changes}",
+ "Vinted: nothing to change": "Vinted: nichts zu ändern",
+ "Sync with Vinted": "Mit Vinted abgleichen",
+ "No Vinted draft to publish": "Kein Vinted-Entwurf zum Veröffentlichen",
+ "Vinted did not publish it: {error}": "Vinted hat ihn nicht veröffentlicht: {error}",
+ "Published on Vinted": "Auf Vinted veröffentlicht",
+ "Publish „{title}“ on Vinted": "„{title}“ auf Vinted veröffentlichen"
 }

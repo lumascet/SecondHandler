@@ -187,6 +187,8 @@ def enqueue_willhaben(ad_id: str, kind: str, *, undo: bool = False, reason_id: s
             unmark(t("Not changed on willhaben: {error}", error=e))
             raise
         unmark()
+        from app.services.my_ads import _vinted_follows
+        _vinted_follows([ad_id])            # reserved / sold on willhaben: the Vinted item is hidden
         return msg
 
     label = {"sold": t("Mark „{title}“ as sold on willhaben", title=title_of(ad_id)[:60]),

@@ -17,7 +17,7 @@
   {{ ui.pending('ad:' ~ a.ad_id,
        {'delete': _("Deleting…"), 'deactivate': _("Deactivating…"), 'activate': _("Activating…"), 'edit': _("Saving…"),
         'photos': _("Saving the photos…"), 'sold': _("Marking as sold…"), 'reserved': _("Marking as reserved…"),
-        'unreserve': _("Removing the reservation…"), 'vinted': _("Saving as a draft on Vinted…")}.get(a.pending_action, _("In progress…")),
+        'unreserve': _("Removing the reservation…"), 'vinted': _("Working on Vinted…")}.get(a.pending_action, _("In progress…")),
        {'delete': _("Queued: delete"), 'deactivate': _("Queued: deactivate"), 'activate': _("Queued: activate"),
         'edit': _("Queued: save"), 'photos': _("Queued: save the photos"), 'sold': _("Queued: mark as sold"),
         'reserved': _("Queued: mark as reserved"), 'unreserve': _("Queued: remove the reservation"),
@@ -163,9 +163,16 @@
       {% set vstate = {'draft': _("Draft – publish it on Vinted"), 'active': _("Online"), 'reserved': _("Reserved"),
                        'sold': _("Sold"), 'hidden': _("Hidden"), 'gone': _("No longer on Vinted")}.get(a.vinted.state, a.vinted.state) %}
       <div class="flex flex-wrap items-center justify-between gap-2 text-[13.5px]">
-        <span>{{ vstate }}{% if a.vinted.catalog %} <span class="text-muted">· {{ a.vinted.catalog }}</span>{% endif %}</span>
+        <span>{{ vstate }}{% if a.vinted.hidden_by == 'app' and a.vinted.state == 'hidden' %} <span class="text-muted">· {{ _("hidden while the ad is not for sale on willhaben") }}</span>{% endif %}{% if a.vinted.catalog %} <span class="text-muted">· {{ a.vinted.catalog }}</span>{% endif %}</span>
         {% if a.vinted.url %}<a class="link link-primary no-underline" href="{{ a.vinted.url }}" target="_blank" rel="noopener">{{ _("Open on Vinted") }} →</a>{% endif %}
       </div>
+      {% if a.vinted.error %}<small class="text-[12.5px] text-error" data-vinted-error>{{ a.vinted.error }}</small>{% endif %}
+      {% if not a.pending_action %}
+      <div class="flex flex-wrap items-center gap-2" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML">
+        {% if a.vinted.state == 'draft' %}<form method="post" action="/myads/{{ a.ad_id }}/vinted/publish" hx-post="/myads/{{ a.ad_id }}/vinted/publish"><button class="btn btn-sm btn-primary" title="{{ _('Publish the draft on Vinted as it stands there') }}">{{ _("Publish on Vinted") }}</button></form>{% endif %}
+        <form method="post" action="/myads/{{ a.ad_id }}/vinted/sync" hx-post="/myads/{{ a.ad_id }}/vinted/sync"><button class="btn btn-sm" title="{{ _('Title, text and price from willhaben; hidden on Vinted while the ad is not for sale. Runs every hour by itself.') }}">{{ _("Sync now") }}</button></form>
+      </div>
+      {% endif %}
     {% elif not a.pending_action %}
       <form method="post" action="/myads/{{ a.ad_id }}/vinted" hx-post="/myads/{{ a.ad_id }}/vinted" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML"
             class="flex flex-wrap items-center justify-between gap-2">

@@ -79,6 +79,12 @@ def test_the_new_draft_and_states_in_the_wardrobe():
 class FakeUpload:
     saved: list = []
     answers: list = []
+    listed: list = []
+    item: dict = {}
+    opened: list = []
+    edits: list = []
+    hidden: list = []
+    published: list = []
 
     def __init__(self):
         self.session_id, self.user_id, self.wardrobe_calls = "page-session", "1", 0
@@ -111,11 +117,30 @@ class FakeUpload:
                                                     "url": "https://www.vinted.at/items/4242-hp"}]
 
     async def wardrobe_all(self):
-        return [{"id": 4242, "is_draft": False, "is_closed": True}], True
+        return FakeUpload.listed, True
 
     async def save_draft(self, body):
         FakeUpload.saved.append(body)
         return FakeUpload.answers.pop(0)
+
+    async def suggestions(self, cid, title, text):
+        return {"prefill_brand": None, "colors": [{"id": 12, "title": "Weiß"}]}
+
+    async def suggested_package(self, cid, title, text):
+        return 2
+
+    async def open_edit(self, item_id):
+        FakeUpload.opened.append(item_id)
+        return dict(FakeUpload.item)
+
+    async def save_item(self, item_id, body):
+        FakeUpload.edits.append((item_id, body))
+
+    async def set_hidden(self, item_id, hidden):
+        FakeUpload.hidden.append((item_id, hidden))
+
+    async def publish(self, item_id, body):
+        FakeUpload.published.append((item_id, body))
 
 
 def _setup(monkeypatch, tmp_path):
@@ -150,7 +175,8 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(wsession, "get_session", lambda: object())
     monkeypatch.setattr(crosspost, "get_backend", lambda purpose=None: Backend())
     monkeypatch.setattr(vl, "Upload", FakeUpload)
-    FakeUpload.saved = []
+    FakeUpload.saved, FakeUpload.opened, FakeUpload.edits, FakeUpload.hidden, FakeUpload.published = [], [], [], [], []
+    FakeUpload.listed = [{"id": 4242, "is_draft": False, "is_closed": True}]
     return asked
 
 
@@ -161,16 +187,23 @@ async def test_an_own_ad_becomes_a_vinted_draft(monkeypatch, tmp_path):
     assert "Desktop-Computer" in msg
     d = FakeUpload.saved[0]["draft"]
     assert d["catalog_id"] == 3011 and d["brand_id"] == 3 and d["package_size_id"] == 3 and d["price"] == "120"
+    # (no brand suggested by Vinted: the category's list named in the title; the parcel by its weight)
     assert d["item_attributes"] == [{"code": "condition", "ids": [2]}] and len(d["assigned_photos"]) == 2
     assert d["temp_uuid"] == "page-session" and d["description"] == "i5, 16 GB"
     assert "Elektronik > Computer & Zubehör" in asked[0] and "Laptops" in asked[1] and "Zustand" in asked[2]
     assert "Gebraucht" in asked[0] and "Desktop-PCs" in asked[0]
     with session() as db:
         v = db.get(MyAd, "501").vinted
-    assert v["id"] == "4242" and v["state"] == "draft" and v["url"].endswith("4242-hp")
+    assert v["id"] == "4242" and v["state"] == "draft" and v["url"].endswith("/items/4242/edit")   # a draft: its edit page
+    assert d["color_ids"] == [12]                                    # Vinted's own colour suggestion
     assert "already on Vinted" in await crosspost.to_vinted("501")    # never a second draft
     assert len(FakeUpload.saved) == 1
-    assert await crosspost.refresh() == 1                            # sold on Vinted: read back
+    monkeypatch.setattr(crosspost, "_willhaben_content", _no_content)
+    reserved = []
+    from app.services import sold
+    monkeypatch.setattr(sold, "reserve", lambda ad_id, buyer: reserved.append(ad_id))
+    assert (await crosspost.sync())["reserved"] == 1                 # sold on Vinted: reserved on willhaben
+    assert reserved == ["501"]
     with session() as db:
         assert db.get(MyAd, "501").vinted["state"] == "sold"
 
@@ -217,3 +250,126 @@ def test_the_button_on_the_ad_page_queues_the_draft(monkeypatch):
             db.commit()
         page = c.get("/myads?ad=502").text
         assert "Save as a draft on Vinted" not in page and "https://www.vinted.at/items/9" in page
+
+
+async def _no_content(ad_id):
+    return None
+
+
+def test_photo_ids_in_the_order_of_the_ad():
+    """10-28: the answers came in another order and the second photo became the cover."""
+    body = b'--b\r\nContent-Disposition: form-data; name="photo[file]"; filename="foto2.jpg"\r\n\r\n\xff\xd8'
+    assert vl.upload_name(body) == "foto2.jpg" and vl.upload_name(None) is None
+    got = {"foto2.jpg": 22, "foto1.jpg": 11}                         # foto2 answered first
+    assert vl.ordered_photo_ids(["/tmp/x/foto1.jpg", "/tmp/x/foto2.jpg"], got) == [11, 22]
+    try:
+        vl.ordered_photo_ids(["/tmp/x/foto1.jpg", "/tmp/x/foto3.jpg"], got)
+        raise AssertionError("no error")
+    except vl.ListingError as e:
+        assert "1 of 2" in str(e)
+
+
+EDIT_PAYLOAD = (
+    '1:"$Sreact"\n5:[{"item":{"id":777,"title":"Mini PC i5","description":"Zeile 1\\nZeile 2","colorIds":[12],'
+    '"catalogId":3011,"packageSizeId":2,"brand":{"id":3,"title":"HP"},"brandId":3,"currency":"EUR","isbn":null,'
+    '"price":50,"measurementWidth":null,"measurementLength":null,"isAiPhoto":false,'
+    '"itemAttributes":[{"ids":[3],"code":"condition"}],"isDraft":false,"manufacturer":null,"manufacturerLabel":null,'
+    '"domesticShipmentPrice":null,"internationalShipmentPrice":null},"parcelModel":"$undefined",'
+    '"photos":[{"id":91,"url":"u1"},{"id":92,"url":"u2"}]}]')
+
+
+def test_the_item_from_its_edit_page_and_the_body_that_saves_it():
+    item = vl.item_from_payload(EDIT_PAYLOAD, 777)
+    assert item["title"] == "Mini PC i5" and item["description"] == "Zeile 1\nZeile 2" and item["photo_ids"] == [91, 92]
+    assert vl.item_from_payload(EDIT_PAYLOAD, 778) is None
+    body = vl.edit_body(item, "s-9", price=45.5)
+    it = body["item"]                                                # a live item: the "item" key, as the page sends
+    assert body["upload_session_id"] == it["temp_uuid"] == "s-9" and body["push_up"] is False
+    assert it["price"] == "45.5" and it["title"] == "Mini PC i5" and it["brand_id"] == 3 and it["brand"] == "HP"
+    assert it["color_ids"] == [12] and it["package_size_id"] == 2 and it["catalog_id"] == 3011
+    assert it["assigned_photos"] == [{"id": 91, "orientation": 0}, {"id": 92, "orientation": 0}]
+    assert it["item_attributes"] == [{"code": "condition", "ids": [3]}]
+    assert "draft" in vl.edit_body({**item, "isDraft": True}, "s")
+
+
+def test_what_is_not_for_sale_on_willhaben():
+    assert crosspost.not_for_sale(MyAd(ad_id="1", status="active")) is None
+    assert crosspost.not_for_sale(MyAd(ad_id="1", status="active", sale_status="reserved")) == "reserved"
+    assert crosspost.not_for_sale(MyAd(ad_id="1", status="expired")) == "expired"
+    assert crosspost.not_for_sale(MyAd(ad_id="1", status="unknown")) is None           # unknown: left alone
+    assert crosspost.not_for_sale(MyAd(ad_id="1", status="replaced", replaced_by="2")) is None
+
+
+def _linked_ad(**kw):
+    with session() as db:
+        db.add(MyAd(ad_id="601", heading="Mini PC i5", status=kw.pop("status", "active"),
+                    vinted={"id": "777", "state": kw.pop("state", "active"), **kw}))
+        db.commit()
+
+
+async def test_the_sync_hides_while_reserved_and_shows_again(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(crosspost, "_willhaben_content", _no_content)
+    _linked_ad(status="reserved")
+    FakeUpload.listed = [{"id": 777, "title": "Mini PC i5", "price": {"amount": "50.0"}}]
+    assert await crosspost.sync() == {"hidden": 1}
+    assert FakeUpload.hidden == [("777", True)]
+    with session() as db:
+        row = db.get(MyAd, "601")
+        assert row.vinted["state"] == "hidden" and row.vinted["hidden_by"] == "app"
+        row.status = "active"
+        db.add(row)
+        db.commit()
+    FakeUpload.listed = [{"id": 777, "title": "Mini PC i5", "price": {"amount": "50.0"}, "is_hidden": True}]
+    assert await crosspost.sync() == {"shown": 1}
+    assert FakeUpload.hidden[-1] == ("777", False)
+
+
+async def test_an_item_the_owner_hid_stays_hidden(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(crosspost, "_willhaben_content", _no_content)
+    _linked_ad(state="hidden")
+    FakeUpload.listed = [{"id": 777, "title": "Mini PC i5", "price": {"amount": "50.0"}, "is_hidden": True}]
+    assert await crosspost.sync() == {} and FakeUpload.hidden == []
+
+
+async def test_title_text_and_price_follow_willhaben(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _linked_ad()
+    content = ("Mini PC i5", "Zeile 1\nZeile 2", 45.0)
+
+    async def wh(ad_id):
+        return content
+    monkeypatch.setattr(crosspost, "_willhaben_content", wh)
+    FakeUpload.item = vl.item_from_payload(EDIT_PAYLOAD, 777)
+    FakeUpload.listed = [{"id": 777, "title": "Mini PC i5", "price": {"amount": "50.0"}}]
+    assert await crosspost.sync() == {"updated": 1}
+    item_id, body = FakeUpload.edits[0]
+    assert item_id == "777" and body["item"]["price"] == "45" and body["item"]["assigned_photos"][0]["id"] == 91
+    FakeUpload.item = {**FakeUpload.item, "price": 45}
+    FakeUpload.listed = [{"id": 777, "title": "Mini PC i5", "price": {"amount": "45.0"}}]
+    assert await crosspost.sync() == {} and len(FakeUpload.edits) == 1 and len(FakeUpload.opened) == 1   # in step
+    with session() as db:
+        assert db.get(MyAd, "601").vinted["url"] == "https://www.vinted.at/items/777"
+
+
+async def test_publishing_the_draft(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _linked_ad(state="draft")
+    FakeUpload.item = {**vl.item_from_payload(EDIT_PAYLOAD, 777), "isDraft": True}
+    assert await crosspost.publish("601") == "Published on Vinted"
+    assert FakeUpload.published[0][0] == "777" and "draft" in FakeUpload.published[0][1]
+    with session() as db:
+        v = db.get(MyAd, "601").vinted
+    assert v["state"] == "active" and v["url"] == "https://www.vinted.at/items/777"
+
+
+def test_a_renewed_ad_takes_its_vinted_item_along():
+    from app.services import my_ads
+    with session() as db:
+        db.add(MyAd(ad_id="701", heading="Router", status="expired", vinted={"id": "9", "state": "active"}))
+        db.commit()
+    new = my_ads._move_to_new_id("701", "702")
+    assert new.vinted == {"id": "9", "state": "active"}
+    with session() as db:
+        assert db.get(MyAd, "701").vinted is None
