@@ -83,3 +83,47 @@ def test_the_composer_shows_the_drafts_translation(client):  # noqa: F811
     for path in ("/chats/t1", "/tg/chats/t1"):
         page = client.get(path).text
         assert "data-draft-translation" in page and "Perfekt, vielen Dank!" in page, path
+
+
+def test_only_ad_texts_in_other_languages_count_as_foreign():
+    it = ("Ottime condizioni estetiche. Smontato funzionante 7 mesi fa e conservato con cura. Ora non posso "
+          "testarlo quindi venduto come non testato/funzionante.")
+    assert translate.foreign(it)
+    assert not translate.foreign("Verkaufe meinen Router, funktioniert einwandfrei, Versand ist möglich und gut verpackt.")
+    assert not translate.foreign("Selling my router, it works and is in very good condition, shipping is possible.")
+    assert not translate.foreign("Samsung 980 Pro 1TB")                       # too few words to tell
+    assert not translate.foreign("")
+
+
+async def test_an_ad_text_is_translated_once_per_text(monkeypatch):
+    calls = []
+
+    class Fake:
+        async def complete(self, *, system, prompt, schema, images=None):
+            calls.append(prompt)
+            return LLMResult(data={"items": [{"n": 1, "lang": "it", "translation": "Sehr guter Zustand."}]}, model="f")
+    monkeypatch.setattr(translate, "get_backend", lambda *a: Fake())
+    it = "Ottime condizioni estetiche, smontato funzionante e conservato con cura, venduto come non testato."
+    tr = await translate.translate_ad("vinted", "123", it)
+    assert tr.translation == "Sehr guter Zustand." and tr.lang == "it"
+    assert (await translate.translate_ad("vinted", "123", it)).translation == "Sehr guter Zustand."
+    assert len(calls) == 1                                                  # kept: asked once
+    await translate.translate_ad("vinted", "123", it + " Spedizione possibile.")
+    assert len(calls) == 2                                                  # the text changed: asked again
+    assert await translate.translate_ad("vinted", "124", "Funktioniert einwandfrei und ist in sehr gutem Zustand.") is None
+    assert len(calls) == 2                                                  # German: never asked
+
+
+def test_the_viewer_loads_the_translation(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    async def fake(pid, ad_id, text):
+        from app.db import AdTranslation
+        return AdTranslation(key=f"{pid}:{ad_id}", text_hash="x", lang="it", translation="Sehr guter Zustand.")
+    monkeypatch.setattr(translate, "translate_ad", fake)
+    with TestClient(app) as c:
+        r = c.post("/hits/ad/vinted/123/translation", data={"text": "Ottime condizioni"})
+        assert r.status_code == 200 and "data-ad-translation" in r.text and "Sehr guter Zustand." in r.text
+        assert c.post("/hits/ad/nope/123/translation", data={"text": "x"}).status_code == 400

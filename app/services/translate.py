@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from sqlmodel import col, select
 
-from app.db import Message, get_setting, session
+from app.db import AdTranslation, Message, get_setting, session
 from app.i18n import LANGS, background_lang
 from app.llm.base import LLMError, get_backend
 
@@ -171,3 +172,63 @@ def schedule(conversation_id: str) -> None:
         return
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
+
+
+# ------------------------------------------------------------------ ad texts
+# The ad viewer shows an ad's description with its translation when it is in neither German nor English (an Italian
+# Vinted ad). A word count decides which texts are asked at all: German and English ones never reach Claude.
+_DE_EN = frozenset("""
+der die das und ist nicht mit für ein eine einen ich zu auf sehr gut wie neu bei von im auch nur noch wird wurde
+sind hat haben kein keine oder aber wenn dass sich es zum zur den dem des alle bitte versand abholung funktioniert
+the and is with for not very good to of in it this that are has have no or but if all please shipping works new
+used condition was be on as from at by an
+""".split())
+_WORD = re.compile(r"[^\W\d_]{2,}")
+MIN_WORDS = 6
+
+
+def foreign(text: str | None) -> bool:
+    """Is this text in another language than German or English? Only with some words to go by: a text where hardly
+    one word in twelve is a common German or English one."""
+    words = [w.lower() for w in _WORD.findall(text or "")]
+    if len(words) < MIN_WORDS:
+        return False
+    return sum(w in _DE_EN for w in words) / len(words) < 1 / 12
+
+
+def _text_hash(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(text.strip().encode()).hexdigest()[:16]
+
+
+async def translate_ad(platform: str, ad_id: str, text: str) -> AdTranslation | None:
+    """The translation of an ad's text into the app's language, asked once per ad and text (kept in AdTranslation).
+    None when it is not foreign, translation is off, or Claude did not answer."""
+    text = (text or "").strip()[:4000]
+    if not text or not on() or not foreign(text):
+        return None
+    key, h = f"{platform}:{ad_id}", _text_hash(text)
+    with session() as db:
+        row = db.get(AdTranslation, key)
+    if row is not None and row.text_hash == h:
+        return row
+    target = LANGS.get(background_lang(), "Deutsch")
+    try:
+        out = await get_backend("chat").complete(system=SYSTEM, schema=SCHEMA, prompt="\n".join(
+            [f"Zielsprache: {target}", "", "Nachrichten:", f"1. {text}", "",
+             "Aufgabe: Sprache und Übersetzung je Nachricht."]))
+    except LLMError as e:
+        log.info("translation of ad %s failed: %s", key, e)
+        return None
+    it = next((x for x in out.data.get("items") or [] if isinstance(x, dict) and x.get("n") == 1), None)
+    if it is None:
+        return None
+    tr = (it.get("translation") or "").strip()
+    with session() as db:
+        row = db.get(AdTranslation, key) or AdTranslation(key=key, text_hash=h)
+        row.text_hash, row.lang = h, (it.get("lang") or "").strip()[:8] or "-"
+        row.translation = tr[:6000] if tr and tr != text else None
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row

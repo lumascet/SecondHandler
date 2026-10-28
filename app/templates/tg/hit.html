@@ -99,6 +99,8 @@
   {% if d.description %}
   <div class="sh">{{ _("Description") }}</div>
   <div class="sec" style="padding: 12px 14px; font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere">{{ d.description }}</div>
+  {% if ad_foreign(d.description) %}<div class="sec" style="padding: 0 14px 12px; font-size: 15px" hx-post="/hits/ad/{{ h.platform or 'willhaben' }}/{{ h.ad_id }}/translation" hx-trigger="load" hx-swap="innerHTML"
+       hx-vals='{{ {"text": d.description}|tojson|forceescape }}'><small style="color: var(--hint)">{{ _("Translating …") }}</small></div>{% endif %}
   {% endif %}
 
   <div class="sec" style="margin-top: 20px">

@@ -1,0 +1,3 @@
+{# An ad text's translation (services/translate.translate_ad), loaded under the description in the ad viewer and the
+   Mini App (inline styles: the Mini App has no stylesheet classes). Empty when Claude did not answer. #}
+{% if tr and tr.translation %}<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(127,127,127,.3); white-space: pre-wrap; overflow-wrap: anywhere; opacity: .9" data-ad-translation><span style="font-size: 11px; font-weight: 600; text-transform: uppercase; opacity: .7; margin-right: 4px">{{ _("Translated") }}{% if tr.lang and tr.lang != '-' %} · {{ tr.lang }}{% endif %}</span>{{ tr.translation }}</div>{% endif %}

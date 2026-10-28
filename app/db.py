@@ -157,6 +157,15 @@ class Conversation(SQLModel, table=True):
     partner_trust_at: datetime | None = None  # when the profile was read for these (read again after a week)
 
 
+class AdTranslation(SQLModel, table=True):
+    """An ad text in another language than German or English, translated once (services/translate.translate_ad)."""
+    key: str = Field(primary_key=True)             # "<platform>:<ad id>"
+    text_hash: str                                  # of the text translated: a changed description is asked again
+    lang: str | None = None
+    translation: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class Message(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("conversation_id", "ext_id"),)
     id: int | None = Field(default=None, primary_key=True)

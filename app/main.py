@@ -268,9 +268,11 @@ templates.env.globals.update(price_gauge=_price_gauge, deal_level_label=_level_l
 templates.env.globals.update(geizhals_levels=search_agents_svc.level_choices)
 templates.env.globals.update(hit_can_sync=lambda h: _can_sync(h))     # the hit cards' sync button
 from app.platforms import shipping_info as _shipping_info  # noqa: E402
+from app.services import translate as _translate_svc  # noqa: E402
 from app.platforms import fees as _fees  # noqa: E402
 templates.env.globals.update(buyer_fee_line=_fees.ad_fee)   # the buyer fee in the ad viewer's price breakdown
-templates.env.globals.update(shipping_label=_shipping_info.label_of)    # ui.ship(): shipping next to every price
+templates.env.globals.update(shipping_label=_shipping_info.label_of)
+templates.env.globals.update(ad_foreign=lambda text: _translate_svc.on() and _translate_svc.foreign(text))   # the viewer's translation    # ui.ship(): shipping next to every price
 
 
 def _site_can_detail(pid: str) -> bool:
@@ -1176,6 +1178,17 @@ async def ad_fragment(request: Request, platform: platforms.Platform, ad_id: str
                                                                    "platform": platform, "reduced": reduced,
                                                                    "detail_error": detail_error,
                                                                    "ref": platform.ref(ad_id)})
+
+
+@app.post("/hits/ad/{pid}/{ad_id}/translation", response_class=HTMLResponse)
+async def ad_translation(request: Request, pid: str, ad_id: str, text: str = Form("")):
+    """The translation of an ad's description in another language than German or English (the viewer loads it under
+    the text; asked once per ad and text)."""
+    from app.services import translate
+    if pid not in {p.id for p in platforms.all(enabled_only=False)} or not re.fullmatch(r"[\w-]{1,40}", ad_id):
+        raise HTTPException(400)
+    tr = await translate.translate_ad(pid, ad_id, text)
+    return templates.TemplateResponse(request, "_ad_translation.html", {"tr": tr})
 
 
 @app.get("/wh-fee/{ad_id}", response_class=HTMLResponse)
