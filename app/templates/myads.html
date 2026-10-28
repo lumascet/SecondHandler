@@ -160,7 +160,7 @@
       {% if a.vinted.url %}<a class="link link-primary inline-flex items-center gap-1 no-underline" href="{{ a.vinted.url }}" target="_blank" rel="noopener">{{ _("Open") }}{{ ui.icon('external', 13) }}</a>{% endif %}
       {% if not a.pending_action %}
       {% if a.vinted.state == 'draft' %}<form method="post" action="/myads/{{ a.ad_id }}/vinted/publish" hx-post="/myads/{{ a.ad_id }}/vinted/publish"><button class="btn btn-xs btn-primary" title="{{ _('Publish the draft on Vinted as it stands there') }}">{{ _("Publish on Vinted") }}</button></form>{% endif %}
-      {% if wh %}<form method="post" action="/myads/{{ a.ad_id }}/vinted/sync" hx-post="/myads/{{ a.ad_id }}/vinted/sync"><button class="btn btn-xs" title="{{ _('Title, text and price kept the same on both sites (a change on either side goes to the other); hidden on Vinted while the ad is not for sale on willhaben. Runs every hour by itself.') }}">{{ _("Sync now") }}</button></form>{% endif %}
+      <form method="post" action="/myads/{{ a.ad_id }}/vinted/sync" hx-post="/myads/{{ a.ad_id }}/vinted/sync"><button class="btn btn-xs" title="{{ _('Title, text and price kept the same on both sites (a change on either side goes to the other); hidden on Vinted while the ad is not for sale on willhaben. Runs every hour by itself.') }}">{{ _("Sync now") }}</button></form>
       {% endif %}
       {% else %}
       <span class="text-muted">{{ _("not listed") }}</span>

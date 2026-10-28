@@ -643,3 +643,26 @@ def test_delete_asks_first():
         page = c.get("/myads?ad=970").text
     assert 'data-confirm-delete' in page and 'hx-confirm="Delete „Router“ on willhaben for good?' in page
     assert 'hx-post="/myads/bulk/delete" hx-confirm=' in page
+
+
+async def test_an_item_published_on_vinted_itself_is_seen_by_sync_now_and_not_published_again(monkeypatch, tmp_path):
+    """10-28: published on Vinted directly, the app still showed a draft, and "Publish" got "Zugang verweigert"."""
+    _setup(monkeypatch, tmp_path)
+    with session() as db:
+        db.add(MyAd(ad_id="vinted-990", heading="Annke C800", status="draft",
+                    vinted={"id": "990", "state": "draft", "origin": "vinted"}))
+        db.commit()
+    FakeUpload.listed = [{"id": 990, "title": "Annke C800"}]                      # live on Vinted now
+    from app.services import jobs as jobs_mod
+    runs = []
+    monkeypatch.setattr(jobs_mod, "submit", lambda kind, label, run, **kw: runs.append(run))
+    assert crosspost.schedule_sync_many(["vinted-990"]) == 1                     # "Sync now" works for it
+    await runs[0](None)
+    with session() as db:
+        row = db.get(MyAd, "vinted-990")
+        assert row.status == "active" and row.vinted["state"] == "active"
+        row.vinted = {**row.vinted, "state": "draft"}                            # still stale somewhere
+        db.add(row)
+        db.commit()
+    FakeUpload.item = {**vl.item_from_payload(EDIT_PAYLOAD, 777), "id": 990, "isDraft": False}
+    assert await crosspost.publish("vinted-990") == "Already online on Vinted" and FakeUpload.published == []

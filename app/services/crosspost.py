@@ -430,8 +430,9 @@ async def sync(only: list[str] | None = None) -> dict[str, int]:
     counts = {"updated": 0, "to_willhaben": 0, "hidden": 0, "shown": 0, "reserved": 0, "gone": 0, "new": 0}
     async with vl.Upload() as up:
         listed, complete = await up.wardrobe_all()
-        if only is None:
-            counts["new"] = _import_vinted_only(listed, complete)
+        # the ads only on Vinted follow their Vinted state on every sync, "Sync now" too (10-28: an item published on
+        # Vinted itself still showed as a draft here, and "Publish" was refused); new ones are taken in as well
+        counts["new"] = _import_vinted_only(listed, complete)
         items = {str(i.get("id")): i for i in listed}
         for ad_id, v in linked.items():
             if vinted_only(ad_id):
@@ -576,7 +577,7 @@ def schedule_sync(ad_id: str) -> None:
 def schedule_sync_many(ad_ids: list[str]) -> int:
     """Sync these ads (the linked ones among them) as one background job – one Vinted tab for all. Returns how many
     are linked; 0 queues nothing."""
-    ids = [i for i in dict.fromkeys(ad_ids) if i in _linked(list(ad_ids)) and not vinted_only(i)]
+    ids = [i for i in dict.fromkeys(ad_ids) if i in _linked(list(ad_ids))]
     if not ids:
         return 0
 
@@ -618,6 +619,16 @@ async def publish(ad_id: str) -> str:
         raise vl.ListingError(t("No Vinted draft to publish"))
     async with vl.Upload() as up:
         current = await up.open_edit(v["id"])
+        if not current.get("isDraft"):          # published meanwhile (on Vinted itself): nothing to publish
+            _set(ad_id, state="active", url=item_url(v["id"], "active"), checked=utcnow().isoformat(), error=None)
+            if vinted_only(ad_id):
+                with session() as db:
+                    row = db.get(MyAd, ad_id)
+                    if row is not None:
+                        row.status = "active"
+                        db.add(row)
+                        db.commit()
+            return t("Already online on Vinted")
         await _complete(up, current)
         body = vl.edit_body(current, up.session_id or vl.new_session_id())
         try:
