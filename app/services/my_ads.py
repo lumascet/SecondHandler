@@ -64,6 +64,9 @@ def remove(ad_id: str) -> None:
             row.status, row.hidden = "deleted", True
             db.add(row)
         else:
+            if (row.vinted or {}).get("id") and (row.vinted or {}).get("state") != "gone":
+                from app.services import crosspost   # also on Vinted: the ad stays, only on Vinted (10-28: lost)
+                db.add(crosspost.vinted_only_row(row))
             db.delete(row)
         db.commit()
 
@@ -1071,12 +1074,7 @@ def start_update(label: str | None = None) -> jobs.Job:
 
 
 async def scheduled_update() -> None:
-    await start_update(t("Daily update of my ads")).task
-    from app.services import crosspost
-    try:
-        await crosspost.sync()               # the ads also on Vinted: state, text and price in step
-    except Exception as e:  # noqa: BLE001 - Vinted logged out, slow: tomorrow again
-        log.info("vinted state of the linked ads not read: %s", e)
+    await start_update(t("Daily update of my ads")).task     # Vinted included (_run_update)
 
 
 async def _run_update(job: jobs.Job) -> str:
@@ -1087,6 +1085,14 @@ async def _run_update(job: jobs.Job) -> str:
         msg = t("{n} loaded from willhaben", n=res["imported"]) + ", " + msg
     if res["deleted"]:
         msg += ", " + t("{n} deleted on willhaben", n=res["deleted"])
+    from app.services import crosspost
+    try:                                   # then Vinted: the ads also there in step, items only there taken in
+        job.progress(0, t("Reading Vinted"))
+        done = await crosspost.sync()
+        if done.get("new"):
+            msg += ", " + t("{n} only on Vinted", n=done["new"])
+    except Exception as e:  # noqa: BLE001 - Vinted logged out, slow: the hourly sync tries again
+        log.info("vinted part of the update failed: %s", e)
     return msg
 
 

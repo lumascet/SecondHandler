@@ -600,3 +600,21 @@ async def test_a_failed_transfer_shows_on_the_vinted_line_and_goes_once_it_works
     with session() as db:
         row = db.get(MyAd, "501")
         assert "price: zu niedrig" in row.vinted["error"] and row.last_error is None and row.pending_action is None
+
+
+def test_deleting_on_willhaben_keeps_the_ad_on_vinted():
+    """10-28: an ad deleted on willhaben took its Vinted draft out of My ads with it."""
+    from app.services import my_ads
+    with session() as db:
+        db.add(MyAd(ad_id="1614", heading="Annke C800", status="active", image_url="https://i/c.jpg",
+                    vinted={"id": "10576", "state": "draft", "synced_wh": "a", "synced_vin": "b"}))
+        db.add(MyAd(ad_id="1615", heading="Router", status="active"))
+        db.commit()
+    my_ads.remove("1614")
+    my_ads.remove("1615")
+    with session() as db:
+        assert db.get(MyAd, "1614") is None and db.get(MyAd, "1615") is None
+        row = db.get(MyAd, "vinted-10576")
+        assert row.heading == "Annke C800" and row.status == "draft" and row.image_url == "https://i/c.jpg"
+        assert row.vinted["origin"] == "vinted" and "synced_wh" not in row.vinted
+        assert row.url == "https://www.vinted.at/items/10576/edit"

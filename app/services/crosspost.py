@@ -357,6 +357,17 @@ async def _to_willhaben(ad_id: str, title: str, text: str, price: float | None) 
     return _content_of(after)
 
 
+def vinted_only_row(row: MyAd) -> MyAd:
+    """The ad as an ad only on Vinted, for when its willhaben ad is gone (deleted there): the Vinted item stays
+    listed here, with "Also on willhaben" to put it there again."""
+    v = dict(row.vinted or {})
+    status = VINTED_STATUS.get(v.get("state") or "", "active")
+    return MyAd(ad_id=f"{VINTED_ONLY}{v['id']}", heading=row.heading, image_url=row.image_url, status=status,
+                url=item_url(v["id"], v.get("state")), published_at=row.published_at, parcel=row.parcel,
+                quantity=row.quantity, vinted={**{k: val for k, val in v.items() if not k.startswith("synced")},
+                                               "origin": "vinted"})
+
+
 def _image_of(item: dict[str, Any]) -> str | None:
     photo = item.get("photo") or (item.get("photos") or [None])[0] or {}
     return photo.get("url") if isinstance(photo, dict) else None
