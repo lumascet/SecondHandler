@@ -238,9 +238,9 @@ def test_the_button_on_the_ad_page_queues_the_draft(monkeypatch):
     queued = []
     monkeypatch.setattr(crosspost, "enqueue", lambda ad_id: queued.append(ad_id) or True)
     with TestClient(app) as c:
-        assert "Save as a draft on Vinted" not in c.get("/myads?ad=502").text     # Vinted not logged in
+        assert "Also on Vinted" not in c.get("/myads?ad=502").text     # Vinted not logged in
         set_setting("account_vinted", '{"logged_in": true}')
-        assert "Save as a draft on Vinted" in c.get("/myads?ad=502").text
+        assert "Also on Vinted" in c.get("/myads?ad=502").text
         c.post("/myads/502/vinted")
         assert queued == ["502"]
         with session() as db:
@@ -249,7 +249,7 @@ def test_the_button_on_the_ad_page_queues_the_draft(monkeypatch):
             db.add(row)
             db.commit()
         page = c.get("/myads?ad=502").text
-        assert "Save as a draft on Vinted" not in page and "https://www.vinted.at/items/9" in page
+        assert "Also on Vinted" not in page and "https://www.vinted.at/items/9" in page
 
 
 async def _no_content(ad_id):
@@ -348,7 +348,7 @@ async def test_title_text_and_price_follow_willhaben(monkeypatch, tmp_path):
     assert item_id == "777" and body["item"]["price"] == "45" and body["item"]["assigned_photos"][0]["id"] == 91
     FakeUpload.item = {**FakeUpload.item, "price": 45}
     FakeUpload.listed = [{"id": 777, "title": "Mini PC i5", "price": {"amount": "45.0"}}]
-    assert await crosspost.sync() == {} and len(FakeUpload.edits) == 1 and len(FakeUpload.opened) == 1   # in step
+    assert await crosspost.sync() == {} and len(FakeUpload.edits) == 1          # in step: nothing saved again
     with session() as db:
         assert db.get(MyAd, "601").vinted["url"] == "https://www.vinted.at/items/777"
 
@@ -383,3 +383,119 @@ def test_the_page_data_comes_from_the_html():
     assert vl.next_payload(html) == EDIT_PAYLOAD
     assert vl.item_from_payload(vl.next_payload(html), 777)["photo_ids"] == [91, 92]
     assert vl.next_payload("<html></html>") == ""
+
+
+
+def test_which_way_the_content_goes():
+    d = crosspost.decide
+    assert d("a", "a", None, None) == "same"
+    assert d("w2", "v1", "w1", "v1") == "to_vinted"                     # changed on willhaben
+    assert d("w1", "v2", "w1", "v1") == "to_willhaben"                  # changed on Vinted
+    assert d("w2", "v2", "w1", "v1") == "conflict"                      # both: willhaben wins, the owner is told
+    assert d("w1", "v1", "w1", "v1") == "keep"                          # the sites keep it differently: no ping-pong
+    assert d("w1", "v1", None, None) == "to_vinted"                     # first sync: willhaben's version
+    assert crosspost.content_key("T", "a  \r\nb\n\n\n\nc ", 5) == crosspost.content_key("T", "a\nb\n\nc", 5.0)
+
+
+async def test_a_change_on_vinted_goes_to_willhaben(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    item = vl.item_from_payload(EDIT_PAYLOAD, 777)
+    wh = ("Mini PC i5", "Zeile 1\nZeile 2", 50.0)
+    _linked_ad(synced_wh=crosspost.content_key(*wh), synced_vin=crosspost.content_key(*wh))
+
+    async def content(ad_id):
+        return wh
+    saved = []
+
+    async def to_wh(ad_id, title, text, price):
+        saved.append((ad_id, title, text, price))
+        return title, text, price
+    monkeypatch.setattr(crosspost, "_willhaben_content", content)
+    monkeypatch.setattr(crosspost, "_to_willhaben", to_wh)
+    FakeUpload.item = {**item, "price": 42}                              # the owner lowered it on Vinted
+    FakeUpload.listed = [{"id": 777, "title": "Mini PC i5", "price": {"amount": "42.0"}}]
+    assert await crosspost.sync() == {"to_willhaben": 1}
+    assert saved == [("601", "Mini PC i5", "Zeile 1\nZeile 2", 42.0)] and FakeUpload.edits == []
+
+
+async def test_changed_on_both_sites_willhaben_wins_and_says_so(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    item = vl.item_from_payload(EDIT_PAYLOAD, 777)
+    _linked_ad(synced_wh="old-wh", synced_vin="old-vin")
+
+    async def content(ad_id):
+        return "Mini PC i5 16 GB", "Neu", 48.0
+    told = []
+
+    async def notify(kind, title, msg, **kw):
+        told.append(title)
+    from app.services import notify as notify_mod
+    monkeypatch.setattr(notify_mod, "notify", notify)
+    monkeypatch.setattr(crosspost, "_willhaben_content", content)
+    FakeUpload.item = {**item, "price": 42}
+    FakeUpload.listed = [{"id": 777, "title": "Mini PC i5", "price": {"amount": "42.0"}}]
+    assert await crosspost.sync() == {"updated": 1}
+    assert FakeUpload.edits[0][1]["item"]["title"] == "Mini PC i5 16 GB" and told == ["Changed on both sites"]
+
+
+async def test_items_only_on_vinted_show_up_in_my_ads(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(crosspost, "_vinted_on", lambda: True)
+    FakeUpload.listed = [
+        {"id": 900, "title": "Lego Technic 42115", "price": {"amount": "120.0"}, "photo": {"url": "https://i/1.jpg"}},
+        {"id": 901, "title": "Alte Jacke", "is_closed": True},                     # sold long ago: not taken in
+        {"id": 902, "title": "Kamera", "is_hidden": True}]
+    assert (await crosspost.sync())["new"] == 2
+    with session() as db:
+        lego, cam = db.get(MyAd, "vinted-900"), db.get(MyAd, "vinted-902")
+        assert lego.heading == "Lego Technic 42115" and lego.status == "active" and lego.image_url == "https://i/1.jpg"
+        assert lego.vinted["origin"] == "vinted" and cam.status == "inactive" and db.get(MyAd, "vinted-901") is None
+    FakeUpload.listed = [{"id": 900, "title": "Lego Technic 42115", "is_reserved": True}]
+    assert await crosspost.sync() == {}
+    with session() as db:
+        assert db.get(MyAd, "vinted-900").status == "reserved" and db.get(MyAd, "vinted-902").status == "deleted"
+    assert FakeUpload.hidden == []                                             # never hidden: it is only on Vinted
+
+
+async def test_also_on_willhaben_copies_it_and_links_it_once_published(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    with session() as db:
+        db.add(MyAd(ad_id="vinted-777", heading="Mini PC i5", status="active",
+                    vinted={"id": "777", "state": "active", "origin": "vinted"}))
+        db.commit()
+    FakeUpload.item = {**vl.item_from_payload(EDIT_PAYLOAD, 777), "photo_urls": ["https://i/a.jpg", "https://i/b.jpg"]}
+    from app.services import ad_creator
+    monkeypatch.setattr(ad_creator, "save_images", lambda did, files: [f"/x/{n}" for n, _ in files])
+    draft_id = await crosspost.to_willhaben("vinted-777")
+    from app.db import AdDraft
+    with session() as db:
+        d = db.get(AdDraft, draft_id)
+        assert d.title == "Mini PC i5" and d.description == "Zeile 1\nZeile 2" and d.price_suggestion == 50.0
+        assert d.image_paths == ["/x/foto1.jpg", "/x/foto2.jpg"] and d.vinted_ad == "vinted-777"
+        db.add(MyAd(ad_id="1999", heading="Mini PC i5", status="unknown"))
+        db.commit()
+    crosspost.link_willhaben("vinted-777", "1999")
+    with session() as db:
+        assert db.get(MyAd, "vinted-777") is None and db.get(MyAd, "1999").vinted["id"] == "777"
+        assert "origin" not in db.get(MyAd, "1999").vinted
+
+
+def test_the_page_shows_each_site_and_no_willhaben_steps_for_a_vinted_only_ad():
+    with session() as db:
+        db.add(MyAd(ad_id="vinted-950", heading="Lego Technic 42115", status="active",
+                    vinted={"id": "950", "state": "active", "url": "https://www.vinted.at/items/950"}))
+        db.add(MyAd(ad_id="503", heading="Router", status="active",
+                    vinted={"id": "951", "state": "hidden", "hidden_by": "app", "url": "https://www.vinted.at/items/951"}))
+        db.commit()
+    from app.main import app
+    with TestClient(app) as c:
+        page = c.get("/myads?ad=vinted-950").text
+        detail = page[page.index('id="myads-detail"'):]
+        assert 'data-listing="willhaben"' in detail and "Also on willhaben" in detail and "Open" in detail
+        assert "/myads/vinted-950/deactivate" not in detail and "auto-renew" not in detail and "myad-description" not in detail
+        assert 'value="vinted-950"' not in page                            # no bulk checkbox: willhaben steps only
+        page = c.get("/myads?ad=503").text
+        detail = page[page.index('id="myads-detail"'):]
+        assert "/myads/503/deactivate" in detail and "Sync now" in detail and "hidden while the ad is not for sale" in detail
+        row = page[page.index('id="row-503"'):page.index('id="row-503"') + 3000]
+        assert 'data-row-site="willhaben"' in row and 'data-row-site="vinted"' in row

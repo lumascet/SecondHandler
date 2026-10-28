@@ -957,6 +957,9 @@ async def _publish_willhaben(draft_id: int, option: int, values: dict[str, str],
             row.quantity = d.quantity
         db.add(row)
         db.commit()
+    if d.vinted_ad:                              # copied from an ad only on Vinted: now one ad on both sites
+        from app.services import crosspost
+        crosspost.link_willhaben(d.vinted_ad, res["ad_id"])
     try:                                         # willhaben's own status (new ads are reviewed before going online)
         await my_ads.import_from_account()
     except Exception as e:  # noqa: BLE001 - the ad is published either way

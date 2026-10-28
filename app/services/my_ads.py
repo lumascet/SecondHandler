@@ -764,7 +764,8 @@ async def import_from_account(ads: AdvertList | None = None) -> AccountIds:
                 relist.append(row.ad_id)         # taken offline after a PayLivery sale: online again as a new ad
         if ids.complete:
             for row in db.exec(select(MyAd).where(col(MyAd.ad_id).not_in(ids), MyAd.status != "deleted",
-                                                  col(MyAd.replaced_by).is_(None))):
+                                                  col(MyAd.replaced_by).is_(None),
+                                                  col(MyAd.ad_id).not_like("vinted-%"))):   # only on Vinted
                 if is_sold(row):
                     row.status, row.last_checked_at = "deleted", utcnow()
                     db.add(row)

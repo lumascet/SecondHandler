@@ -3,8 +3,14 @@ category and with the condition Claude picks from Vinted's own lists, brand, col
 upload page suggests them (platforms/vinted_listing.py). The owner checks the draft and publishes it (here or on
 Vinted); the link stays on the ad (MyAd.vinted).
 
-sync() keeps the Vinted item in step with willhaben, hourly and right after the app changes an ad:
-- title, text and price follow the willhaben ad (the item is saved again only when they differ);
+An ad is one thing on several sites: My ads shows each site it is listed on. Items only in the Vinted account show
+up there too ("vinted-<id>"); "Also on willhaben" copies one into a listing draft for willhaben (to_willhaben), and
+once published the two are one ad.
+
+sync() keeps the two sites in step, hourly and right after the app changes an ad:
+- title, text and price are the same on both: the side that changed since the last sync wins (a change on Vinted is
+  saved on willhaben too); changed on both, willhaben's version wins and the owner is told. Nothing is saved when
+  nothing changed, also when the sites keep a text slightly differently;
 - an ad not for sale on willhaben (reserved, sold, offline, expired, deleted) hides the Vinted item; once it is for
   sale again the item is shown again – only one the app hid, never one the owner hid on Vinted;
 - an item sold or reserved on Vinted reserves the ad here and on willhaben, with a push.
@@ -224,27 +230,64 @@ def item_url(item_id: Any, state: str | None) -> str:
     return f"{vl.ORIGIN}/items/{item_id}/edit" if state == "draft" else f"{vl.ORIGIN}/items/{item_id}"
 
 
+VINTED_ONLY = "vinted-"           # MyAd id of an ad only on Vinted: "vinted-<item id>"
+VINTED_STATUS = {"active": "active", "reserved": "reserved", "sold": "sold", "hidden": "inactive", "draft": "draft",
+                 "gone": "deleted"}
+
+
+def vinted_only(ad_id: str) -> bool:
+    return str(ad_id).startswith(VINTED_ONLY)
+
+
+def _norm_text(text: str | None) -> str:
+    """Text as both sites keep it: line ends, trailing spaces and runs of blank lines do not count as a change."""
+    import re
+    lines = [ln.rstrip() for ln in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def content_key(title: str | None, text: str | None, price: float | None) -> str:
-    """What the item last got from willhaben: saved again only when this changes (or Vinted shows other values)."""
+    """Title, text and price as one value, to tell which side changed since the last sync."""
     import hashlib
-    raw = f"{(title or '').strip()}\n{(text or '').strip()}\n{vl.price_text(price) or ''}"
+    raw = f"{(title or '').strip()}\n{_norm_text(text)}\n{vl.price_text(price) or ''}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def not_for_sale(row: MyAd | None) -> str | None:
-    """Why the Vinted item should be hidden: the willhaben ad is not for sale (None: it is, or its state is unknown)."""
-    if row is None or row.replaced_by:
+    """Why the Vinted item should be hidden: the willhaben ad is not for sale (None: it is, or its state is unknown,
+    or the ad is only on Vinted)."""
+    if row is None or row.replaced_by or vinted_only(row.ad_id):
         return None                      # a renewed ad: its live copy carries the link
     if row.sale_status in ("sold", "reserved"):
         return row.sale_status
     return row.status if row.status in ("sold", "reserved", "expired", "deleted") else None
 
 
+def decide(wh_key: str, vin_key: str, last_wh: str | None, last_vin: str | None) -> str:
+    """Which way the content goes: "same" (nothing to do), "keep" (they differ only in what a site keeps its own
+    way, nobody changed anything), "to_willhaben" (changed on Vinted only), "to_vinted" (changed on willhaben, or
+    on both: willhaben wins), "conflict" (both changed: willhaben wins, the owner is told)."""
+    if wh_key == vin_key:
+        return "same"
+    wh_changed = last_wh is None or wh_key != last_wh
+    vin_changed = last_vin is not None and vin_key != last_vin
+    if vin_changed and not wh_changed:
+        return "to_willhaben"
+    if vin_changed and wh_changed:
+        return "conflict"
+    return "to_vinted" if wh_changed else "keep"
+
+
 def _linked(only: list[str] | None = None) -> dict[str, dict[str, Any]]:
     with session() as db:
         rows = db.exec(select(MyAd).where(col(MyAd.vinted).is_not(None))).all()
         return {r.ad_id: dict(r.vinted) for r in rows if (r.vinted or {}).get("id") and (only is None or r.ad_id in only)
-                and (r.vinted or {}).get("state") != "gone"}
+                and (r.vinted or {}).get("state") != "gone" and not r.replaced_by}
+
+
+def _vinted_on() -> bool:
+    from app.services import site_accounts
+    return site_accounts.state("vinted")["logged_in"] is True
 
 
 async def _willhaben_content(ad_id: str) -> tuple[str, str, float | None] | None:
@@ -258,31 +301,97 @@ async def _willhaben_content(ad_id: str) -> tuple[str, str, float | None] | None
         return None
     if not isinstance(ad, dict) or not ad.get("heading"):
         return None
+    return _content_of(ad)
+
+
+def _content_of(ad: dict[str, Any]) -> tuple[str, str, float | None]:
+    from app.willhaben import insert
     price = float(ad["price"]) if ad.get("price") not in (None, "") else None
-    return str(ad["heading"]).strip(), insert.description_text(ad.get("description")), price
+    return str(ad.get("heading") or "").strip(), insert.description_text(ad.get("description")), price
+
+
+async def _to_willhaben(ad_id: str, title: str, text: str, price: float | None) -> tuple[str, str, float | None]:
+    """Save Vinted's title, text and price on willhaben; returns what willhaben keeps."""
+    from app.willhaben import insert
+    from app.willhaben.session import get_session
+    after = await insert.edit_own_ad(get_session(), ad_id, heading=title, description=text, price=price)
+    with session() as db:
+        row = db.get(MyAd, ad_id)
+        if row is not None:
+            row.heading, row.last_action = title[:80], t("changed on Vinted, saved on willhaben")
+            db.add(row)
+            db.commit()
+    return _content_of(after)
+
+
+def _image_of(item: dict[str, Any]) -> str | None:
+    photo = item.get("photo") or (item.get("photos") or [None])[0] or {}
+    return photo.get("url") if isinstance(photo, dict) else None
+
+
+def _import_vinted_only(items: list[dict[str, Any]], complete: bool) -> int:
+    """Items in the Vinted account that no ad here knows yet show up in My ads as ads only on Vinted (sold ones from
+    before are left out); those already here follow their Vinted state. Returns how many are new."""
+    with session() as db:
+        known = {str((r.vinted or {}).get("id")): r.ad_id for r in db.exec(select(MyAd).where(col(MyAd.vinted).is_not(None)))
+                 if (r.vinted or {}).get("id")}
+        new = 0
+        listed = set()
+        for it in items:
+            iid, state = str(it.get("id") or ""), vl.item_state(it)
+            if not iid:
+                continue
+            listed.add(iid)
+            ad_id = known.get(iid)
+            if ad_id is not None and not vinted_only(ad_id):
+                continue                                  # linked to a willhaben ad: the sync looks after it
+            if ad_id is None and state == "sold":
+                continue
+            row = db.get(MyAd, ad_id or f"{VINTED_ONLY}{iid}")
+            if row is None:
+                row = MyAd(ad_id=f"{VINTED_ONLY}{iid}", published_at=utcnow())
+                new += 1
+            row.heading = str(it.get("title") or row.heading or "")[:120]
+            row.image_url = _image_of(it) or row.image_url
+            row.status, row.url = VINTED_STATUS.get(state, state), item_url(iid, state)
+            row.vinted = {**(row.vinted or {}), "id": iid, "state": state, "url": item_url(iid, state), "origin": "vinted",
+                          "checked": utcnow().isoformat()}
+            row.last_checked_at = utcnow()
+            db.add(row)
+        if complete:                                      # gone from Vinted: gone here
+            for row in db.exec(select(MyAd).where(col(MyAd.ad_id).like(f"{VINTED_ONLY}%"), MyAd.status != "deleted")):
+                if str((row.vinted or {}).get("id")) not in listed:
+                    row.status, row.vinted = "deleted", {**(row.vinted or {}), "state": "gone"}
+                    db.add(row)
+        db.commit()
+    return new
 
 
 async def sync(only: list[str] | None = None) -> dict[str, int]:
-    """Bring the linked Vinted items in step with willhaben (see the module text). Returns the counts of what
-    changed; without linked ads Vinted is not opened."""
+    """Bring the linked Vinted items in step with willhaben and take in items only on Vinted (see the module text).
+    Returns the counts of what changed; Vinted is not opened without linked ads unless its account is logged in."""
     from app.services import sold
     from app.services.notify import notify
 
     linked = _linked(only)
-    if not linked:
+    if not linked and (only is not None or not _vinted_on()):
         return {}
     with session() as db:
         rows = {ad_id: db.get(MyAd, ad_id) for ad_id in linked}
     want = {}
     for ad_id, row in rows.items():
-        if row is not None and row.status == "active" and not not_for_sale(row):
+        if row is not None and not vinted_only(ad_id) and row.status == "active" and not not_for_sale(row):
             if (content := await _willhaben_content(ad_id)) is not None:
                 want[ad_id] = content
-    counts = {"updated": 0, "hidden": 0, "shown": 0, "reserved": 0, "gone": 0}
+    counts = {"updated": 0, "to_willhaben": 0, "hidden": 0, "shown": 0, "reserved": 0, "gone": 0, "new": 0}
     async with vl.Upload() as up:
         listed, complete = await up.wardrobe_all()
+        if only is None:
+            counts["new"] = _import_vinted_only(listed, complete)
         items = {str(i.get("id")): i for i in listed}
         for ad_id, v in linked.items():
+            if vinted_only(ad_id):
+                continue                                  # follows its Vinted state (_import_vinted_only)
             row, item = rows.get(ad_id), items.get(str(v["id"]))
             if item is None:
                 if complete:
@@ -312,26 +421,90 @@ async def sync(only: list[str] | None = None) -> dict[str, int]:
                     _set(ad_id, hidden_by=None, hidden_why=None)
                     counts["shown"] += 1
                 if ad_id in want and state in ("active", "draft"):
-                    title, text, price = want[ad_id]
-                    key = content_key(title, text, price)
-                    shown = (str(item.get("title") or "").strip(), vl.price_text(float((item.get("price") or {})
-                                                                                      .get("amount") or 0)))
-                    if key != v.get("synced") or shown != (title[:100], vl.price_text(price)):
-                        current = await up.open_edit(v["id"])
-                        if (current.get("title"), (current.get("description") or "").strip(),
-                                vl.price_text(float(current.get("price") or 0))) != (title[:100], text[:2000],
-                                                                                   vl.price_text(price)):
-                            await up.save_item(v["id"], vl.edit_body(current, up.session_id or vl.new_session_id(),
-                                                                     title=title, description=text, price=price))
-                            counts["updated"] += 1
-                        _set(ad_id, synced=key)
-            except vl.ListingError as e:          # the state read is kept, the step is tried again next time
+                    await _sync_content(up, ad_id, v, want[ad_id], counts)
+            except Exception as e:  # noqa: BLE001 - one item must not stop the others; tried again next time
                 log.warning("vinted sync of %s failed: %s", ad_id, e)
                 _set(ad_id, state=state, url=item_url(v["id"], state), checked=utcnow().isoformat(),
                      error=str(e)[:300])
                 continue
             _set(ad_id, state=state, url=item_url(v["id"], state), checked=utcnow().isoformat(), error=None)
     return {k: n for k, n in counts.items() if n}
+
+
+async def _sync_content(up: vl.Upload, ad_id: str, v: dict[str, Any], wh: tuple[str, str, float | None],
+                        counts: dict[str, int]) -> None:
+    """Title, text and price the same on both sites: the side that changed since the last sync wins."""
+    from app.services.notify import notify
+
+    current = await up.open_edit(v["id"])
+    vin = (str(current.get("title") or "").strip(), current.get("description") or "",
+           float(current["price"]) if current.get("price") not in (None, "") else None)
+    wh_key, vin_key = content_key(*wh), content_key(*vin)
+    way = decide(wh_key, vin_key, v.get("synced_wh"), v.get("synced_vin"))
+    if way == "to_willhaben":
+        after = await _to_willhaben(ad_id, *vin)
+        _set(ad_id, synced_wh=content_key(*after), synced_vin=vin_key)
+        counts["to_willhaben"] += 1
+        return
+    if way in ("to_vinted", "conflict"):
+        title, text, price = wh
+        await up.save_item(v["id"], vl.edit_body(current, up.session_id or vl.new_session_id(),
+                                                 title=title, description=text, price=price))
+        stored = await up.open_edit(v["id"])         # what Vinted keeps (its own limits): the next run's baseline
+        vin_key = content_key(str(stored.get("title") or "").strip(), stored.get("description") or "",
+                              float(stored["price"]) if stored.get("price") not in (None, "") else None)
+        counts["updated"] += 1
+        if way == "conflict":
+            with session() as db:
+                row = db.get(MyAd, ad_id)
+            await notify("ad_renewed", t("Changed on both sites"),
+                         t("{title}: changed on willhaben and on Vinted since the last sync – willhaben's version is "
+                           "now on both", title=(row.heading if row else None) or ad_id),
+                         url=item_url(v["id"], "active"), data={"ad_id": ad_id})
+    _set(ad_id, synced_wh=wh_key, synced_vin=vin_key)
+
+
+def link_willhaben(vinted_ad: str, wh_ad_id: str) -> None:
+    """An ad only on Vinted was published on willhaben from its copy: the Vinted item now belongs to the willhaben
+    ad (title, text and price as Vinted has them are the starting point), the Vinted-only row goes."""
+    with session() as db:
+        src, dst = db.get(MyAd, vinted_ad), db.get(MyAd, wh_ad_id)
+        if src is None or dst is None or not (src.vinted or {}).get("id"):
+            return
+        dst.vinted = {k: val for k, val in src.vinted.items() if k != "origin"}
+        dst.image_url = dst.image_url or src.image_url
+        db.add(dst)
+        db.delete(src)
+        db.commit()
+
+
+async def to_willhaben(ad_id: str) -> int:
+    """An ad only on Vinted as a listing draft for willhaben: its title, text, price and photos, unchanged (no Claude
+    rewrite), for the owner to check the category and publish. Returns the draft id."""
+    from app.db import AdDraft
+    from app.services import ad_creator, ad_images
+
+    v = _linked([ad_id]).get(ad_id)
+    if not vinted_only(ad_id) or not v:
+        raise vl.ListingError(t("Not an ad only on Vinted"))
+    async with vl.Upload() as up:
+        item = await up.open_edit(v["id"])
+    with session() as db:
+        d = AdDraft(input_text=t("Taken over from Vinted"), title=str(item.get("title") or "")[:80],
+                    description=item.get("description") or "", vinted_ad=ad_id,
+                    price_suggestion=float(item["price"]) if item.get("price") not in (None, "") else None)
+        db.add(d)
+        db.commit()
+        db.refresh(d)
+    files = []
+    with tempfile.TemporaryDirectory(prefix="wh-from-vinted-") as tmp:
+        for i, url in enumerate(item.get("photo_urls") or [], 1):
+            p = await ad_images.download(url, Path(tmp), f"foto{i}", platform="vinted")
+            if p is not None:
+                files.append((p.name, p.read_bytes()))
+        paths = ad_creator.save_images(d.id, files)
+    ad_creator.update_draft(d.id, image_paths=paths)
+    return d.id
 
 
 def schedule_sync(ad_id: str) -> None:
@@ -347,8 +520,8 @@ def schedule_sync(ad_id: str) -> None:
 
 
 async def scheduled_sync() -> None:
-    """The hourly sync of all linked ads (a quiet job only when there are any)."""
-    if not _linked():
+    """The hourly sync (a quiet job only with linked ads or a logged-in Vinted account)."""
+    if not _linked() and not _vinted_on():
         return
     await jobs.submit("vinted-sync", t("Sync with Vinted"), lambda job: _run_all(), quiet=True, reuse_queued=True).task
 

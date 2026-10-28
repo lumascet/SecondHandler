@@ -254,10 +254,14 @@ def item_from_payload(payload: str, item_id: int | str) -> dict[str, Any] | None
     if 0 <= j < end + 400:
         try:
             raw, _ = dec.raw_decode(payload, j + len('"photos":'))
-            photos = [int(ph["id"]) for ph in raw if isinstance(ph, dict) and ph.get("id")]
+            raw = [ph for ph in raw if isinstance(ph, dict) and ph.get("id")]
+            photos = [int(ph["id"]) for ph in raw]
+            urls = [str(ph.get("fullSizeUrl") or ph.get("full_size_url") or ph.get("url") or "") for ph in raw]
         except ValueError:
-            pass
-    return {**item, "photo_ids": photos}
+            urls = []
+    else:
+        urls = []
+    return {**item, "photo_ids": photos, "photo_urls": [u for u in urls if u]}
 
 
 def edit_body(item: dict[str, Any], session_id: str, *, title: str | None = None, description: str | None = None,

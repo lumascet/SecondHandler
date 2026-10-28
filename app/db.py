@@ -320,6 +320,7 @@ class AdDraft(SQLModel, table=True):
     # what Claude could not tell from notes and photos: [{id, text, options}], answered on the draft page (never a
     # "(bitte prüfen)" in the text); None = nothing open
     questions: list[dict[str, Any]] | None = Field(default=None, sa_column=Column(JSON))
+    vinted_ad: str | None = None       # copied from an ad only on Vinted ("vinted-<id>"): published, the two are linked
     created_at: datetime = Field(default_factory=utcnow)
 
 

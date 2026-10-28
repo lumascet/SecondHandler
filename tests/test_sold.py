@@ -698,7 +698,7 @@ def test_locally_sold_ad_shows_sold_in_my_ads(ad_with_chats):
     with TestClient(app) as c:
         page = c.get(f"/myads?ad={AD}&show_sold=1").text
     row = page[page.index(f'id="row-{AD}"'):page.index('id="myads-detail"')]
-    header = page[page.index('id="myads-detail"'):page.index("Open on willhaben")]
+    header = page[page.index('id="myads-detail"'):page.index("data-listings")]
     for part in (row, header):
         assert 'rounded-full bg-current"></span>sold</span>' in part and "</span>active</span>" not in part
 
