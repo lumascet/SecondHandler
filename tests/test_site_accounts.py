@@ -183,3 +183,24 @@ def test_browser_willhaben_and_vinted_have_separate_status_lines():
     assert 'data-status="willhaben"' in menu and "willhaben: logged in" in menu
     assert 'data-status="vinted"' in menu and "Vinted: not logged in" in menu
     assert 'href="/settings/vinted" role="menuitem"' in menu
+
+
+async def test_a_recording_stops_even_when_an_answer_never_comes(monkeypatch, tmp_path):
+    """10-28: a request of a tab closed meanwhile never got its answer, and stopping the recording waited for it
+    for good."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.willhaben.session import BrowserSession
+
+    monkeypatch.setattr(session_mod, "CAPTURE_STOP_WAIT_S", 0.05)
+    sess = BrowserSession.__new__(BrowserSession)
+    sess.context = SimpleNamespace(remove_listener=lambda *a: None)
+    sess.settings = SimpleNamespace(captures_dir=tmp_path)
+    sess._capture = {"label": "vinted test", "started_at": "x", "entries": [{"url": "https://www.vinted.at/api/v2/x"}]}
+    stuck = asyncio.ensure_future(asyncio.sleep(3600))
+    sess._capture_tasks = {stuck}
+    path = await asyncio.wait_for(sess.stop_capture(), 2)
+    assert path.exists() and "vinted-test" in path.name and sess._capture is None
+    await asyncio.sleep(0)
+    assert stuck.cancelled()

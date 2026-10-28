@@ -902,11 +902,11 @@ class BrowserSession:
         if request.resource_type not in ("fetch", "xhr", "document", "websocket", "eventsource"):
             return
         try:
-            resp = await request.response()
+            resp = await asyncio.wait_for(request.response(), CAPTURE_READ_S)
             body = raw = None
             if resp is not None:
                 try:
-                    raw = await resp.body()
+                    raw = await asyncio.wait_for(resp.body(), CAPTURE_READ_S)
                     # Pages carry their data in __NEXT_DATA__ at the very end, so keep them whole.
                     limit = 3_000_000 if request.resource_type == "document" else 200_000
                     body = raw[:limit].decode("utf-8", "replace")
@@ -937,8 +937,10 @@ class BrowserSession:
         if not self._capture:
             return None
         self.context.remove_listener("requestfinished", self._on_request_finished)
-        if self._capture_tasks:
-            await asyncio.gather(*self._capture_tasks, return_exceptions=True)
+        if self._capture_tasks:      # an answer that never comes (its tab closed meanwhile) must not hold the stop
+            _, pending = await asyncio.wait(list(self._capture_tasks), timeout=CAPTURE_STOP_WAIT_S)
+            for task in pending:
+                task.cancel()
         cap, self._capture = self._capture, None
         cap["stopped_at"] = utcnow().isoformat()
         safe = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in cap["label"])[:40] or "capture"
@@ -997,6 +999,8 @@ def parse_me(data: Any) -> dict[str, Any] | None:
     return user
 
 
+CAPTURE_READ_S = 20       # one recorded request's answer: read within this or kept without it
+CAPTURE_STOP_WAIT_S = 10  # stopping a recording waits this long for answers still being read
 _redact = recorder.redact_headers      # cookies, CSRF token and authorization never leave the browser
 
 
