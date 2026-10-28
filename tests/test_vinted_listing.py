@@ -744,7 +744,7 @@ def test_a_reference_is_never_sent():
 async def test_the_sync_puts_the_real_text_where_a_reference_landed(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     with session() as db:
-        db.add(MyAd(ad_id="1632", heading="Annke C800", status="active", vinted={"id": "778", "state": "active"}))
+        db.add(MyAd(ad_id="1632", heading="Annke C800", status="Passiv", vinted={"id": "778", "state": "active"}))
         db.commit()
 
     async def wh(ad_id):

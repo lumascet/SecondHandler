@@ -426,7 +426,9 @@ async def sync(only: list[str] | None = None) -> dict[str, int]:
         rows = {ad_id: db.get(MyAd, ad_id) for ad_id in linked}
     want = {}
     for ad_id, row in rows.items():
-        if row is not None and not vinted_only(ad_id) and row.status == "active" and not not_for_sale(row):
+        # online or still in willhaben's review ("Passiv" right after publishing, 10-28): the text counts already
+        if row is not None and not vinted_only(ad_id) and row.status in ("active", "Passiv", "unknown") \
+                and not not_for_sale(row):
             if (content := await _willhaben_content(ad_id)) is not None:
                 want[ad_id] = content
     counts = {"updated": 0, "to_willhaben": 0, "hidden": 0, "shown": 0, "reserved": 0, "gone": 0, "new": 0}
