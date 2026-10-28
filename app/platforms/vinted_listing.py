@@ -183,6 +183,26 @@ def draft_body(*, title: str, description: str, price: float | None, catalog_id:
         "parcel": None, "upload_session_id": session_id}
 
 
+def error_fields(text: str | None) -> set[str]:
+    """The fields Vinted's validation answer names."""
+    try:
+        d = json.loads(text or "")
+    except ValueError:
+        return set()
+    return {str(e.get("field")) for e in d.get("errors") or [] if isinstance(e, dict)}
+
+
+def tame_caps(title: str) -> str:
+    """A title Vinted takes: words in capitals only ("WAVLINK", "MONITORE") as Wavlink, Monitore – model numbers and
+    short abbreviations (UTD05, DP, USB) stay ("too many capital letters", 10-28)."""
+    def word(w: str) -> str:
+        letters = [c for c in w if c.isalpha()]
+        if len(letters) >= 4 and all(c.isupper() for c in letters) and not any(c.isdigit() for c in w):
+            return w[:1] + w[1:].lower()
+        return w
+    return " ".join(word(w) for w in title.split(" "))
+
+
 def errors_of(text: str | None) -> str:
     """Vinted's validation messages as one line ("title: Bitte nutze … mindestens 5 Zeichen")."""
     try:
@@ -472,16 +492,26 @@ class Upload:
             "attributes": [{"code": "category", "ids": [str(catalog_id)]}], "suggested_legacy_category_id": catalog_id})
         return data if status == 200 and isinstance(data, dict) else {}
 
-    async def suggested_package(self, catalog_id: int, title: str, description: str) -> int | None:
+    async def suggested_package(self, catalog_id: int, title: str, description: str, *, brand_id: Any = None,
+                                price: float | None = None, color_ids: list[int] | None = None,
+                                attributes: list[dict[str, Any]] | None = None) -> int | None:
+        """Vinted's parcel size for the item, asked with all the page sends (title and text alone got none, 10-28)."""
         try:
             status, data, _ = await self.call(
                 "POST", "https://api.vinted.at/shipping-estimation/external/package_sizes/suggestion",
-                {"catalog_id": catalog_id, "upload_session_id": self.session_id or "", "title": title,
-                 "description": description})
+                {"catalog_id": catalog_id, "upload_session_id": self.session_id or "", "brand_id": brand_id or 1,
+                 "title": title, "description": description, "price": price, "color_ids": list(color_ids or []),
+                 "item_attributes": list(attributes or [])})
         except Exception:  # noqa: BLE001 - the parcel size is then asked on publishing
             return None
         pid = (data or {}).get("package_size_id") if status == 200 and isinstance(data, dict) else None
         return int(pid) if pid else None
+
+    async def colors(self) -> list[dict[str, Any]]:
+        try:
+            return (await self.get(f"{API}/item_upload/colors") or {}).get("colors") or []
+        except ListingError:
+            return []
 
     async def open_edit(self, item_id: int | str) -> dict[str, Any]:
         """Go to the item's edit page and return the item from its page data (with photo_ids)."""

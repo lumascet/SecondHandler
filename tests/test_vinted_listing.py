@@ -85,6 +85,8 @@ class FakeUpload:
     edits: list = []
     hidden: list = []
     published: list = []
+    package_asks: list = []
+    no_colours = False
 
     def __init__(self):
         self.session_id, self.user_id, self.wardrobe_calls = "page-session", "1", 0
@@ -124,10 +126,14 @@ class FakeUpload:
         return FakeUpload.answers.pop(0)
 
     async def suggestions(self, cid, title, text):
-        return {"prefill_brand": None, "colors": [{"id": 12, "title": "Weiß"}]}
+        return {"prefill_brand": None, "colors": [] if FakeUpload.no_colours else [{"id": 12, "title": "Weiß"}]}
 
-    async def suggested_package(self, cid, title, text):
+    async def suggested_package(self, cid, title, text, **kw):
+        FakeUpload.package_asks.append(kw)
         return 2
+
+    async def colors(self):
+        return [{"id": 1, "title": "Schwarz"}, {"id": 12, "title": "Weiß"}]
 
     async def open_edit(self, item_id):
         FakeUpload.opened.append(item_id)
@@ -167,6 +173,8 @@ def _setup(monkeypatch, tmp_path):
             asked.append(prompt)
             if "attributes" in schema["properties"]:
                 return LLMResult(data={"attributes": [{"code": "condition", "ids": [2]}]}, model="fake")
+            if "ids" in schema["properties"]:
+                return LLMResult(data={"ids": [1]}, model="fake")             # black
             return LLMResult(data={"id": 3000 if "Bereiche" in prompt else 3011, "reason": ""}, model="fake")
     from app.services import ad_images
     from app.willhaben import insert, session as wsession
@@ -176,6 +184,7 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(crosspost, "get_backend", lambda purpose=None: Backend())
     monkeypatch.setattr(vl, "Upload", FakeUpload)
     FakeUpload.saved, FakeUpload.opened, FakeUpload.edits, FakeUpload.hidden, FakeUpload.published = [], [], [], [], []
+    FakeUpload.package_asks, FakeUpload.no_colours = [], False
     FakeUpload.listed = [{"id": 4242, "is_draft": False, "is_closed": True}]
     return asked
 
@@ -522,3 +531,72 @@ def test_several_ads_at_once(monkeypatch):
         assert "Syncing" in r.headers["location"]
         r = c.post("/myads/bulk/vinted", data={"ids": ["801"]}, follow_redirects=False)
         assert "already" in r.headers["location"]
+
+
+
+def test_titles_vinted_takes():
+    assert vl.tame_caps("WAVLINK UTD05 Thunderbolt 3 Dock: 2*DP Monitore") == "Wavlink UTD05 Thunderbolt 3 Dock: 2*DP Monitore"
+    assert vl.tame_caps("NEU OVP Raspberry Pi 5 USB") == "NEU OVP Raspberry Pi 5 USB"     # short ones stay
+    assert vl.tame_caps("SAMSUNG SSD 980 PRO") == "Samsung SSD 980 PRO"
+    assert vl.error_fields('{"errors":[{"field":"title","value":"x"},{"field":"color","value":"y"}]}') == {"title", "color"}
+
+
+async def test_a_title_in_capitals_is_sent_again_tamed(monkeypatch, tmp_path):
+    """10-28: "Überschrift enthält zu viele Großbuchstaben" for "WAVLINK UTD05 …"."""
+    _setup(monkeypatch, tmp_path)
+
+    async def plan(s, ad_id):
+        return {"ad": {"heading": "WAVLINK UTD05 Thunderbolt 3 Dock", "description": "<p>Dock</p>", "price": 60},
+                "photos": ["https://cache.willhaben.at/mmo/a.jpg"], "shipping": {"handover": "both"}}
+    from app.willhaben import insert
+    monkeypatch.setattr(insert, "copy_plan", plan)
+    FakeUpload.answers = [(400, {}, '{"errors":[{"field":"title","value":"zu viele Großbuchstaben"}]}'),
+                          (200, {"draft": {"id": 55}}, "")]
+    await crosspost.to_vinted("501")
+    assert FakeUpload.saved[1]["draft"]["title"] == "Wavlink UTD05 Thunderbolt 3 Dock"
+    with session() as db:
+        v = db.get(MyAd, "501").vinted
+    assert v["synced_wh"] != v["synced_vin"]          # the two titles differ for good: no back and forth
+
+
+async def test_without_a_suggested_colour_claude_picks_one_and_the_parcel_is_asked_fully(monkeypatch, tmp_path):
+    """10-28: a watch was refused on publishing: no colour, no parcel size."""
+    _setup(monkeypatch, tmp_path)
+    FakeUpload.no_colours = True
+    with session() as db:
+        row = db.get(MyAd, "501")
+        row.parcel = None
+        db.add(row)
+        db.commit()
+    FakeUpload.answers = [(200, {"draft": {"id": 56}}, "")]
+    await crosspost.to_vinted("501")
+    d = FakeUpload.saved[0]["draft"]
+    assert d["color_ids"] == [1] and d["package_size_id"] == 2
+    ask = FakeUpload.package_asks[0]
+    assert ask["price"] == 120.0 and ask["color_ids"] == [1] and ask["attributes"] == [{"code": "condition", "ids": [2]}]
+
+
+async def test_publish_fills_in_what_the_draft_lacks(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _linked_ad(state="draft")
+    FakeUpload.no_colours = True
+    FakeUpload.item = {**vl.item_from_payload(EDIT_PAYLOAD, 777), "isDraft": True, "colorIds": [], "packageSizeId": None}
+    await crosspost.publish("601")
+    body = FakeUpload.published[0][1]["draft"]
+    assert body["color_ids"] == [1] and body["package_size_id"] == 2
+
+
+async def test_a_failed_transfer_shows_on_the_vinted_line_and_goes_once_it_works(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    from app.services import jobs as jobs_mod
+    runs = []
+    monkeypatch.setattr(jobs_mod, "submit", lambda kind, label, run, **kw: runs.append(run))
+    FakeUpload.answers = [(400, {}, '{"errors":[{"field":"price","value":"zu niedrig"}]}')]
+    assert crosspost.enqueue("501")
+    try:
+        await runs[0](None)
+    except vl.ListingError:
+        pass
+    with session() as db:
+        row = db.get(MyAd, "501")
+        assert "price: zu niedrig" in row.vinted["error"] and row.last_error is None and row.pending_action is None
