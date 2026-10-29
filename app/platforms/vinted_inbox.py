@@ -656,6 +656,19 @@ async def _on_live(payload: str) -> None:
     if "_state" in ev:
         if ev["_state"] == "fetch":
             log.info("vinted live: the page calls %s", ev.get("url"))
+        # refused (401: the page's login ran out and it never renews it, 10-28/29: every 2 s for 18 hours): no sign
+        # of life; the tab is reloaded, and if that does not help it is closed and tried again later
+        if ev["_state"] == "open" and ev.get("status") in (401, 403):
+            live["refused"] = live.get("refused", 0) + 1
+            if live.get("state") != "refused":
+                live.update(state=f"open {ev.get('status')}", since=live.get("since") or utcnow())
+            if live["refused"] == LIVE_REFUSED_MAX and not live.get("renewing"):
+                _live_spawn(_renew_live())
+            return
+        if ev["_state"] == "closed" and live.get("refused"):
+            return
+        if ev["_state"] == "open" and ev.get("status") == 200:
+            live["refused"], live["renewals"] = 0, 0
         if ev["_state"] in ("open", "closed"):
             state = "connected" if ev["_state"] == "open" and ev.get("status") == 200 else \
                 f"{ev['_state']} {ev.get('status') or ''}".strip()
@@ -669,6 +682,32 @@ async def _on_live(payload: str) -> None:
         cid = str((ev.get("data") or {}).get("conversation_id") or "")
         if cid:          # its messages and events, new ones pushed here; the inbox the page reloads brings the list
             await sync_one(cid)
+
+
+LIVE_REFUSED_MAX = 3          # refused connections in a row before the tab is reloaded (once) or closed
+LIVE_BACKOFF_S = 15 * 60      # a tab still refused after its reload: closed, opened again after this
+
+
+async def _renew_live() -> None:
+    """The stream is refused (401): reload the tab once – Vinted's page renews its login when it loads –; refused
+    again after that, close it and leave Vinted alone for LIVE_BACKOFF_S (the watchdog opens it again)."""
+    live["renewing"] = True
+    try:
+        page = live.get("page")
+        if live.get("renewals", 0) >= 1 or page is None or page.is_closed():
+            log.warning("vinted live: still refused after a reload – closed, next try in %d min", LIVE_BACKOFF_S // 60)
+            live.update(state="refused", since=utcnow(), refused=0,
+                        retry_at=utcnow() + timedelta(seconds=LIVE_BACKOFF_S))
+            if page is not None and not page.is_closed():
+                await page.close()
+            return
+        live["renewals"], live["refused"] = live.get("renewals", 0) + 1, 0
+        log.info("vinted live: refused (%s) – reloading the tab to renew its login", live.get("state"))
+        await page.reload(wait_until="domcontentloaded", timeout=30000)
+    except Exception as e:  # noqa: BLE001 - the watchdog takes it from here
+        log.info("vinted live: reload failed: %s", e)
+    finally:
+        live["renewing"] = False
 
 
 async def _on_live_response(resp) -> None:
@@ -723,7 +762,7 @@ async def start_live() -> bool:
     await page.expose_function("__whVintedLiveApp", lambda payload: _live_spawn(_on_live(payload)))
     await page.add_init_script(_LIVE_JS)
     page.on("response", lambda r: _live_spawn(_on_live_response(r)))
-    live.update(page=page, state="connecting", since=utcnow())
+    live.update(page=page, state="connecting", since=utcnow(), refused=0, renewals=0, retry_at=None)
     await page.goto(f"{ORIGIN}/inbox", wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(8000)
     try:
@@ -750,6 +789,8 @@ async def live_watchdog() -> None:
                 continue
             page, last = live.get("page"), live.get("last_event") or live.get("since")
             dead = page is None or page.is_closed() or last is None or (utcnow() - last).total_seconds() > 180
+            if live.get("state") == "refused" and utcnow() < (live.get("retry_at") or utcnow()):
+                continue                               # refused: Vinted is left alone until retry_at
             from app.services import site_accounts
             logged_in_again = live.get("state") == "logged out" and site_accounts.state("vinted")["logged_in"]
             if dead and (live.get("state") != "logged out" or logged_in_again):

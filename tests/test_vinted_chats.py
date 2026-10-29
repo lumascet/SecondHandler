@@ -575,3 +575,40 @@ async def test_the_language_they_write_in_decides(monkeypatch):
     out = await chats.compose(conv, [("in", None, "Oggi penso proprio di sì.")], auto=False, ad=None)
     rules = out["prompt"].split("Meine Regeln:")[1]
     assert "schreibt Italienisch: schreib deine Antwort auf Italienisch" in rules and "auf Deutsch." not in rules
+
+
+async def test_a_refused_live_stream_is_reloaded_once_then_left_alone(monkeypatch):
+    """10-28/29: the live tab's stream was refused (401) every 2 s for 18 hours – its login ran out and the page
+    never renewed it, and the watchdog took the refusals for signs of life."""
+    import asyncio
+    import json as _json
+
+    from app.platforms import vinted_inbox as vi
+
+    class Page:
+        def __init__(self):
+            self.reloads, self.closed = 0, False
+
+        def is_closed(self):
+            return self.closed
+
+        async def reload(self, **kw):
+            self.reloads += 1
+
+        async def close(self):
+            self.closed = True
+    page = Page()
+    monkeypatch.setattr(vi, "live", {"state": "connected", "since": None, "last_event": None, "events": 0, "page": page})
+    refused = _json.dumps({"_state": "open", "status": 401})
+    for _ in range(vi.LIVE_REFUSED_MAX):
+        await vi._on_live(refused)
+    await asyncio.sleep(0)
+    await asyncio.gather(*list(vi._live_tasks))
+    assert page.reloads == 1 and not page.closed and vi.live["last_event"] is None   # no sign of life
+    for _ in range(vi.LIVE_REFUSED_MAX):
+        await vi._on_live(refused)
+    await asyncio.sleep(0)
+    await asyncio.gather(*list(vi._live_tasks))
+    assert page.closed and page.reloads == 1 and vi.live["state"] == "refused" and vi.live["retry_at"]
+    await vi._on_live(_json.dumps({"_state": "open", "status": 200}))
+    assert vi.live["refused"] == 0 and vi.live["renewals"] == 0 and vi.live["state"] == "connected"
