@@ -1,0 +1,23 @@
+{% import "_ui.html" as ui %}
+{# The price steps of a Vinted chat (services/vinted_offers.py): the latest offer and what can be done with it –
+   accept, decline, counter-offer, make an offer, reserve. Each runs on Vinted at once (accepting asks first); the
+   chat is read again afterwards. #}
+{% set vo = vinted_offer_card(conv) %}
+{% if vo %}
+<section class="flex min-w-0 flex-col gap-2.5 rounded-box border border-base-300 bg-base-100 px-3.5 py-3" id="vinted-offer">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">{{ _("Price on Vinted") }} <span class="font-normal tracking-normal normal-case">· {{ _("I am selling") if conv.role == 'seller' else _("I am buying") }}</span></h3>
+    {% if vo.open_request %}{{ ui.pill(_("Offer waiting for you"), 'warn') }}{% endif %}
+  </div>
+  <p class="m-0 break-words text-[13px]">{{ vo.line }}</p>
+  <div class="flex flex-wrap items-center gap-1.5">
+    {% for a in vo.actions %}
+    <form method="post" action="/chats/{{ conv.id }}/vinted-offer/{{ a.name }}" class="flex max-w-full min-w-0 flex-wrap items-center gap-1.5"{% if a.confirm %} onsubmit="return confirm({{ a.confirm|tojson|forceescape }})"{% endif %}>
+      {% if a.input %}<input type="text" inputmode="decimal" name="amount" required placeholder="€" aria-label="{{ _('Offer amount in euros') }}" class="input input-sm w-[90px] bg-base-200">{% endif %}
+      <button class="btn btn-sm {{ 'btn-primary' if a.name == 'accept' else '' }}" data-vinted-step="{{ a.name }}">{{ a.label }}</button>
+    </form>
+    {% endfor %}
+  </div>
+  <p class="m-0 text-[11.5px] text-muted">{{ _("Each step runs on Vinted right away, as Vinted's own page sends it.") }}</p>
+</section>
+{% endif %}

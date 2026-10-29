@@ -270,9 +270,11 @@ templates.env.globals.update(hit_can_sync=lambda h: _can_sync(h))     # the hit 
 from app.platforms import shipping_info as _shipping_info  # noqa: E402
 from app.services import translate as _translate_svc  # noqa: E402
 from app.services import taste as _taste_svc  # noqa: E402
+from app.services import vinted_offers as _vinted_offers_svc  # noqa: E402
 from app.platforms import fees as _fees  # noqa: E402
 templates.env.globals.update(buyer_fee_line=_fees.ad_fee)   # the buyer fee in the ad viewer's price breakdown
 templates.env.globals.update(shipping_label=_shipping_info.label_of)
+templates.env.globals.update(vinted_offer_card=_vinted_offers_svc.card)   # a Vinted chat's price steps
 templates.env.globals.update(taste_counts=_taste_svc.counts)   # the agent's saved / discarded hits (swipes)
 templates.env.globals.update(ad_foreign=lambda text: _translate_svc.on() and _translate_svc.foreign(text))   # the viewer's translation    # ui.ship(): shipping next to every price
 
@@ -1937,6 +1939,16 @@ async def draft_send(draft_id: int, text: str = Form(...), paylivery_step: str =
         except pl.PayLiveryError as e:
             return back(f"/chats/{d.conversation_id}?msg={quote(t('Answer sent, but the PayLivery step did not start: {error}', error=e), safe='')}")
     return back(f"/chats/{d.conversation_id}#draft-{draft_id}")
+
+
+@app.post("/chats/{conversation_id}/vinted-offer/{step}")
+async def chat_vinted_offer(conversation_id: str, step: str, amount: str = Form("")):
+    """A price step of a Vinted chat (accept, decline, counter-offer, offer, reserve), done on Vinted at once."""
+    try:
+        msg = await _vinted_offers_svc.run(conversation_id, step, amount or None)
+    except _vinted_offers_svc.OfferError as e:
+        msg = str(e)
+    return back(f"/chats/{conversation_id}?msg={quote(msg, safe='')}#vinted-offer")
 
 
 @app.post("/drafts/{draft_id}/revise")

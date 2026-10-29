@@ -133,6 +133,8 @@ class Conversation(SQLModel, table=True):
     meetup: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     # PayLivery process of this chat (app/services/paylivery.py): role, stage, amounts, deadline, history, applied notices
     paylivery: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    vinted_offer: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))   # the Vinted chat's
+    #   transaction and its latest offer (platforms/vinted_inbox.offer_state; services/vinted_offers acts on it)
     # hidden from the chat list (only here, not on willhaben) until the other person writes again
     hidden_at: datetime | None = None
     removed: bool | None = None    # also hidden, and its messages/drafts deleted here; the row stays so sync skips it

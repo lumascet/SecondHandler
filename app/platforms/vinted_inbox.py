@@ -167,6 +167,44 @@ def message_text(m: dict[str, Any]) -> tuple[str, str | None]:
     return "", None
 
 
+OFFER_PENDING, OFFER_ACCEPTED, OFFER_REJECTED, OFFER_CANCELLED = 10, 20, 30, 40   # Vinted's offer statuses (its web
+#   app's enum, 10-29); the web app offers accept / decline only while an offer request is pending
+
+
+def _money_of(v: Any) -> float | None:
+    try:
+        return float((v or {}).get("amount")) if isinstance(v, dict) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def offer_state(data: dict[str, Any], partner_id: str) -> dict[str, Any] | None:
+    """The chat's transaction and its latest offer: {transaction_id, price (the price agreed so far), offer: {kind
+    "request" (the buyer's) | "offer" (the seller's), id, price, original, status, status_title, from_me, at}}."""
+    dd = data.get("data") or {}
+    out: dict[str, Any] = {}
+    if dd.get("transaction_id"):
+        out["transaction_id"] = str(dd["transaction_id"])
+    if (now := _money_of(dd.get("inquiry_value"))) is not None:
+        out["price"] = now
+    latest = None
+    for m in data.get("messages") or []:
+        d = m.get("data") or {}
+        if d.get("entity_type") in ("offer_request_message", "offer_message") and \
+                (latest is None or str(m.get("created_at") or "") >= str(latest[0].get("created_at") or "")):
+            latest = (m, d, d.get("entity") or {})
+    if latest:
+        m, d, e = latest
+        out.setdefault("transaction_id", str(e.get("transaction_id") or "") or None)
+        out["offer"] = {
+            "kind": "request" if d.get("entity_type") == "offer_request_message" else "offer",
+            "id": str(e.get("offer_request_id") or d.get("id") or ""), "price": _money_of(e.get("price")),
+            "original": _money_of(e.get("original_price")), "status": e.get("status"),
+            "status_title": e.get("status_title"), "at": m.get("created_at"),
+            "from_me": str(e.get("user_id") or m.get("sender_id") or "") != partner_id}
+    return out or None
+
+
 def offer_text(e: dict[str, Any]) -> str:
     """An offer in a Vinted chat as one line (10-29: the owner's counter-offer had no title and was dropped, the
     buyer's showed only "… hat dir ein neues Angebot gemacht:" without the amount):
@@ -329,6 +367,9 @@ def apply_conversation(cid: str, data: dict[str, Any], escrow: dict[str, Any] | 
                 row.role = side
             elif row.role is None:
                 row.ad_context = {**(row.ad_context or {}), "side_tried": True}
+            offers = offer_state(data, partner_id)       # the price talk's state: what the offer steps act on
+            if offers:
+                row.vinted_offer = offers
             order = (data.get("data") or {}).get("order_id")
             if order:
                 row.ad_context = {**(row.ad_context or {}), "order_id": str(order)}
