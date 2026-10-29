@@ -157,6 +157,24 @@ class Conversation(SQLModel, table=True):
     partner_trust_at: datetime | None = None  # when the profile was read for these (read again after a week)
 
 
+class HitVote(SQLModel, table=True):
+    """The owner's verdict on a hit (swiped, or Save / Ignore): liked or not, kept after the hit is cleared – what the
+    owner wants, per search agent (services/taste.py refines the agent's instruction from it)."""
+    __table_args__ = (UniqueConstraint("agent_id", "platform", "ad_id"),)
+    id: int | None = Field(default=None, primary_key=True)
+    agent_id: int = Field(index=True)
+    platform: str = "willhaben"
+    ad_id: str
+    heading: str
+    price: float | None = None
+    condition: str | None = None
+    location: str | None = None
+    body: str | None = None                        # the start of the ad's text
+    reason: str | None = None                      # Claude's screening note at the time, if any
+    liked: bool
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class AdTranslation(SQLModel, table=True):
     """An ad text in another language than German or English, translated once (services/translate.translate_ad)."""
     key: str = Field(primary_key=True)             # "<platform>:<ad id>"

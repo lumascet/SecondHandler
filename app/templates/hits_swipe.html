@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% import "_ui.html" as ui %}
+{# The new hits one at a time (GET /hits/swipe): swipe right (or ♥, →) saves, left (or ✕, ←) discards; each verdict
+   goes to POST /hits/<id>/vote and is kept for the agent's taste (services/taste.py, "Refine with my swipes"). The
+   cards are all on the page; the top one moves with the finger or mouse and flies out past a threshold. #}
+{% block title %}{{ _("Swipe") }} · SecondHandler{% endblock %}
+{% block content %}
+<div class="mx-auto flex w-full max-w-[460px] flex-col gap-4 px-4 pt-5 pb-28 md:pt-[22px]">
+  <div class="flex items-center gap-3">
+    <a href="/hits" class="btn btn-ghost btn-sm -ml-2">{{ ui.icon('back', 16) }}{{ _("Hits") }}</a>
+    <h1 class="flex-1 text-lg">{{ _("Swipe") }}{% if agent_id and agents.get(agent_id) %} <span class="text-base font-normal text-muted">· {{ agents[agent_id].name }}</span>{% endif %}</h1>
+    <span class="text-[13px] text-muted tabular-nums" data-swipe-left>{{ hits|length }}</span>
+  </div>
+  <p class="m-0 text-[13px] text-muted">{{ _("Right: save · left: discard. What you choose teaches the search agent – “Refine with my swipes” in its settings.") }}</p>
+
+  <div class="relative h-[min(68vh,560px)] select-none" data-swipe-stack>
+    {% for h in hits|reverse %}
+    {% set img = '/hits/' ~ h.id ~ '/image' if h.image_path else h.image_url %}
+    <article class="isolate absolute inset-0 flex touch-none flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-lg transition-transform"
+             data-swipe-card data-id="{{ h.id }}">
+      <div class="relative min-h-0 flex-1 bg-base-200">
+        {% if img %}<img src="{{ img }}" alt="" class="pointer-events-none h-full w-full object-cover" loading="{{ 'eager' if loop.revindex <= 2 else 'lazy' }}" draggable="false">{% endif %}
+        {{ ui.site_badge(h.platform, 16) }}
+        <span class="pointer-events-none absolute top-4 left-4 rounded-lg border-2 border-success px-2 py-0.5 text-lg font-bold text-success opacity-0" data-swipe-yes>{{ _("Save") }}</span>
+        <span class="pointer-events-none absolute top-4 right-4 rounded-lg border-2 border-error px-2 py-0.5 text-lg font-bold text-error opacity-0" data-swipe-no>{{ _("Discard") }}</span>
+      </div>
+      <div class="flex flex-col gap-1 px-4 py-3">
+        <div class="flex items-start justify-between gap-3"><h2 class="line-clamp-2 text-[16px] font-semibold">{{ h.heading }}</h2>
+          <span class="shrink-0 text-[17px] font-bold tabular-nums">{{ h.price_display or (h.price|eur) }}</span></div>
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted">{{ ui.ship(h, 'text-[12px]') }}{{ ui.condition_pill(h.item_condition, h.item_condition_label, h.platform) }}</div>
+        <div class="text-[12.5px] text-muted">{{ [h.location, agents[h.agent_id].name if agents.get(h.agent_id) else none, _("found {ago}", ago=h.first_seen_at|ago)]|select|join(' · ') }}</div>
+        {% if h.screen_reason %}<p class="m-0 line-clamp-2 text-[12.5px] text-primary">{{ h.screen_reason }}</p>{% endif %}
+      </div>
+    </article>
+    {% endfor %}
+    <div class="absolute inset-0 -z-10 grid place-items-center rounded-2xl border border-dashed border-base-300 text-center text-muted" data-swipe-empty>
+      <div class="flex flex-col items-center gap-2 px-6">{{ ui.icon('check', 28) }}<p class="m-0">{{ _("No new hits left.") }}</p><a class="link link-primary" href="/hits?state=saved">{{ _("Saved hits") }} →</a></div>
+    </div>
+  </div>
+
+  <div class="flex items-center justify-center gap-6" data-swipe-buttons>
+    <button type="button" class="btn btn-circle btn-lg border-error text-error" data-swipe-btn="0" aria-label="{{ _('Discard') }}" title="{{ _('Discard') }} (←)">{{ ui.icon('x', 26, 2.5) }}</button>
+    <button type="button" class="btn btn-circle btn-lg border-success text-success" data-swipe-btn="1" aria-label="{{ _('Save') }}" title="{{ _('Save') }} (→)">{{ ui.icon('heart', 24, 2.5) }}</button>
+  </div>
+</div>
+<script>
+(() => {
+  const stack = document.querySelector('[data-swipe-stack]');
+  if (!stack) return;
+  const left = document.querySelector('[data-swipe-left]');
+  const top = () => { const c = stack.querySelectorAll('[data-swipe-card]'); return c[c.length - 1] || null; };
+  const count = () => { left.textContent = stack.querySelectorAll('[data-swipe-card]').length; };
+  const decide = (card, liked) => {
+    if (!card || card.dataset.done) return;
+    card.dataset.done = '1';
+    card.style.transition = 'transform .25s ease-out, opacity .25s';
+    card.style.transform = `translateX(${liked ? 140 : -140}%) rotate(${liked ? 18 : -18}deg)`;
+    card.style.opacity = '0';
+    const body = new URLSearchParams({liked: liked ? '1' : '0'});
+    fetch(`/hits/${card.dataset.id}/vote`, {method: 'POST', body, credentials: 'same-origin'}).catch(() => {});
+    setTimeout(() => { card.remove(); count(); }, 260);
+  };
+  // the top card follows the pointer; past a quarter of its width it is decided
+  let start = null, card = null;
+  stack.addEventListener('pointerdown', e => {
+    card = top();
+    if (!card || !card.contains(e.target)) { card = null; return; }
+    start = {x: e.clientX, y: e.clientY};
+    card.style.transition = 'none';
+    card.setPointerCapture(e.pointerId);
+  });
+  stack.addEventListener('pointermove', e => {
+    if (!start || !card) return;
+    const dx = e.clientX - start.x;
+    card.style.transform = `translateX(${dx}px) rotate(${dx / 18}deg)`;
+    card.querySelector('[data-swipe-yes]').style.opacity = Math.max(0, Math.min(1, dx / 90));
+    card.querySelector('[data-swipe-no]').style.opacity = Math.max(0, Math.min(1, -dx / 90));
+  });
+  const end = e => {
+    if (!start || !card) return;
+    const dx = e.clientX - start.x, c = card;
+    start = card = null;
+    if (Math.abs(dx) > c.offsetWidth / 4) { decide(c, dx > 0); return; }
+    c.style.transition = 'transform .2s'; c.style.transform = '';
+    c.querySelector('[data-swipe-yes]').style.opacity = 0; c.querySelector('[data-swipe-no]').style.opacity = 0;
+  };
+  stack.addEventListener('pointerup', end);
+  stack.addEventListener('pointercancel', end);
+  document.querySelectorAll('[data-swipe-btn]').forEach(b => b.addEventListener('click', () => decide(top(), b.dataset.swipeBtn === '1')));
+  document.addEventListener('keydown', e => {
+    if (e.target.closest('input, textarea, select')) return;
+    if (e.key === 'ArrowRight') decide(top(), true);
+    if (e.key === 'ArrowLeft') decide(top(), false);
+  });
+})();
+</script>
+{% endblock %}

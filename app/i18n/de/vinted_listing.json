@@ -69,5 +69,21 @@
  "Shipping with PayLivery on willhaben for this ad (parcel size S, or M for a large parcel)": "Versand mit PayLivery auf willhaben für diese Anzeige (Paketgröße S, bei großem Paket M)",
  "Turn on PayLivery": "PayLivery einschalten",
  "In review": "In Prüfung",
- "Expired": "Abgelaufen"
+ "Expired": "Abgelaufen",
+ "Swipe": "Swipen",
+ "Discard": "Verwerfen",
+ "Right: save · left: discard. What you choose teaches the search agent – “Refine with my swipes” in its settings.": "Rechts: merken · links: verwerfen. Was du wählst, lernt der Suchagent – „Mit meinen Swipes verfeinern“ in seinen Einstellungen.",
+ "No new hits left.": "Keine neuen Treffer mehr.",
+ "Saved hits": "Gemerkte Treffer",
+ "The new hits one at a time: right saves, left discards": "Die neuen Treffer einzeln: rechts merken, links verwerfen",
+ "Your verdicts: {liked} saved, {disliked} discarded": "Deine Wahl: {liked} gemerkt, {disliked} verworfen",
+ "Claude reads the hits you saved and discarded and proposes a sharper instruction for this agent": "Claude liest die gemerkten und verworfenen Treffer und schlägt eine schärfere Anweisung für diesen Agenten vor",
+ "Refine with my swipes": "Mit meinen Swipes verfeinern",
+ "From {liked} saved and {disliked} discarded hits:": "Aus {liked} gemerkten und {disliked} verworfenen Treffern:",
+ "Use this": "Übernehmen",
+ "Applied when you save the agent.": "Wird beim Speichern des Agenten übernommen.",
+ "Swipe at least {n} hits of this agent first": "Swipe zuerst mindestens {n} Treffer dieses Agenten",
+ "Claude proposed nothing": "Claude hat nichts vorgeschlagen",
+ "Search agent not found": "Suchagent nicht gefunden",
+ "Claude did not answer: {error}": "Claude hat nicht geantwortet: {error}"
 }

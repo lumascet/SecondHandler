@@ -269,9 +269,11 @@ templates.env.globals.update(geizhals_levels=search_agents_svc.level_choices)
 templates.env.globals.update(hit_can_sync=lambda h: _can_sync(h))     # the hit cards' sync button
 from app.platforms import shipping_info as _shipping_info  # noqa: E402
 from app.services import translate as _translate_svc  # noqa: E402
+from app.services import taste as _taste_svc  # noqa: E402
 from app.platforms import fees as _fees  # noqa: E402
 templates.env.globals.update(buyer_fee_line=_fees.ad_fee)   # the buyer fee in the ad viewer's price breakdown
 templates.env.globals.update(shipping_label=_shipping_info.label_of)
+templates.env.globals.update(taste_counts=_taste_svc.counts)   # the agent's saved / discarded hits (swipes)
 templates.env.globals.update(ad_foreign=lambda text: _translate_svc.on() and _translate_svc.foreign(text))   # the viewer's translation    # ui.ship(): shipping next to every price
 
 
@@ -1227,6 +1229,9 @@ async def hit_state(request: Request, hit_id: int, state: str = Form(...)):
         db.add(h)
         db.commit()
         db.refresh(h)
+    if state in ("saved", "ignored"):     # the owner's taste, kept after the hit is cleared (services/taste.py)
+        from app.services import taste
+        taste.record(h, state == "saved")
     if state != "new":                   # handled: its push goes off the phone
         search_agents_svc.pushes_seen([h])
     if state == "saved":                # its photos, before the site drops them (sold, deleted)
@@ -1234,6 +1239,39 @@ async def hit_state(request: Request, hit_id: int, state: str = Form(...)):
     if request.headers.get("hx-request"):
         return HTMLResponse("")
     return back("/hits")
+
+
+@app.get("/hits/swipe", response_class=HTMLResponse)
+async def hits_swipe(request: Request, agent_id: int | None = None):
+    """The new hits one at a time: swipe right to save, left to discard (Tinder-like). Each verdict is kept for the
+    agent's taste (services/taste.py)."""
+    with session() as db:
+        q = select(Hit).where(Hit.state == "new")
+        if agent_id:
+            q = q.where(Hit.agent_id == agent_id)
+        hits = list(db.exec(q.order_by(col(Hit.first_seen_at).desc()).limit(40)))
+        agents = {a.id: a for a in db.exec(select(SearchAgent))}
+    return render(request, "hits_swipe.html", hits=hits, agents=agents, agent_id=agent_id)
+
+
+@app.post("/hits/{hit_id}/vote")
+async def hit_vote(hit_id: int, liked: str = Form(...)):
+    """A swipe: right saves the hit, left discards it (ignored); both are kept for the agent's taste."""
+    from app.services import taste
+    like = liked in ("1", "true", "yes")
+    with session() as db:
+        h = db.get(Hit, hit_id)
+        if h is None:
+            raise HTTPException(404)
+        h.state = "saved" if like else "ignored"
+        db.add(h)
+        db.commit()
+        db.refresh(h)
+    taste.record(h, like)
+    search_agents_svc.pushes_seen([h])
+    if like:
+        search_agents_svc.keep_image_later(hit_id, search_agents_svc.shown_photos(hit_id))
+    return JSONResponse({"ok": True, "state": h.state})
 
 
 _SHIP_TTL_S = 6 * 3600
@@ -2238,6 +2276,22 @@ async def myads_to_willhaben(request: Request, ad_id: str):
     """An ad only on Vinted onto willhaben: its own text and photos, willhaben's category, published as a job."""
     from app.services import crosspost
     return _queued(request, 1 if crosspost.enqueue_willhaben(ad_id) else 0)   # straight online, as a job
+
+
+@app.post("/agents/{agent_id}/refine", response_class=HTMLResponse)
+async def agent_refine(request: Request, agent_id: int):
+    """"Refine with my swipes": Claude's proposal for the agent's instruction, to take into the form or leave."""
+    from app.services import taste
+    error = proposal = None
+    try:
+        proposal = await taste.suggest(agent_id)
+    except ValueError as e:
+        error = str(e)
+    except Exception as e:  # noqa: BLE001 - Claude down, over the limit: said in the panel
+        log.warning("refining agent %s failed: %s", agent_id, e)
+        error = t("Claude did not answer: {error}", error=e)
+    return templates.TemplateResponse(request, "_agent_refine.html",
+                                      {"agent_id": agent_id, "p": proposal, "error": error})
 
 
 @app.post("/myads/{ad_id}/paylivery")

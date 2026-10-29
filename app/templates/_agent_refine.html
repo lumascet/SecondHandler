@@ -1,0 +1,17 @@
+{# "Refine with my swipes" (POST /agents/<id>/refine): Claude's proposal for the agent's instruction from the hits the
+   owner saved or discarded (services/taste.py). "Use this" puts it into the form's instruction (and switches the
+   screening on); Save stores it like any edit. #}
+{% if error %}<p class="m-0 text-[12.5px] text-warning" data-refine-error>{{ error }}</p>
+{% elif p %}
+<div class="flex flex-col gap-2 rounded-lg border border-primary/40 bg-base-100 px-3 py-2.5" data-refine-proposal>
+  <span class="text-[12px] text-muted">{{ _("From {liked} saved and {disliked} discarded hits:", liked=p.liked, disliked=p.disliked) }}</span>
+  <p class="m-0 text-[13px] whitespace-pre-line" data-refine-brief>{{ p.brief }}</p>
+  {% if p.changes %}<ul class="m-0 list-disc pl-5 text-[12.5px] text-muted">{% for c in p.changes %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
+  <div class="flex flex-wrap gap-2">
+    <button type="button" class="btn btn-xs btn-primary"
+            onclick="const f = this.closest('form'), b = f.querySelector('textarea[name=screen_brief]'), s = f.querySelector('input[name=screen_on]'); if (b) { b.value = this.closest('[data-refine-proposal]').querySelector('[data-refine-brief]').textContent; b.dispatchEvent(new Event('input', {bubbles: true})); } if (s && !s.checked) s.click(); this.closest('[data-refine-proposal]').remove();">{{ _("Use this") }}</button>
+    <button type="button" class="btn btn-xs btn-ghost" onclick="this.closest('[data-refine-proposal]').remove()">{{ _("Discard") }}</button>
+  </div>
+  <small class="text-[11.5px] text-muted">{{ _("Applied when you save the agent.") }}</small>
+</div>
+{% endif %}

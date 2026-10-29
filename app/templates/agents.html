@@ -208,7 +208,17 @@
             <p x-show="sites.length && !left()" x-cloak class="mt-1.5 text-[12px] text-error">{{ _("Keep at least one search, or delete the agent.") }}</p>
             <p x-show="dirty()" x-cloak class="mt-1.5 text-[12px] text-primary">{{ _("Changes apply when you save.") }}</p>
           </div>
-          <div class="rounded-box border border-base-300 bg-base-200 px-3.5 py-3">{% with screen=a.screen, brief=a.screen_brief, minimum=a.screen_min, hide=screen_hide_set(a), gh_check=a.geizhals_check %}{% include "_screen_fields.html" %}{% endwith %}</div>
+          <div class="rounded-box border border-base-300 bg-base-200 px-3.5 py-3">{% with screen=a.screen, brief=a.screen_brief, minimum=a.screen_min, hide=screen_hide_set(a), gh_check=a.geizhals_check %}{% include "_screen_fields.html" %}{% endwith %}
+            {# what the owner's swipes say: Claude proposes a better instruction from the saved and discarded hits #}
+            {% set tv = taste_counts(a.id) %}
+            <div class="mt-3 flex flex-col gap-2 border-t border-base-300 pt-3" data-refine>
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span class="text-[12.5px] text-muted">{{ _("Your verdicts: {liked} saved, {disliked} discarded", liked=tv.liked, disliked=tv.disliked) }} · <a class="link link-primary" href="/hits/swipe?agent_id={{ a.id }}">{{ _("Swipe") }}</a></span>
+                <button type="button" class="btn btn-xs" hx-post="/agents/{{ a.id }}/refine" hx-target="#refine-{{ a.id }}" hx-swap="innerHTML" hx-disabled-elt="this"
+                        title="{{ _('Claude reads the hits you saved and discarded and proposes a sharper instruction for this agent') }}"><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ ui.icon('sparkle', 13) }}{{ _("Refine with my swipes") }}</button>
+              </div>
+              <div id="refine-{{ a.id }}"></div>
+            </div></div>
           <footer class="mt-auto flex flex-wrap items-center gap-2 border-t border-base-300 pt-3.5">
             <button class="btn btn-primary">{{ _("Save") }}</button>
             <button type="button" class="btn btn-ghost" @click="$refs.dlg.close()">{{ _("Cancel") }}</button>
