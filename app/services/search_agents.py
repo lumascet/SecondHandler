@@ -1610,6 +1610,38 @@ async def status_sweep_job() -> None:
         record_status(h.platform or "willhaben", h.ad_id, site_status(d), d)
 
 
+CHECK_MAX = 100                # hits a "Check availability" reads at most (one ad page each, through the limiter)
+
+
+async def check_hits(hit_ids: list[int], job: Any = None) -> dict[str, int]:
+    """"Check availability" on the hits page: the ad page of each hit shown (each ad once, Facebook left out like the
+    hourly sweep) – still online, reserved, sold or gone. Returns {checked, online, gone, failed}."""
+    with session() as db:
+        rows = list(db.exec(select(Hit).where(col(Hit.id).in_(hit_ids[:CHECK_MAX]))))
+    todo, seen = [], set()
+    for h in rows:
+        key = (h.platform or "willhaben", h.ad_id)
+        if key in seen or key[0] in SWEEP_SKIP or not _site(h.platform).can("detail"):
+            continue
+        seen.add(key)
+        todo.append(h)
+    out = {"checked": 0, "online": 0, "gone": 0, "failed": 0}
+    for i, h in enumerate(todo, 1):
+        if job is not None:
+            job.progress(i - 1, t("Checking {title}", title=(h.heading or h.ad_id)[:50]), None)
+        try:
+            d = await _site(h.platform).detail(h.ad_id, url=h.url)
+        except Exception as e:  # noqa: BLE001 - one ad must not stop the others
+            log.info("availability of hit %s not loaded: %s", h.id, e)
+            out["failed"] += 1
+            continue
+        status = site_status(d)
+        record_status(h.platform or "willhaben", h.ad_id, status, d)
+        out["checked"] += 1
+        out["online" if status == "active" else "gone"] += 1
+    return out
+
+
 async def check_hit(hit_id: int) -> Hit | None:
     """The sync button of a hit: load the ad from its site (one request through its limiter and VPN) and keep its
     status. PlatformError when the site cannot be asked; None when the hit is gone."""

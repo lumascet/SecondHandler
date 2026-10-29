@@ -27,6 +27,7 @@
     {% else %}<p class="mt-1 max-w-[640px] text-muted max-sm:hidden">{{ _("Clicking a hit opens the ad here; ← / → pages through, Ctrl-click opens the ad on its site.") }}</p>{% endif %}
   </div>
   {% if state == 'filtered' and hits %}<form method="post" action="/hits/clear-filtered" class="m-0 shrink-0" hx-boost="true" {{ swap|safe }} hx-confirm="{{ (_('Clear these {n} filtered hits?', n=state_counts.get('filtered', 0)) if not agent_id else _('Clear the filtered hits of this agent?')) }}">{{ view_fields() }}<button class="btn max-sm:btn-sm max-sm:btn-square" title="{{ _('Clear') }}" aria-label="{{ _('Clear') }}">{{ ui.icon('trash', 15, 2, 'sm:hidden') }}<span class="max-sm:hidden">{{ _("Clear") }}</span></button></form>{% endif %}
+  {% if hits %}<form method="post" action="/hits/check-status" class="m-0 shrink-0" hx-post="/hits/check-status" hx-swap="none" hx-disabled-elt="find button">{{ view_fields() }}<button class="btn max-sm:btn-sm max-sm:btn-square" title="{{ _('Read every hit shown again from its site: still online, reserved, sold or gone (up to 100, in the background)') }}" aria-label="{{ _('Check availability') }}" data-check-status><span class="busy:hidden">{{ ui.icon('refresh', 15, 2.5) }}</span><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span><span class="max-sm:hidden">{{ _("Check availability") }}</span></button></form>{% endif %}
   {% if state_counts.get('new') %}<a class="btn max-sm:btn-sm shrink-0" href="/hits/swipe{{ '?agent_id=' ~ agent_id if agent_id else '' }}" title="{{ _('The new hits one at a time: right saves, left discards') }}" data-swipe-link>{{ ui.icon('heart', 15, 2.5) }}<span class="max-sm:hidden">{{ _("Swipe") }}</span></a>{% endif %}
   {% if state == 'new' and hits %}<form method="post" action="/hits/mark-seen" class="m-0 shrink-0" hx-boost="true" {{ swap|safe }}>{{ view_fields() }}<button class="btn max-sm:btn-sm max-sm:btn-square" title="{{ _('Mark all as seen') }}" aria-label="{{ _('Mark all as seen') }}">{{ ui.icon('check', 15, 2.5, 'sm:hidden') }}<span class="max-sm:hidden">{{ _("Mark all as seen") }}</span></button></form>{% endif %}
 </div>
@@ -110,7 +111,7 @@
   <button name="action" value="clear" class="btn btn-sm btn-ghost text-error" onclick="return confirm({{ _('Clear the selected hits? Saved ones are kept.')|tojson|forceescape }})">{{ _("Clear") }}</button>
   <span class="ml-auto flex gap-1.5"><button type="button" class="btn btn-sm btn-ghost" @click="all(true)">{{ _("Select all") }}</button><button type="button" class="btn btn-sm btn-ghost" @click="all(false)">{{ _("Cancel") }}</button></span>
 </form>
-<div id="hits-grid" class="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3.5">
+<div id="hits-grid" data-refresh-on-lane="agents" class="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3.5">
 {% set home = home_point() %}{# distance from home on each card (geo.hit_km: no request) #}
 {% set pz = price_zone_config() %}{# the zone label of a hit with a Geizhals new price (deals.hit_level), read once #}
 {% set screen_levels = {'great': 'bargain', 'good': 'cheap', 'fair': 'fair', 'overpriced': 'expensive'} %}{# Claude's verdict in the zones' colours #}

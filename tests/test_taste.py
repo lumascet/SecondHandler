@@ -82,3 +82,39 @@ async def test_too_few_verdicts_say_so():
         raise AssertionError("no error")
     except ValueError as e:
         assert "at least 5" in str(e)
+
+
+async def test_check_availability_of_the_hits_shown(monkeypatch):
+    """10-29: a button to read every hit shown again (still online, sold, gone) – not one card at a time."""
+    from types import SimpleNamespace
+
+    from app.services import search_agents as sa
+    aid = _agent_with_hits(3)
+    with session() as db:
+        hits = list(db.query(Hit).order_by(Hit.id))
+        db.add(Hit(agent_id=aid, platform="facebook", ad_id="fb1", heading="FB", url="https://x/fb"))
+        db.commit()
+        ids = [h.id for h in db.query(Hit)]
+    asked, recorded = [], []
+
+    class Site:
+        name = "willhaben"
+
+        def can(self, what):
+            return True
+
+        async def detail(self, ad_id, url=None):
+            asked.append(ad_id)
+            if ad_id == "102":
+                raise RuntimeError("slow")
+            return SimpleNamespace(status="sold" if ad_id == "101" else "active")
+    monkeypatch.setattr(sa, "_site", lambda p: Site())
+    monkeypatch.setattr(sa, "site_status", lambda d: d.status)
+    monkeypatch.setattr(sa, "record_status", lambda p, ad, st, d: recorded.append((ad, st)))
+    r = await sa.check_hits(ids)
+    assert sorted(asked) == ["100", "101", "102"]                     # Facebook left out, each ad once
+    assert r == {"checked": 2, "online": 1, "gone": 1, "failed": 1} and len(hits) == 3
+    from app.main import app
+    with TestClient(app) as c:
+        page = c.get(f"/hits?agent_id={aid}&state=all").text
+        assert 'hx-post="/hits/check-status"' in page and 'data-refresh-on-lane="agents"' in page

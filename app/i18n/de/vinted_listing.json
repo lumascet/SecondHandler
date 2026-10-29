@@ -87,5 +87,11 @@
  "Search agent not found": "Suchagent nicht gefunden",
  "Claude did not answer: {error}": "Claude hat nicht geantwortet: {error}",
  "Refresh status": "Status aktualisieren",
- "Read the status of the ads anew from willhaben and Vinted (online, in review, sold); the list updates when it is done": "Den Status der Anzeigen neu von willhaben und Vinted lesen (online, in Prüfung, verkauft); die Liste aktualisiert sich, sobald es fertig ist"
+ "Read the status of the ads anew from willhaben and Vinted (online, in review, sold); the list updates when it is done": "Den Status der Anzeigen neu von willhaben und Vinted lesen (online, in Prüfung, verkauft); die Liste aktualisiert sich, sobald es fertig ist",
+ "Checking {title}": "Prüfe {title}",
+ "{checked} checked: {online} still online, {gone} sold, reserved or gone": "{checked} geprüft: {online} noch online, {gone} verkauft, reserviert oder weg",
+ "{n} not reachable": "{n} nicht erreichbar",
+ "Check availability of {n} hits": "Verfügbarkeit von {n} Treffern prüfen",
+ "Read every hit shown again from its site: still online, reserved, sold or gone (up to 100, in the background)": "Jeden angezeigten Treffer neu von seiner Seite lesen: noch online, reserviert, verkauft oder weg (bis zu 100, im Hintergrund)",
+ "Check availability": "Verfügbarkeit prüfen"
 }

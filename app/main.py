@@ -1432,6 +1432,26 @@ async def hits_bulk(request: Request):
     return back(view.url())
 
 
+@app.post("/hits/check-status")
+async def hits_check_status(request: Request):
+    """"Check availability": every hit the page shows (its filters) read from its site again, as a background job;
+    the cards refresh when it is done."""
+    view = _view_form(await request.form())
+    with session() as db:
+        ids = [h.id for h in view.hits(db, limit=search_agents_svc.CHECK_MAX)]
+    if not ids:
+        return back(view.url())
+
+    async def run(job: jobs.Job) -> str:
+        r = await search_agents_svc.check_hits(ids, job)
+        return t("{checked} checked: {online} still online, {gone} sold, reserved or gone", **r) + \
+            (" · " + t("{n} not reachable", n=r["failed"]) if r["failed"] else "")
+    jobs.submit("hits-status", t("Check availability of {n} hits", n=len(ids)), run, lane="agents", total=len(ids))
+    if request.headers.get("hx-request"):
+        return Response(status_code=204)
+    return back(view.url())
+
+
 @app.post("/hits/mark-seen")
 async def hits_mark_seen(request: Request):
     """New → Mark all as seen: the hits the page shows (agent, site, filters)."""
