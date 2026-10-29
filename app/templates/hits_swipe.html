@@ -31,7 +31,8 @@
           <span class="shrink-0 text-[17px] font-bold tabular-nums">{{ h.price_display or (h.price|eur) }}</span></div>
         <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted">{{ ui.ship(h, 'text-[12px]') }}{{ ui.condition_pill(h.item_condition, h.item_condition_label, h.platform) }}</div>
         <div class="text-[12.5px] text-muted">{{ [h.location, agents[h.agent_id].name if agents.get(h.agent_id) else none, _("found {ago}", ago=h.first_seen_at|ago)]|select|join(' · ') }}</div>
-        {% if h.screen_reason %}<p class="m-0 line-clamp-2 text-[12.5px] text-primary">{{ h.screen_reason }}</p>{% endif %}
+        {# Claude's whole assessment (it was cut after two lines, 10-29); the photo gives way #}
+        {% if h.screen_reason %}<p class="m-0 text-[13px] leading-snug text-primary" data-swipe-reason>{{ ui.icon('sparkle', 12, 2, 'inline -mt-0.5 mr-0.5') }}{{ h.screen_reason }}</p>{% endif %}
       </div>
     </article>
     {% endfor %}
