@@ -47,8 +47,12 @@
     </section>
   </div>
 
-  <aside class="flex min-w-0 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100">
-    <h3 class="border-b border-base-300 px-4 py-3">{{ _("Recent drafts") }}</h3>
+  {# refreshes itself when a job of the ads lane is done ("Refresh status" below, the 10-minute check of ads in
+     review): the published drafts' state – online, in review, sold – as the account list says #}
+  <aside id="new-ad-recent" class="flex min-w-0 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100" data-refresh-on-lane="ads">
+    <div class="flex items-center justify-between gap-2 border-b border-base-300 px-4 py-2.5"><h3>{{ _("Recent drafts") }}</h3>
+      <form method="post" action="/myads/check" hx-post="/myads/check" hx-swap="none" hx-disabled-elt="find button">
+        <button class="btn btn-ghost btn-xs" title="{{ _('Read the status of the ads anew from willhaben and Vinted (online, in review, sold); the list updates when it is done') }}" data-refresh-status><span class="busy:hidden">{{ ui.icon('refresh', 13) }}</span><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ _("Refresh status") }}</button></form></div>
     {% set st = {'draft': ('', _('draft')), 'error': ('bad', _('error')), 'published': ('ok', _('published')), 'discarded': ('', _('discarded'))} %}
     {% for b in batches %}
     <a href="/new-ad/batch/{{ b.id }}" class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-base-300 px-4 py-2.5 text-base-content no-underline hover:bg-hover">

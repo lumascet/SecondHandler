@@ -76,3 +76,4 @@ def test_the_new_ad_page_shows_where_a_published_draft_stands():
     with TestClient(app) as c:
         page = c.get("/new-ad").text
     assert "In review" in page
+    assert 'hx-post="/myads/check"' in page and "data-refresh-status" in page     # the button to read it anew

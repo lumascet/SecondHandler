@@ -85,5 +85,7 @@
  "Swipe at least {n} hits of this agent first": "Swipe zuerst mindestens {n} Treffer dieses Agenten",
  "Claude proposed nothing": "Claude hat nichts vorgeschlagen",
  "Search agent not found": "Suchagent nicht gefunden",
- "Claude did not answer: {error}": "Claude hat nicht geantwortet: {error}"
+ "Claude did not answer: {error}": "Claude hat nicht geantwortet: {error}",
+ "Refresh status": "Status aktualisieren",
+ "Read the status of the ads anew from willhaben and Vinted (online, in review, sold); the list updates when it is done": "Den Status der Anzeigen neu von willhaben und Vinted lesen (online, in Prüfung, verkauft); die Liste aktualisiert sich, sobald es fertig ist"
 }
