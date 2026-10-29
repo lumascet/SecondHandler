@@ -58,6 +58,10 @@
     {% endfor %}
     {% for d in drafts %}
     {% set s = st.get(d.status, ('', d.status)) %}
+    {#- published: the ad's state now (refreshed every 10 minutes while it is in review), on both sites #}
+    {%- set ad = live.get(d.wh_ad_id) if live is defined and d.status == 'published' else none %}
+    {%- if ad %}{% set s = ('warn', _('In review')) if ad.status in ('Passiv', 'unknown') else ('ok', _('Online')) if ad.status == 'active'
+                              else ('', {'sold': _('Sold'), 'reserved': _('Reserved'), 'expired': _('Expired')}.get(ad.status, _('Deactivated'))) %}{% endif %}
     <a href="/new-ad/{{ d.id }}" class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-base-300 px-4 py-2.5 text-base-content no-underline hover:bg-hover">
       <span class="min-w-0"><span class="block truncate font-semibold">{{ d.title or (d.input_text[:60] ~ '…') }}</span><span class="block text-[12.5px] text-muted">{{ d.created_at|local }}</span></span>
       {{ ui.pill(s[1], s[0], false) }}

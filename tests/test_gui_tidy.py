@@ -34,3 +34,45 @@ def test_the_agent_card_keeps_its_name_with_many_sites(monkeypatch):
         page = c.get("/agents").text
     assert ">Echo Show 8</a>" in page and "data-agent-sites" in page and 'data-site-mark="vinted"' in page
 
+
+
+async def test_new_ads_in_review_are_looked_at_again_until_online(monkeypatch):
+    """10-29: a new ad stayed "in review" until the daily update."""
+    from datetime import timedelta
+
+    from app.db import MyAd, utcnow
+    from app.services import crosspost, my_ads
+    with session() as db:
+        db.add(MyAd(ad_id="1700", heading="Neu", status="Passiv", published_at=utcnow() - timedelta(minutes=30)))
+        db.add(MyAd(ad_id="1701", heading="Alt", status="Passiv", published_at=utcnow() - timedelta(days=3)))
+        db.commit()
+    assert my_ads.in_review() == ["1700"]                       # an old passive ad is not "in review"
+    reads, synced = [], []
+
+    async def imp(ads=None):
+        reads.append(1)
+        with session() as db:
+            row = db.get(MyAd, "1700")
+            row.status = "active"
+            db.add(row)
+            db.commit()
+    monkeypatch.setattr(my_ads, "import_from_account", imp)
+    monkeypatch.setattr(crosspost, "schedule_sync_many", lambda ids: synced.append(ids) or 0)
+    await my_ads.review_check_job()
+    assert reads == [1] and synced == [["1700"]] and my_ads.in_review() == []
+    await my_ads.review_check_job()
+    assert reads == [1]                                          # nothing waits: no request
+
+
+def test_the_new_ad_page_shows_where_a_published_draft_stands():
+    from fastapi.testclient import TestClient
+
+    from app.db import AdDraft, MyAd
+    from app.main import app
+    with session() as db:
+        db.add(AdDraft(input_text="x", title="Router", status="published", wh_ad_id="1800"))
+        db.add(MyAd(ad_id="1800", heading="Router", status="Passiv"))
+        db.commit()
+    with TestClient(app) as c:
+        page = c.get("/new-ad").text
+    assert "In review" in page

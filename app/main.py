@@ -2520,7 +2520,11 @@ async def new_ad_page(request: Request):
     with session() as db:
         drafts = list(db.exec(select(AdDraft).order_by(col(AdDraft.created_at).desc()).limit(20)))
         batches = list(db.exec(select(AdBatch).order_by(col(AdBatch.created_at).desc()).limit(10)))
-    return render(request, "new_ad.html", drafts=drafts, batches=batches, max_batch=ad_batch.MAX_BATCH_IMAGES)
+        # a published draft's ad as the account list knows it now (online, in review …), not just "published"
+        live = {r.ad_id: r for r in db.exec(select(MyAd).where(col(MyAd.ad_id).in_(
+            [d.wh_ad_id for d in drafts if d.status == "published" and d.wh_ad_id])))}
+    return render(request, "new_ad.html", drafts=drafts, batches=batches, max_batch=ad_batch.MAX_BATCH_IMAGES,
+                  live=live)
 
 
 @app.post("/new-ad")

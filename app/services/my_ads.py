@@ -1068,6 +1068,41 @@ async def _copy_as_new(sess, ad_id: str, plan: dict[str, Any], job: jobs.Job | N
     return str(res["ad_id"])
 
 
+REVIEW_WINDOW = timedelta(hours=24)     # a new ad still in willhaben's review is looked at again within this time
+REVIEW_STATES = ("Passiv", "unknown")   # right after publishing: in review, or not seen in the account list yet
+
+
+def in_review(now: datetime | None = None) -> list[str]:
+    """New ads (published within REVIEW_WINDOW) whose online status is not known yet: still in willhaben's review or
+    not in the account list yet."""
+    since = (now or utcnow()) - REVIEW_WINDOW
+    with session() as db:
+        rows = db.exec(select(MyAd).where(col(MyAd.status).in_(REVIEW_STATES), col(MyAd.replaced_by).is_(None),
+                                          col(MyAd.published_at).is_not(None))).all()
+    return [r.ad_id for r in rows if (r.published_at if r.published_at.tzinfo else
+                                      r.published_at.replace(tzinfo=timezone.utc)) >= since]
+
+
+async def review_check_job() -> None:
+    """Every few minutes while new ads wait for willhaben's review: their online status from the account list (one
+    request), then their Vinted state – instead of "in review" until the daily update (10-29). Nothing while none
+    waits."""
+    waiting = in_review()
+    if not waiting:
+        return
+    try:
+        await import_from_account()
+    except (NotLoggedIn, SessionUnavailable, ValueError) as e:
+        log.info("status of new ads not read: %s", e)
+        return
+    from app.services import crosspost
+    with session() as db:
+        online = [i for i in waiting if (row := db.get(MyAd, i)) is not None and row.status == "active"]
+    if online:
+        log.info("new ads online on willhaben now: %s", ", ".join(online))
+        crosspost.schedule_sync_many(online)
+
+
 def start_update(label: str | None = None) -> jobs.Job:
     """"Update from willhaben" as a background job (an update already waiting in the queue is reused)."""
     return jobs.submit("myads-update", label or t("Update my ads from willhaben"), _run_update, reuse_queued=True)

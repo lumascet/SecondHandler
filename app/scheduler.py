@@ -180,6 +180,9 @@ def start() -> None:
     scheduler.add_job(watch_saved_job, IntervalTrigger(hours=2, jitter=600), id="hits-watch-saved",
                       replace_existing=True, max_instances=1, coalesce=True,   # saved hits: price drops, sold, gone
                       next_run_time=datetime.now().astimezone() + timedelta(minutes=30))
+    from app.services import my_ads as my_ads_svc
+    scheduler.add_job(my_ads_svc.review_check_job, IntervalTrigger(minutes=10, jitter=60), id="new-ads-review",
+                      replace_existing=True, max_instances=1, coalesce=True)   # new ads: online yet?
     from app.services import crosspost
     scheduler.add_job(crosspost.scheduled_sync, IntervalTrigger(hours=1, jitter=300), id="vinted-sync",
                       replace_existing=True, max_instances=1, coalesce=True)   # the ads also on Vinted: in step
