@@ -437,6 +437,7 @@ async def sync(only: list[str] | None = None) -> dict[str, int]:
         # the ads only on Vinted follow their Vinted state on every sync, "Sync now" too (10-28: an item published on
         # Vinted itself still showed as a draft here, and "Publish" was refused); new ones are taken in as well
         counts["new"] = _import_vinted_only(listed, complete)
+        discard_stale_drafts()
         for due in _auto_willhaben_due():          # only on Vinted and online there: onto willhaben too
             counts["to_willhaben"] += enqueue_willhaben(due)
         items = {str(i.get("id")): i for i in listed}
@@ -537,6 +538,23 @@ async def _sync_content(up: vl.Upload, ad_id: str, v: dict[str, Any], wh: tuple[
     _set(ad_id, synced_wh=wh_key, synced_vin=vin_key)
 
 
+def discard_stale_drafts() -> int:
+    """Open listing drafts of a Vinted item that already went onto willhaben through another draft are discarded:
+    publishing one would put it there twice (10-29: five left from pressing "List" again). Returns how many."""
+    from app.db import AdDraft
+    with session() as db:
+        rows = db.exec(select(AdDraft).where(col(AdDraft.vinted_ad).is_not(None))).all()
+        done = {d.vinted_ad for d in rows if d.status == "published"}
+        stale = [d for d in rows if d.vinted_ad in done and d.status in ("draft", "error") and not d.publishing]
+        for d in stale:
+            d.status = "discarded"
+            db.add(d)
+        db.commit()
+    if stale:
+        log.info("discarded %d listing drafts of Vinted items already on willhaben", len(stale))
+    return len(stale)
+
+
 def link_willhaben(vinted_ad: str, wh_ad_id: str) -> None:
     """An ad only on Vinted was published on willhaben from its copy: the Vinted item now belongs to the willhaben
     ad (title, text and price as Vinted has them are the starting point), the Vinted-only row goes."""
@@ -544,7 +562,7 @@ def link_willhaben(vinted_ad: str, wh_ad_id: str) -> None:
         src, dst = db.get(MyAd, vinted_ad), db.get(MyAd, wh_ad_id)
         if src is None or dst is None or not (src.vinted or {}).get("id"):
             return
-        dst.vinted = {k: val for k, val in src.vinted.items() if k != "origin"}
+        dst.vinted = {k: val for k, val in src.vinted.items() if k not in ("origin", "wh_draft", "wh_deleted")}
         dst.image_url = dst.image_url or src.image_url
         db.add(dst)
         db.delete(src)

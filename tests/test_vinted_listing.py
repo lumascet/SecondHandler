@@ -813,3 +813,25 @@ async def test_turning_on_paylivery_for_an_ad_without(monkeypatch):
         return {"handover": "both", "paylivery": True, "size": "S"}
     monkeypatch.setattr(insert, "shipping_of", has)
     assert await crosspost.turn_on_paylivery("1632") == "PayLivery is on already" and len(calls) == 1
+
+
+def test_leftover_drafts_of_an_item_already_on_willhaben_go():
+    """10-29: five drafts left from pressing "List" again; publishing one would have put the item on willhaben twice."""
+    from app.db import AdDraft
+    from app.services import ad_creator
+    from app.willhaben import insert
+    with session() as db:
+        db.add(AdDraft(input_text="x", title="Annke", status="published", wh_ad_id="1632", vinted_ad="vinted-1"))
+        db.add(AdDraft(input_text="x", title="Annke", status="draft", vinted_ad="vinted-1"))
+        db.add(AdDraft(input_text="x", title="Other", status="draft", vinted_ad="vinted-2"))
+        db.commit()
+        left = db.query(AdDraft).filter(AdDraft.status == "draft", AdDraft.vinted_ad == "vinted-1").one()
+    try:
+        ad_creator._publish_inputs(left, 0, {}, None)
+        raise AssertionError("published twice")
+    except insert.InsertError as e:
+        assert "1632" in str(e)
+    assert crosspost.discard_stale_drafts() == 1
+    with session() as db:
+        assert {d.vinted_ad: d.status for d in db.query(AdDraft) if d.status != "published"} == \
+            {"vinted-1": "discarded", "vinted-2": "draft"}

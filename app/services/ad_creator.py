@@ -836,6 +836,13 @@ def _publish_inputs(d: AdDraft, option: int, values: dict[str, str], shipping: d
 
     if d.status == "published":
         raise insert.InsertError("Schon veröffentlicht")
+    if d.vinted_ad:                # one Vinted item, one willhaben ad: another draft of it published already
+        with session() as db:
+            twin = db.exec(select(AdDraft).where(AdDraft.vinted_ad == d.vinted_ad, AdDraft.status == "published",
+                                                 AdDraft.id != d.id)).first()
+        if twin is not None:
+            raise insert.InsertError(f"Dieser Vinted-Artikel ist schon auf willhaben (Anzeige {twin.wh_ad_id}) – "
+                                     "dieser Entwurf würde ihn ein zweites Mal einstellen")
     live = live_on_willhaben(d)
     if live is not None:           # the status was reset by hand, but the ad is online: publishing again would
         raise insert.InsertError(  # re-save and re-activate the live ad (or make a public duplicate)
