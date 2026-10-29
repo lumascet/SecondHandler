@@ -5,15 +5,17 @@
    cards are all on the page; the top one moves with the finger or mouse and flies out past a threshold. #}
 {% block title %}{{ _("Swipe") }} · SecondHandler{% endblock %}
 {% block content %}
-<div class="mx-auto flex w-full max-w-[460px] flex-col gap-4 px-4 pt-5 pb-28 md:pt-[22px]">
-  <div class="flex items-center gap-3">
+{# exactly the screen: the page's own padding (top, and the bottom bar on phones) taken off, the card takes what is
+   left between the title and the buttons (10-29: it was taller than a phone's screen) #}
+<div class="mx-auto flex h-[calc(100dvh-100px-env(safe-area-inset-bottom))] w-full max-w-[460px] flex-col gap-3 md:h-[calc(100dvh-68px)]">
+  <div class="flex shrink-0 items-center gap-3">
     <a href="/hits" class="btn btn-ghost btn-sm -ml-2">{{ ui.icon('back', 16) }}{{ _("Hits") }}</a>
     <h1 class="flex-1 text-lg">{{ _("Swipe") }}{% if agent_id and agents.get(agent_id) %} <span class="text-base font-normal text-muted">· {{ agents[agent_id].name }}</span>{% endif %}</h1>
     <span class="text-[13px] text-muted tabular-nums" data-swipe-left>{{ hits|length }}</span>
   </div>
-  <p class="m-0 text-[13px] text-muted">{{ _("Right: save · left: discard. What you choose teaches the search agent – “Refine with my swipes” in its settings.") }}</p>
+  <p class="m-0 text-[13px] text-muted max-sm:hidden">{{ _("Right: save · left: discard. What you choose teaches the search agent – “Refine with my swipes” in its settings.") }}</p>
 
-  <div class="relative h-[min(68vh,560px)] select-none" data-swipe-stack>
+  <div class="relative min-h-0 flex-1 select-none" data-swipe-stack>
     {% for h in hits|reverse %}
     {% set img = '/hits/' ~ h.id ~ '/image' if h.image_path else h.image_url %}
     <article class="isolate absolute inset-0 flex touch-none flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-lg transition-transform"
@@ -24,7 +26,7 @@
         <span class="pointer-events-none absolute top-4 left-4 rounded-lg border-2 border-success px-2 py-0.5 text-lg font-bold text-success opacity-0" data-swipe-yes>{{ _("Save") }}</span>
         <span class="pointer-events-none absolute top-4 right-4 rounded-lg border-2 border-error px-2 py-0.5 text-lg font-bold text-error opacity-0" data-swipe-no>{{ _("Discard") }}</span>
       </div>
-      <div class="flex flex-col gap-1 px-4 py-3">
+      <div class="flex shrink-0 flex-col gap-1 px-4 py-3">
         <div class="flex items-start justify-between gap-3"><h2 class="line-clamp-2 text-[16px] font-semibold">{{ h.heading }}</h2>
           <span class="shrink-0 text-[17px] font-bold tabular-nums">{{ h.price_display or (h.price|eur) }}</span></div>
         <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted">{{ ui.ship(h, 'text-[12px]') }}{{ ui.condition_pill(h.item_condition, h.item_condition_label, h.platform) }}</div>
@@ -38,7 +40,7 @@
     </div>
   </div>
 
-  <div class="flex items-center justify-center gap-6" data-swipe-buttons>
+  <div class="flex shrink-0 items-center justify-center gap-6" data-swipe-buttons>
     <button type="button" class="btn btn-circle btn-lg border-error text-error" data-swipe-btn="0" aria-label="{{ _('Discard') }}" title="{{ _('Discard') }} (←)">{{ ui.icon('x', 26, 2.5) }}</button>
     <button type="button" class="btn btn-circle btn-lg border-success text-success" data-swipe-btn="1" aria-label="{{ _('Save') }}" title="{{ _('Save') }} (→)">{{ ui.icon('heart', 24, 2.5) }}</button>
   </div>
