@@ -26,5 +26,10 @@
  "This browser does not support notifications.": "Dieser Browser unterstützt keine Benachrichtigungen.",
  "Show new hits as notifications": "Neue Treffer als Benachrichtigung zeigen",
  "The browser blocks notifications for this site: allow them in the site settings (the lock next to the address), then switch on again.": "Der Browser blockiert Benachrichtigungen dieser Seite: in den Website-Einstellungen (Schloss neben der Adresse) erlauben, dann wieder einschalten.",
- "Send a test notification": "Test-Benachrichtigung senden"
+ "Send a test notification": "Test-Benachrichtigung senden",
+ "Kept in the app": "In der App gemerkt",
+ "Ignored in the app": "In der App ignoriert",
+ "Sent in the app": "In der App gesendet",
+ "Marked as sent in the app": "In der App als gesendet markiert",
+ "Discarded in the app": "In der App verworfen"
 }

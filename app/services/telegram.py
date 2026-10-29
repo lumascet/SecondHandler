@@ -408,6 +408,54 @@ async def progress(tag: str, line: str) -> None:
         log.info("telegram progress failed: %s", e)
 
 
+async def settle(tag: str, line: str, url: str | None = None) -> bool:
+    """The matter of a tagged message was handled in the app (dashboard or Mini App): the message says so in a last
+    line ("✅ Sent in the app") and its buttons go – only "Open" stays when `url` is given – as if it had been tapped
+    here (10-29: they stayed, and a later tap only said "Already done"). Nothing when there is no such message or
+    it says so already. True when it was edited."""
+    prev = _message_for(tag) if active() else None
+    if prev is None:
+        return False
+    text = prev.text or ""
+    if line in text:
+        return False
+    markup = {"inline_keyboard": [[open_button("🔗 " + t("Open"), url)]]} if url and url.startswith("https://") \
+        else {"inline_keyboard": []}
+    try:
+        if text:
+            new = f"{text}\n\n<b>{_esc(line)}</b>"
+            await _edit(prev, new, markup)
+            with session() as db:
+                row = db.get(TelegramMessage, tag)
+                if row is not None:
+                    row.text = new
+                    db.add(row)
+                    db.commit()
+        else:
+            await api("editMessageReplyMarkup", chat_id=prev.chat_id, message_id=prev.message_id, reply_markup=markup)
+    except (TelegramError, httpx.HTTPError) as e:
+        if "not modified" not in str(e):
+            log.info("telegram settle failed: %s", e)
+        return False
+    return True
+
+
+_settle_tasks: set[asyncio.Task] = set()
+
+
+def settle_later(tags: list[str], line: str, url: str | None = None) -> None:
+    """settle() for each tag without waiting for Telegram (from a page's request)."""
+    async def run() -> None:
+        for tag in tags:
+            await settle(tag, line, url)
+    try:
+        task = asyncio.get_running_loop().create_task(run())
+    except RuntimeError:                  # no loop (a sync caller in tests)
+        return
+    _settle_tasks.add(task)
+    task.add_done_callback(_settle_tasks.discard)
+
+
 def retag(old: str, new: str) -> bool:
     """The message sent for `old` is now the one for `new` (a chat message becomes its draft offer)."""
     if old == new:

@@ -1221,6 +1221,26 @@ async def hit_ad_detail(request: Request, ad_id: str, hit: int | None = None):
     return await ad_fragment(request, platforms.get("willhaben"), ad_id, hit)
 
 
+def _settle_hits(hits: list[Hit], state: str) -> None:
+    """A hit kept or ignored here: its Telegram message says so and loses Keep / Ignore (services/telegram.settle)."""
+    from app.services import telegram
+    line = {"saved": "⭐ " + t("Kept in the app"), "ignored": "🚫 " + t("Ignored in the app")}.get(state)
+    if not line:
+        return
+    for h in hits[:50]:
+        telegram.settle_later([search_agents_svc.hit_tag(h)], line, h.url)
+
+
+def _settle_draft(d: Draft | None, line: str) -> None:
+    """A draft sent or discarded here: its Telegram message (the draft offer, or the chat's message it took over)
+    says so and loses Send / Revise / Discard."""
+    from app.services import ha_actions, telegram
+    if d is None:
+        return
+    url = f"{get_settings().public_url.rstrip('/')}/chats/{d.conversation_id}"
+    telegram.settle_later([ha_actions.tag_for(d.id), chats.message_tag(d.conversation_id)], line, url)
+
+
 @app.post("/hits/{hit_id}/state", response_class=HTMLResponse)
 async def hit_state(request: Request, hit_id: int, state: str = Form(...)):
     with session() as db:
@@ -1232,6 +1252,7 @@ async def hit_state(request: Request, hit_id: int, state: str = Form(...)):
     if state in ("saved", "ignored"):     # the owner's taste, kept after the hit is cleared (services/taste.py)
         from app.services import taste
         taste.record(h, state == "saved")
+        _settle_hits([h], state)
     if state != "new":                   # handled: its push goes off the phone
         search_agents_svc.pushes_seen([h])
     if state == "saved":                # its photos, before the site drops them (sold, deleted)
@@ -1268,6 +1289,7 @@ async def hit_vote(hit_id: int, liked: str = Form(...)):
         db.commit()
         db.refresh(h)
     taste.record(h, like)
+    _settle_hits([h], h.state)
     search_agents_svc.pushes_seen([h])
     if like:
         search_agents_svc.keep_image_later(hit_id, search_agents_svc.shown_photos(hit_id))
@@ -1399,10 +1421,12 @@ async def hits_bulk(request: Request):
         search_agents_svc.clear_hits(search_agents_svc.EXPIRING, ids=ids)
     elif ids and action in ("saved", "seen", "ignored"):
         with session() as db:
-            for h in db.exec(select(Hit).where(col(Hit.id).in_(ids), Hit.state != search_agents_svc.CLEARED)):
+            done = list(db.exec(select(Hit).where(col(Hit.id).in_(ids), Hit.state != search_agents_svc.CLEARED)))
+            for h in done:
                 h.state = action
                 db.add(h)
             db.commit()
+        _settle_hits(done, action)
     return back(view.url())
 
 
@@ -1906,6 +1930,7 @@ async def draft_send(draft_id: int, text: str = Form(...), paylivery_step: str =
     # with a PayLivery step the answer goes out at once: the step cannot be taken back, so neither can the answer
     if not chats.enqueue_send(draft_id, text, now=now == "1" or bool(step)):
         return back(f"/chats/{d.conversation_id}?msg={quote(t('Not sent: the draft is not open any more or empty'), safe='')}")
+    _settle_draft(d, "✅ " + t("Sent in the app"))
     if step:
         try:
             await pl.start_action(d.conversation_id, step, pl_amount)
@@ -1928,6 +1953,7 @@ async def draft_revise(draft_id: int, instruction: str = Form("")):
 @app.post("/drafts/{draft_id}/mark-sent")
 async def draft_mark_sent(draft_id: int, text: str = Form("")):
     d = chats.mark_sent(draft_id, text or None)
+    _settle_draft(d, "✅ " + t("Marked as sent in the app"))
     return back(f"/chats/{d.conversation_id}")
 
 
@@ -1936,6 +1962,7 @@ async def draft_discard(draft_id: int):
     with session() as db:
         d = db.get(Draft, draft_id)
     chats.discard_draft(draft_id, by_owner=True)
+    _settle_draft(d, "🗑 " + t("Discarded in the app"))
     return back(f"/chats/{d.conversation_id}")
 
 
