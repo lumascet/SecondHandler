@@ -612,3 +612,16 @@ async def test_a_refused_live_stream_is_reloaded_once_then_left_alone(monkeypatc
     assert page.closed and page.reloads == 1 and vi.live["state"] == "refused" and vi.live["retry_at"]
     await vi._on_live(_json.dumps({"_state": "open", "status": 200}))
     assert vi.live["refused"] == 0 and vi.live["renewals"] == 0 and vi.live["state"] == "connected"
+
+
+def test_offers_in_a_vinted_chat_are_read_with_their_amounts():
+    """10-29: the owner's counter-offer was dropped (no title), the buyer's offer lacked its amount and status."""
+    from app.platforms import vinted_inbox as vi
+    ask = {"message_type": "legacy_offer_request", "data": {"entity_type": "offer_request_message", "entity": {
+        "title": "kaeufer_42 hat dir ein neues Angebot gemacht:", "price_label": "30,00 €",
+        "original_price_label": "40,00 €", "status_title": "Abgelehnt"}}}
+    sent = {"message_type": "legacy_offer", "data": {"entity_type": "offer_message", "entity": {
+        "price": {"amount": "35.0"}, "price_label": "35,00 €", "original_price_label": "40,00 €"}}}
+    assert vi.message_text(ask) == ("kaeufer_42 hat dir ein neues Angebot gemacht: 30,00 € (was 40,00 €) · Abgelehnt",
+                                    "integration")
+    assert vi.message_text(sent) == ("Offer: 35,00 € (was 40,00 €)", "integration")

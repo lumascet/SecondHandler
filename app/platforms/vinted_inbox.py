@@ -155,6 +155,9 @@ def message_text(m: dict[str, Any]) -> tuple[str, str | None]:
         # body (10-27 "Paket wurde versendet" for an Italian seller): the original, where it gives one, wins
         text = _original(e) or _original(d) or e.get("body") or d.get("content") or d.get("body") or ""
         return (text.strip() if isinstance(text, str) else ""), None
+    if d.get("entity_type") in ("offer_request_message", "offer_message") \
+            or m.get("message_type") in ("legacy_offer_request", "legacy_offer"):
+        return offer_text(e), "integration"
     if m.get("message_type") == "legacy_action" or "entity" in d:
         text = " – ".join(x for x in (e.get("title"), e.get("subtitle")) if x) or str(d.get("event_type") or "")
         return text, "integration"
@@ -162,6 +165,24 @@ def message_text(m: dict[str, Any]) -> tuple[str, str | None]:
         if isinstance(d.get(key), str) and d[key].strip():
             return d[key].strip(), None
     return "", None
+
+
+def offer_text(e: dict[str, Any]) -> str:
+    """An offer in a Vinted chat as one line (10-29: the owner's counter-offer had no title and was dropped, the
+    buyer's showed only "… hat dir ein neues Angebot gemacht:" without the amount):
+      offer_request_message {title, price_label, original_price_label, status_title}  – the other side asks
+      offer_message         {price_label, original_price_label}                          – an offer sent"""
+    from app.i18n import t
+    price = e.get("price_label") or (f"{(e.get('price') or {}).get('amount')} €" if (e.get("price") or {}).get("amount")
+                                     else "")
+    orig = e.get("original_price_label")
+    head = (e.get("title") or "").strip().rstrip(":") or t("Offer")
+    line = f"{head}: {price}".strip().rstrip(":")
+    if orig and orig != price:
+        line += " " + t("(was {price})", price=orig)
+    if e.get("status_title"):
+        line += f" · {e['status_title']}"
+    return line
 
 
 _ORIGINAL_KEYS = ("original_body", "body_original", "original_text", "original_content", "untranslated_body",
