@@ -97,7 +97,6 @@ class BrowserSession:
         self.working_pages: set[Any] = set()   # pages other parts keep open (Vinted's live tab): never parked or closed
         self._ui_holds = 0
         # live chat: own page holding the chat WebSocket (see start_chat_listener)
-        self.chat_page = None
         self._creating_internal = False
         self._chat_cb = None
         self.chat_live: dict[str, Any] = {"state": "off", "since": None, "last_frame": None, "events": 0}
@@ -340,85 +339,6 @@ class BrowserSession:
                              duration_ms=int((time.monotonic() - started) * 1000))
         return ApiResponse(status=res["status"], text=res["text"], url=res["url"])
 
-    async def ws_send(self, url: str, frames: list[dict[str, Any]], settle_ms: int = 1500) -> dict[str, Any]:
-        """Open a WebSocket from the logged-in page, send frames that get no answer (e.g. read receipts), close.
-
-        Frames go out with small random gaps, roughly like messages scrolling into view one after another.
-        """
-        if replay.enabled() and (rec := replay.find("WS", url, frames)):
-            replay.note(rec, "chat")
-            return replay.as_ws_result(rec)
-        self._require()
-        async with self.limiter:
-            await self._ensure_parked()
-            with access_log.track("chat", "chat") as tr:
-                started = time.monotonic()
-                res = await self.api_page.evaluate(
-                    """({url, frames, settle}) => new Promise((resolve) => {
-                        let sent = 0, done = false;
-                        const ws = new WebSocket(url);
-                        const finish = (status) => { if (done) return; done = true; clearTimeout(t);
-                                                     try { ws.close(); } catch (e) {} resolve({status, sent}); };
-                        const t = setTimeout(() => finish('timeout'), 15000 + frames.length * 1000);
-                        ws.onopen = async () => {
-                            for (const f of frames) {
-                                ws.send(JSON.stringify(f)); sent++;
-                                await new Promise(r => setTimeout(r, 250 + Math.random() * 650));
-                            }
-                            setTimeout(() => finish('ok'), settle);
-                        };
-                        ws.onerror = () => finish('ws_error');
-                        ws.onclose = () => finish(sent === frames.length ? 'ok' : 'closed');
-                    })""",
-                    {"url": url, "frames": frames, "settle": settle_ms},
-                )
-                tr.outcome = access_log.ws_outcome(res.get("status") if isinstance(res, dict) else None)
-        recorder.record_ws("chat", url, frames, res, outcome=tr.outcome, duration_ms=int((time.monotonic() - started) * 1000))
-        return res
-
-    async def ws_request(self, url: str, frame: dict[str, Any], request_id: str | None, *, req_type: str,
-                         timeout_ms: int = 20000) -> dict[str, Any]:
-        """Open a WebSocket from the logged-in page, send one frame, return the server's answer to it.
-
-        The browser attaches the willhaben cookies itself (same site), exactly like the chat web app.
-        Resolves with the first frame carrying our request_id and a final status (success/error),
-        or {"status": "timeout"|"ws_error"|"closed"} otherwise.
-        """
-        if replay.enabled() and (rec := replay.find("WS", url, frame)):
-            replay.note(rec, "send" if req_type == "send_message" else "chat")
-            return replay.as_ws_result(rec)
-        self._require()
-        async with self.limiter:
-            await self._ensure_parked()
-            with access_log.track("chat", "send" if req_type == "send_message" else "chat") as tr:
-                started = time.monotonic()
-                res = await self.api_page.evaluate(
-                    """({url, frame, rid, reqType, timeout}) => new Promise((resolve) => {
-                        let done = false, acked = false;
-                        const ws = new WebSocket(url);
-                        const finish = (r) => { if (done) return; done = true; clearTimeout(t);
-                                                try { ws.close(); } catch (e) {} resolve({...r, acked}); };
-                        const t = setTimeout(() => finish({status: 'timeout'}), timeout);
-                        ws.onopen = () => ws.send(JSON.stringify(frame));
-                        ws.onmessage = (e) => {
-                            let m; try { m = JSON.parse(e.data); } catch (_) { return; }
-                            if ((rid !== null && m.request_id !== rid) || m.req_type !== reqType) return;
-                            if (m.status === 'ack') { acked = true; return; }
-                            finish(m);
-                        };
-                        ws.onerror = () => finish({status: 'ws_error'});
-                        ws.onclose = (e) => finish({status: 'closed', code: e.code});
-                    })""",
-                    {"url": url, "frame": frame, "rid": request_id, "reqType": req_type, "timeout": timeout_ms},
-                )
-                status = res.get("status") if isinstance(res, dict) else None
-                # acked but no final frame: the caller treats it as a likely success (checks the history)
-                tr.outcome = "ok" if isinstance(res, dict) and res.get("acked") and status in ("timeout", "closed") \
-                    else access_log.ws_outcome(status)
-        recorder.record_ws("send" if req_type == "send_message" else "chat", url, frame, res, outcome=tr.outcome,
-                           duration_ms=int((time.monotonic() - started) * 1000))
-        return res
-
     async def api_json(self, method: str, path: str, body: Any = None) -> Any:
         r = await self.api(method, path, body)
         # a refused browser request may come back after a silent SSO re-login; the app API renews its own token
@@ -505,7 +425,7 @@ class BrowserSession:
 
         if not self.context:
             return "no browser"
-        role = {id(self.api_page): "api", id(self.chat_page): "chat", id(self.home_page): "home"}
+        role = {id(self.api_page): "api", id(self.home_page): "home"}
         role.update({id(p): "working" for p in self.working_pages})
         role.update({id(p): f"site:{k}" for k, p in self.site_pages.items()})
         parts = []
@@ -525,9 +445,9 @@ class BrowserSession:
         """The remote view unused for idle_s: every page it shows goes to about:blank – the visible one, and the
         willhaben window and the Kleinanzeigen and Vinted tabs behind it (once a site's tab had been shown, the
         willhaben home page behind it kept its ads and their processes: 1.2 GB of renderers, 10-26). The working
-        pages (api_page, chat_page) stay; logins live in the cookies. True if one was parked."""
+        page (api_page) stays; logins live in the cookies. True if one was parked."""
         pages = [p for p in dict.fromkeys([self.ui_page, self.home_page, *self.site_pages.values()])
-                 if p is not None and not p.is_closed() and p is not self.api_page and p is not self.chat_page
+                 if p is not None and not p.is_closed() and p is not self.api_page
                  and p.url not in ("about:blank", "")]
         if not pages or self._ui_holds or self.capturing or time.monotonic() - self._ui_used_at < idle_s:
             return False
@@ -539,7 +459,7 @@ class BrowserSession:
                 await page.goto("about:blank")
         # tabs no part of the app holds (a popup, a link opened in the remote view): closed; working pages other parts
         # registered (Vinted's live tab: closing it ended the live connection, 10-27) stay
-        known = {self.ui_page, self.home_page, self.api_page, self.chat_page, *self.site_pages.values(),
+        known = {self.ui_page, self.home_page, self.api_page, *self.site_pages.values(),
                  *self.working_pages}
         stray = [p for p in (self.context.pages if self.context else []) if p not in known and not p.is_closed()]
         for page in stray:
@@ -781,54 +701,23 @@ class BrowserSession:
         page.on("close", self._on_page_closed)
 
     # ---------------------------------------------------------------- live chat (no polling)
-    _CHAT_JS = """(url) => {
-        if (window.__whLive) return 'already';
-        window.__whLive = true;
-        let delay = 2000, ws = null, ping = null;
-        const connect = () => {
-            ws = new WebSocket(url);
-            ws.onopen = () => { delay = 2000; window.__whChat(JSON.stringify({_state: 'open'}));
-                                (window.__whTracked || []).forEach(window.__whTrack);    // presence again after a reconnect
-                                ping = setInterval(() => { try { ws.send(JSON.stringify({req_type: 'ping'})); } catch (e) {} }, 10000); };
-            ws.onmessage = (e) => window.__whChat(typeof e.data === 'string' ? e.data : '{}');
-            ws.onclose = (e) => { clearInterval(ping); window.__whChat(JSON.stringify({_state: 'closed', code: e.code}));
-                                  setTimeout(connect, delay); delay = Math.min(delay * 2, 60000); };
-            ws.onerror = () => {};
-        };
-        // the other person's online state, as the chat web app asks for it: answered by "update_presence" frames
-        window.__whTrack = (uuid) => {
-            window.__whTracked = window.__whTracked || [];
-            if (!window.__whTracked.includes(uuid)) window.__whTracked.push(uuid);
-            try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({request_id: crypto.randomUUID(),
-                req_type: 'track_presence', payload: {partner_user_uuid: uuid}})); } catch (e) {}
-        };
-        connect();
-        return 'started';
-    }"""
+    LIVE_URL = "wss://chat-realtime-apps.willhaben.at/v1/ws/"     # the app's chat socket (recordings name it)
 
     async def start_chat_listener(self, on_event) -> None:
-        """Keep the chat WebSocket open in a page of the logged-in browser (like the web app does).
+        """Keep willhaben's app chat socket open (native.LiveChat, logged in with the app API; no browser).
 
-        on_event(conversation_id, frame) is awaited for every pushed frame that names a conversation.
-        Pings every 10 s keep the connection alive; the browser reconnects with backoff on its own.
-        """
-        self._require()
+        on_event(conversation_id, frame) is awaited for every pushed frame that names a conversation. Pings every 10 s
+        keep the connection alive; it reconnects with backoff on its own. Without the app API's login the live chat
+        stays off (the chat sync still polls)."""
         self._chat_cb = on_event
-        if await self._open_native_chat():
-            return
-        await self._open_chat_page()
+        await self._open_native_chat()
 
     async def _open_native_chat(self) -> bool:
-        """The live chat through willhaben's app socket (willhaben/native.py LiveChat) when the app API is logged in
-        and its socket has not refused the login; the browser's chat page otherwise."""
         c = native.active()
-        if c is None or (self.native_chat is not None and self.native_chat.refused):
+        if c is None:
+            self.chat_live.update(state=t("off – not logged in to the app interface"), since=utcnow())
             return False
-        if self.chat_page is not None and not self.chat_page.is_closed():
-            with suppress(Exception):
-                await self.chat_page.close()
-            self.chat_page = None
-        if self.native_chat is None:
+        if self.native_chat is None or self.native_chat.c is not c:
             self.native_chat = native.LiveChat(c, self._on_chat_frame)
         self.native_chat.start()
         self.chat_live.update(state="connecting", since=utcnow(), via="app")
@@ -837,33 +726,9 @@ class BrowserSession:
     async def track_presence(self, user_uuid: str) -> bool:
         """Ask the live socket for this person's online state (and again after every reconnect); the answer comes as
         an update_presence frame into self.presence. False when the live chat is not running."""
-        if user_uuid and self.native_chat is not None and self.native_chat.task and not self.native_chat.refused:
-            return await self.native_chat.track(user_uuid)
-        if not user_uuid or self.chat_page is None or self.chat_page.is_closed():
+        if not user_uuid or self.native_chat is None or not self.native_chat.task or self.native_chat.refused:
             return False
-        try:
-            await self.chat_page.evaluate("(u) => window.__whTrack && window.__whTrack(u)", user_uuid)
-        except Exception as e:  # noqa: BLE001 - the online state is a nicety
-            log.info("presence request failed: %s", e)
-            return False
-        return True
-
-    async def _open_chat_page(self) -> None:
-        from app.willhaben.account import CHAT_WS
-
-        if self.chat_page is not None and not self.chat_page.is_closed():
-            await self.chat_page.close()
-        ui = self.ui_page
-        self._creating_internal = True
-        try:
-            self.chat_page = await self.context.new_page()
-        finally:
-            self._creating_internal = False
-            self.ui_page = ui
-        await self.chat_page.expose_function("__whChat", self._on_chat_frame)
-        await self._goto(self.chat_page, PARK_URL, wait_until="domcontentloaded")
-        await self.chat_page.evaluate(self._CHAT_JS, CHAT_WS)
-        self.chat_live.update(state="connecting", since=utcnow())
+        return await self.native_chat.track(user_uuid)
 
     async def _on_chat_frame(self, raw: str) -> None:
         try:
@@ -882,9 +747,6 @@ class BrowserSession:
             if state != self.chat_live["state"]:
                 log.info("live chat: %s", state)
                 self.chat_live.update(state=state, since=now)
-            if self.native_chat is not None and self.native_chat.refused and self.chat_page is None and self.started:
-                self.chat_live["via"] = "browser"
-                asyncio.create_task(self._open_chat_page())     # the app socket refused the login: the browser's page
             return
         if msg.get("req_type") == "ping":
             return
@@ -894,15 +756,14 @@ class BrowserSession:
                 self.presence[str(p["user_uuid"])] = {"online": bool(p.get("online")), "last_seen": p.get("last_seen"),
                                                       "at": now}
             return
-        from app.willhaben.account import CHAT_WS
-        recorder.record_push(CHAT_WS, msg)     # kept for the timeline and replay; pings and socket states are not
+        recorder.record_push(self.LIVE_URL, msg)     # kept for the timeline and replay; pings and socket states are not
         payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
         cid = msg.get("conversation_id") or payload.get("conversation_id")
         if cid and self._chat_cb:
             self.chat_live["events"] += 1
             try:
                 await self._chat_cb(str(cid), msg)
-            except Exception:  # noqa: BLE001 - never break the page's callback
+            except Exception:  # noqa: BLE001 - never break the socket's callback
                 log.exception("live chat callback failed")
 
     def chat_live_ok(self) -> bool:
@@ -910,10 +771,10 @@ class BrowserSession:
         return self.chat_live["state"] == "connected" and last is not None and (utcnow() - last).total_seconds() < 60
 
     async def chat_watchdog(self) -> None:
-        """Re-open the chat page when it went silent (page crash, browser restart, long network outage)."""
+        """Re-open the chat socket when it went silent (long network outage, a new app login)."""
         while True:
             await asyncio.sleep(60)
-            if not self.started or self._chat_cb is None:
+            if self._chat_cb is None:
                 continue
             last = self.chat_live.get("last_frame") or self.chat_live.get("since")
             if last is None or (utcnow() - last).total_seconds() > 90:
@@ -921,8 +782,7 @@ class BrowserSession:
                 try:
                     if self.native_chat is not None:
                         await self.native_chat.stop()
-                    if not await self._open_native_chat():
-                        await self._open_chat_page()
+                    await self._open_native_chat()
                 except Exception as e:  # noqa: BLE001
                     self.chat_live.update(state=t("Error: {error}", error=e), since=utcnow())
 
@@ -932,8 +792,7 @@ class BrowserSession:
             self.ui_page = self.home_page
             return
         if page is self.ui_page and self.context:
-            rest = [p for p in self.context.pages
-                    if p is not self.api_page and p is not self.chat_page and not p.is_closed()]
+            rest = [p for p in self.context.pages if p is not self.api_page and not p.is_closed()]
             if rest:
                 self.ui_page = rest[-1]
 

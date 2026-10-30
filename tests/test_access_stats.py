@@ -224,9 +224,6 @@ async def test_browser_session_records(monkeypatch):
         {"status": 200, "text": "<html>", "url": "x"},                 # my adverts page
         {"status": 429, "text": "", "url": "x"},                       # throttled
         {"status": 201, "text": "{}", "url": "x"},                     # upload
-        {"status": "success", "acked": True},                          # ws send_message
-        {"status": "ok", "sent": 2},                                   # read receipts
-        {"status": "timeout", "acked": False},                         # ping
         RuntimeError("page crashed"),
     ])
     monkeypatch.setattr(s.limiter, "penalize", lambda: 0.0)
@@ -235,11 +232,6 @@ async def test_browser_session_records(monkeypatch):
     with pytest.raises(Blocked):
         await s.api("PUT", f"/webapi/iad/bap/sold/{AD}")
     await s.upload("/webapi/iad-upload/atimage/temp", "file", "foto1.jpg", b"x", "image/jpeg")
-    await s.ws_request("wss://chat-realtime-web.willhaben.at/webapi/chat-ws/v1/ws/", {"req_type": "send_message"},
-                       "rid", req_type="send_message")
-    await s.ws_send("wss://chat-realtime-web.willhaben.at/webapi/chat-ws/v1/ws/", [{"req_type": "x"}] * 2)
-    await s.ws_request("wss://chat-realtime-web.willhaben.at/webapi/chat-ws/v1/ws/", {"req_type": "ping"}, None,
-                       req_type="ping")
     with pytest.raises(RuntimeError):
         await s.api("GET", "/webapi/userprofile-service/userprofile/me")
     s.api_page.url = "about:blank"                                      # next call parks the page first
@@ -248,19 +240,9 @@ async def test_browser_session_records(monkeypatch):
     await s.open_login()
     assert _counts() == {
         ("account", "chat", "ok"): 1, ("account", "myads", "ok"): 1, ("account", "myads", "blocked"): 1,
-        ("account", "upload", "ok"): 1, ("chat", "send", "ok"): 1, ("chat", "chat", "ok"): 1,
-        ("chat", "chat", "error"): 1, ("account", "login", "error"): 1, ("account", "login", "ok"): 2,
+        ("account", "upload", "ok"): 1, ("account", "login", "error"): 1, ("account", "login", "ok"): 2,
         ("account", "navigation", "ok"): 1,
     }
-
-
-async def test_acked_send_without_final_frame_is_ok():
-    s = _session([{"status": "timeout", "acked": True}, {"status": "closed", "acked": True},
-                  {"status": "timeout", "acked": False}])
-    for _ in range(3):
-        await s.ws_request("wss://chat-realtime-web.willhaben.at/webapi/chat-ws/v1/ws/", {"req_type": "send_message"},
-                           "rid", req_type="send_message")
-    assert _counts() == {("chat", "send", "ok"): 2, ("chat", "send", "error"): 1}
 
 
 async def test_remote_back_and_reload_are_counted():

@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.i18n import t
+from app.willhaben import native
 from app.willhaben.parse import BASE, _iso, _ms, attrs, extract_next_data
 from app.willhaben.session import BrowserSession, NotLoggedIn
 
@@ -28,7 +29,6 @@ log = logging.getLogger(__name__)
 
 CHAT = "/webapi/chat-api/v1"
 MYADVERTS_PAGE = "/iad/myprofile/myadverts"
-CHAT_WS = "wss://chat-realtime-web.willhaben.at/webapi/chat-ws/v1/ws/"
 CONFIRM_WAIT_S = 1.5   # a sent message is looked up in the history after 1×, 2×, 3× this
 SEND_REQUEST_CHAT = "/webapi/iad-messaging/sendrequest/chat"   # the ad page's contact form, opens the chat
 MESSAGE_CANDIDATES = [
@@ -339,33 +339,35 @@ class AccountClient:
         ))
 
     async def mark_read(self, conversation_id: str, msgs: list[ChatMessage] | None = None) -> int:
-        """Send read receipts for unread incoming messages, like the web app does when they scroll into view.
-
-        Through the app API (logged in there): one PUT that marks the conversation read, as willhaben's app does
-        (ChatApiMarkConversationRead, from the APK 8.67.0). Else the web app's frames (bundle 2026-10-09):
-        {req_type: "mark_message_as_read", payload: {conversation_id, message_id}}, no request_id, fire-and-forget.
-        Returns how many were marked.
-        """
-        from app.willhaben import native
-
+        """Mark the unread incoming messages read, as willhaben's app does: one PUT that marks the conversation read
+        (ChatApiMarkConversationRead, APK 8.67.0). Returns how many were unread; 0 when it did not go through (the
+        next read tries again)."""
         if msgs is None:
             msgs = await self.messages(conversation_id)
         unread = [m for m in msgs if m.direction == "in" and m.read is False]
         if not unread:
             return 0
-        if (c := native.active()) and (link := c.link("ChatApiMarkConversationRead")):
-            try:
-                r = await c.request("PUT", link.replace("$conversation_id", conversation_id), kind="chat")
-            except native.NativeError as e:          # marking read twice does no harm: the browser tries
-                log.info("read receipt through the app API failed: %s", e)
-            else:
-                if r.ok:
-                    return len(unread)
-                log.info("read receipt through the app API: HTTP %s, the browser sends it", r.status)
-        frames = [{"payload": {"conversation_id": conversation_id, "message_id": m.ext_id},
-                   "req_type": "mark_message_as_read"} for m in unread]
-        await self.s.ws_send(CHAT_WS, frames)
+        c, _base = self._app("ChatApiMarkConversationRead")
+        try:
+            r = await c.request("PUT", _base.replace("$conversation_id", conversation_id), kind="chat")
+        except native.NativeError as e:
+            log.info("read receipt for %s failed: %s", conversation_id, e)
+            return 0
+        if not r.ok:
+            log.info("read receipt for %s: HTTP %s", conversation_id, r.status)
+            return 0
         return len(unread)
+
+    def _app(self, link_id: str) -> tuple[native.NativeClient, str]:
+        """The logged-in app API and one of its links, or NotLoggedIn: the chat goes only through willhaben's app
+        interface (the browser no longer sends messages)."""
+        c = native.active()
+        link = c.link(link_id) if c else None
+        if c is None or not link:
+            if c is None:
+                self.s.logged_in = False
+            raise NotLoggedIn(t("Not logged in to willhaben's app interface – log in under Settings → willhaben"))
+        return c, link
 
     async def delete_conversations(self, ids: list[str]) -> None:
         """Delete conversations on willhaben for good, as the chat web app's "delete" does (recorded 2026-10-25):
@@ -375,50 +377,36 @@ class AccountClient:
             raise SendFailed(t("willhaben did not delete the chat (HTTP {status})", status=r.status))
 
     async def ping_chat(self) -> dict[str, Any]:
-        """Health check of the chat WebSocket (the web app's own ping); sends no message."""
-        return await self.s.ws_request(CHAT_WS, {"req_type": "ping"}, None, req_type="ping", timeout_ms=10000)
+        """Health check of the chat (Settings → Chats): the unread counter through the app API; sends no message."""
+        try:
+            await self.unread_count()
+        except NotLoggedIn:
+            raise
+        except Exception as e:  # noqa: BLE001 - the answer says what went wrong
+            return {"status": "error", "code": str(e)[:120]}
+        return {"status": "success"}
 
     async def send_message(self, conversation_id: str, text: str) -> str:
-        """Send a text message; a send only counts once willhaben shows it in the history. Returns its message_id.
-
-        Through the app API when it is logged in there: POST <ChatApiSendMessage><conversation id> with
-        {client_message_id, text, createdAt}, as willhaben's app sends it (APK 8.67.0). When the app API surely did not
-        take it (refused, no such endpoint), the browser sends it; after a server error or a broken connection it may
-        have, so the history decides and nothing is sent a second time.
-
-        Else the way the chat web app does (WebSocket `send_message`, from its bundle 2026-10-09).
-        """
-        from app.willhaben import native
-
+        """Send a text message as willhaben's app does: POST <ChatApiSendMessage><conversation id> with
+        {client_message_id, text, createdAt} (APK 8.67.0). It counts only once willhaben shows it in the history.
+        A refusal willhaben explains (4xx) means nothing went out; after a server error or a broken connection it may
+        have, so the history decides and nothing is sent a second time. Returns willhaben's message_id."""
         text = text.strip()
         if not text:
             raise ValueError(t("Empty message"))
+        c, base = self._app("ChatApiSendMessage")
         client_id = str(uuid.uuid4())
-        if (c := native.active()) and (base := c.link("ChatApiSendMessage")):
-            body = {"client_message_id": client_id, "text": text,
-                    "createdAt": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")}
-            try:
-                r = await c.request("POST", base.rstrip("/") + "/" + conversation_id, body, kind="send")
-            except native.NativeError as e:
-                return await self._confirm(conversation_id, client_id, text, t("connection broke ({error})", error=e))
-            if not native.falls_back(r.status, "POST"):
-                if r.ok:
-                    return await self._confirm(conversation_id, client_id, text, f"HTTP {r.status}")
-                if r.status < 500:                     # a 4xx it explained: nothing went out
-                    raise SendFailed(t("willhaben rejected the message: {detail}", detail=f"HTTP {r.status} {r.text[:200]}"))
-                return await self._confirm(conversation_id, client_id, text, f"HTTP {r.status}")
-            log.info("message through the app API: HTTP %s, the browser sends it", r.status)
-        request_id = str(uuid.uuid4())
-        frame = {"payload": {"conversation_id": conversation_id, "client_message_id": client_id,
-                             "text": text, "type": "text"},
-                 "req_type": "send_message", "request_id": request_id}
-        res = await self.s.ws_request(CHAT_WS, frame, request_id, req_type="send_message")
-        if res.get("status") == "error":
-            raise SendFailed(t("willhaben rejected the message: {detail}", detail=res.get('response') or res.get('error') or res))
-        if res.get("status") in ("ws_error", "closed") and not res.get("acked"):
-            raise SendFailed(t("Chat connection failed ({status})", status=f"{res.get('status')} {res.get('code') or ''}".strip()))
-        # success, or only an ack before the timeout: the history decides
-        return await self._confirm(conversation_id, client_id, text, str(res.get("status")))
+        body = {"client_message_id": client_id, "text": text,
+                "createdAt": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")}
+        try:
+            r = await c.request("POST", base.rstrip("/") + "/" + conversation_id, body, kind="send")
+        except native.NativeError as e:
+            return await self._confirm(conversation_id, client_id, text, t("connection broke ({error})", error=e))
+        if r.ok or r.status >= 500:
+            return await self._confirm(conversation_id, client_id, text, f"HTTP {r.status}")
+        if r.status in (401, 403):
+            raise NotLoggedIn(t("Not logged in to willhaben's app interface – log in under Settings → willhaben"))
+        raise SendFailed(t("willhaben rejected the message: {detail}", detail=f"HTTP {r.status} {r.text[:200]}"))
 
     async def _confirm(self, conversation_id: str, client_id: str, text: str, status: str) -> str:
         """The message's id once the history shows it (by our client_message_id, or as our newest text), else

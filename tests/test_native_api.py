@@ -618,26 +618,24 @@ async def test_a_message_goes_through_the_app_api_and_counts_once_the_history_sh
     assert mid.startswith("m-") and not hist.ws                     # the browser's socket stayed unused
 
 
-async def test_a_refused_message_goes_through_the_browser_a_broken_one_never_twice(data, monkeypatch):
+async def test_a_refused_message_is_not_sent_a_broken_one_never_twice(data, monkeypatch):
     from app.willhaben.account import AccountClient, SendFailed
 
     hist = _History()
     _chat_client(monkeypatch, lambda req: httpx.Response(404))           # no such endpoint: nothing went out
-    hist.sent.append(("x", "Hallo"))
-    await AccountClient(hist).send_message("c-1", "Hallo")
-    assert len(hist.ws) == 1
+    with pytest.raises(SendFailed, match="rejected"):
+        await AccountClient(hist).send_message("c-1", "Hallo")
 
     hist = _History(shows=False)
     _chat_client(monkeypatch, lambda req: httpx.Response(502))           # may have gone out: only the history decides
     with pytest.raises(SendFailed, match="history"):
         await AccountClient(hist).send_message("c-1", "Hallo")
-    assert not hist.ws
 
     hist = _History()
     _chat_client(monkeypatch, lambda req: httpx.Response(400, text="too long"))   # explained: nothing went out
     with pytest.raises(SendFailed, match="rejected"):
         await AccountClient(hist).send_message("c-1", "Hallo")
-    assert not hist.ws
+    assert not hist.ws                                                   # the browser never sends
 
 
 async def test_read_receipt_is_one_put(data, monkeypatch):

@@ -4,26 +4,22 @@ from datetime import timedelta
 import pytest
 from sqlmodel import select
 
-from app.db import Conversation, Draft, Message, MyAd, get_setting, session, set_setting, utcnow
+from app.db import (
+    Conversation,
+    Draft,
+    Message,
+    MyAd,
+    get_setting,
+    session,
+    set_setting,
+    utcnow,
+)
 from app.llm.base import LLMError, LLMResult
 from app.services import chats
-from app.willhaben.account import AccountClient, SendFailed
+from app.willhaben.account import AccountClient
 
 
-# ------------------------------------------------------------------ sending over the chat WebSocket
-class _WsSession:
-    def __init__(self, ws_result, history):
-        self.ws_result, self.history, self.frames = ws_result, history, []
-
-    async def ws_request(self, url, frame, request_id, *, req_type, timeout_ms=20000):
-        self.frames.append((url, frame, request_id, req_type))
-        return {**self.ws_result, "request_id": request_id}
-
-    async def api_json(self, method, path, body=None):
-        msgs = self.history(self.frames[-1][1]["payload"]) if self.frames else []
-        return {"messages": msgs}
-
-
+# ------------------------------------------------------------------ sending: only through the app API
 @pytest.fixture(autouse=True)
 def no_sleep(monkeypatch):
     async def instant(_):
@@ -31,27 +27,22 @@ def no_sleep(monkeypatch):
     monkeypatch.setattr("app.willhaben.account.asyncio.sleep", instant)
 
 
-async def test_send_message_confirmed_by_history():
-    s = _WsSession({"status": "success", "req_type": "send_message"},
-                   lambda p: [{"message_id": "m42", "client_message_id": p["client_message_id"], "is_mine": True,
-                               "text": p["text"]}])
-    mid = await AccountClient(s).send_message("conv-1", "  Ja, ist noch da.  ")
-    url, frame, rid, req_type = s.frames[0]
-    assert url == "wss://chat-realtime-web.willhaben.at/webapi/chat-ws/v1/ws/" and req_type == "send_message"
-    assert frame["req_type"] == "send_message" and frame["request_id"] == rid
-    assert frame["payload"]["conversation_id"] == "conv-1" and frame["payload"]["text"] == "Ja, ist noch da."
-    assert frame["payload"]["type"] == "text" and mid == "m42"
+async def test_without_the_app_login_nothing_is_sent(monkeypatch):
+    """Messages go only through willhaben's app interface (tests/test_native_api.py covers the sending): without its
+    login the send fails at once, telling where to log in – the browser no longer sends."""
+    from app.willhaben import native
+    from app.willhaben.session import NotLoggedIn
 
+    class S:
+        logged_in = True
 
-async def test_send_message_errors():
-    with pytest.raises(SendFailed, match="rejected"):
-        await AccountClient(_WsSession({"status": "error", "response": "blocked"}, lambda p: [])).send_message("c", "x")
-    with pytest.raises(SendFailed, match="connection failed"):
-        await AccountClient(_WsSession({"status": "ws_error", "acked": False}, lambda p: [])).send_message("c", "x")
-    with pytest.raises(SendFailed, match="did not show up"):
-        await AccountClient(_WsSession({"status": "success"}, lambda p: [])).send_message("c", "x")
+    monkeypatch.setattr(native, "active", lambda: None)
+    s = S()
+    with pytest.raises(NotLoggedIn, match="app interface"):
+        await AccountClient(s).send_message("c", "Hallo")
+    assert s.logged_in is False
     with pytest.raises(ValueError):
-        await AccountClient(_WsSession({"status": "success"}, lambda p: [])).send_message("c", "   ")
+        await AccountClient(s).send_message("c", "   ")
 
 
 # ------------------------------------------------------------------ automatic answers
@@ -334,7 +325,8 @@ async def test_failed_automatic_answer_is_pushed_once_and_shown_in_the_chat(env,
 
 
 async def test_push_buttons_send_reply_discard(env, monkeypatch):
-    from app.services import ha_actions, notify as notify_mod
+    from app.services import ha_actions
+    from app.services import notify as notify_mod
 
     backend, account, notes = env
     cleared = []
@@ -377,7 +369,8 @@ async def test_push_buttons_send_reply_discard(env, monkeypatch):
 
 
 async def test_push_revise_makes_new_draft_and_push(env, monkeypatch):
-    from app.services import ha_actions, notify as notify_mod
+    from app.services import ha_actions
+    from app.services import notify as notify_mod
 
     backend, account, notes = env
 
@@ -618,7 +611,8 @@ async def test_tapped_alternative_revises_as_a_decision_typed_instruction_stays_
     """One of Claude's own alternatives (Telegram button, chat page button) names the decision only: the hint says so
     and tells Claude to drop what the alternative or the old draft added unasked. A typed instruction ("Mit Claude
     überarbeiten") keeps the binding wording as before."""
-    from app.services import ha_actions, notify as notify_mod
+    from app.services import ha_actions
+    from app.services import notify as notify_mod
 
     backend, account, notes = env
 

@@ -237,5 +237,7 @@
  "Claude writes": "Claude schreibt",
  "Standard questions for sellers": "Standardfragen an Verkäufer",
  "Offered in an ad's “Message the seller”: a tap puts the question into the message, Claude can turn it into a whole message.": "Angeboten bei „Nachricht an Verkäufer“ einer Anzeige: Ein Tipp setzt die Frage in die Nachricht, Claude kann daraus eine ganze Nachricht machen.",
- "One question per line, at most 12.": "Eine Frage pro Zeile, höchstens 12."
+ "One question per line, at most 12.": "Eine Frage pro Zeile, höchstens 12.",
+ "Not logged in to willhaben's app interface – log in under Settings → willhaben": "Nicht an willhabens App-Schnittstelle angemeldet – melde dich unter Einstellungen → willhaben an",
+ "off – not logged in to the app interface": "aus – nicht an der App-Schnittstelle angemeldet"
 }

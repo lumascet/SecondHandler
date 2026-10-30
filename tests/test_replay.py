@@ -95,16 +95,10 @@ async def test_account_offline_from_recordings(replay_on, monkeypatch):
     recorder.record_http("account", "login", "GET", ORIGIN + ME_PATH, status=200, resp_body=json.dumps(me))
     recorder.record_http("account", "chat", "GET", ORIGIN + "/webapi/chat-api/v1/conversations?limit=10&offset=0",
                          status=200, resp_body='{"conversations": [{"id": "c1"}]}')
-    frame = {"req_type": "send_message", "request_id": "r1", "conversation_id": "c1", "text": "Hallo"}
-    recorder.record_ws("send", "wss://chat/ws", frame, {"status": "success", "payload": {"id": "m1"}}, outcome="ok")
     sess = session_mod.get_session()
     assert isinstance(sess, ReplaySession) and sess.started
     assert await sess.check_login() is True and sess.user["id"] == "42"
     assert (await sess.api_json("GET", "/webapi/chat-api/v1/conversations?offset=0&limit=10")) == {"conversations": [{"id": "c1"}]}
-    res = await sess.ws_request("wss://chat/ws", {**frame, "request_id": "r2"}, "r2", req_type="send_message")
-    assert res["status"] == "success"
-    with pytest.raises(SessionUnavailable, match="never recorded"):
-        await sess.ws_request("wss://chat/ws", {**frame, "text": "Anderer Text"}, "r3", req_type="send_message")
     with pytest.raises(SessionUnavailable):
         await sess.api("PUT", "/webapi/iad/bap/edit", {"title": "neu"})
     assert sess.status()["replay"] is True and await sess.refresh_sso() is False

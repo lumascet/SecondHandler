@@ -177,12 +177,12 @@ def test_chat_draft_send_flow(client):
     r = client.post(f"/drafts/{draft.id}/send", data={"text": "Hallo, 180 € passt."}, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == f"/chats/c1#draft-{draft.id}"
     wait_jobs()
-    # ... no browser session in tests: it fails visibly, goes back to an open draft and nothing is marked as sent
+    # ... no app API login in tests: it fails visibly, goes back to an open draft and nothing is marked as sent
     with dbmod.session() as db:
         d = db.get(dbmod.Draft, draft.id)
-        assert d.status == "draft" and d.text == "Hallo, 180 € passt." and "Browser session is not running" in d.error
+        assert d.status == "draft" and d.text == "Hallo, 180 € passt." and "app interface" in d.error
     assert client.get("/jobs").json()["recent"][0]["status"] == "failed"
-    assert "Browser session is not running" in client.get("/chats/c1").text
+    assert "app interface" in client.get("/chats/c1").text
 
     client.post(f"/drafts/{draft.id}/mark-sent", data={"text": "Hallo, 180 € passt."})
     msgs = client.get("/api/chats/c1").json()["messages"]

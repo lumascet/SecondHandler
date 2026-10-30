@@ -155,31 +155,23 @@ async def test_account_requests_recorded():
         {"status": 200, "text": '{"conversations": []}', "url": ORIGIN + "/webapi/chat-api/v1/conversations",
          "headers": {"content-type": "application/json"}},
         {"status": 201, "text": '{"id": 7}', "url": ORIGIN + "/webapi/iad-upload/atimage/temp"},
-        {"status": "success", "acked": True, "payload": {"message_id": "m1"}},
-        {"status": "ok", "sent": 2},
     ])
     with timeline.context(conversation_id="c1"):
         await s.api("GET", "/webapi/chat-api/v1/conversations?limit=10")
         await s.upload("/webapi/iad-upload/atimage/temp", "file", "a.jpg", b"\xff\xd8 photo", "image/jpeg")
-        await s.ws_request("wss://chat/ws", {"req_type": "send_message", "request_id": "r1", "text": "Hallo"}, "r1",
-                           req_type="send_message")
-        await s.ws_send("wss://chat/ws", [{"req_type": "mark_message_as_read", "id": "m0"}])
         await s._goto(s.ui_page, ORIGIN + "/iad/myprofile/myadverts")
         await s._on_chat_frame(json.dumps({"req_type": "new_message", "conversation_id": "c1", "text": "Noch da?"}))
         await s._on_chat_frame(json.dumps({"req_type": "ping"}))
         await s._on_chat_frame(json.dumps({"_state": "open"}))
-    api, up, wsr, wss, nav, push = _recs()
+    api, up, nav, push = _recs()
     assert api.channel == "account" and api.kind == "chat" and api.method == "GET" and api.status == 200
     assert json.loads(api.req_headers)["x-bbx-csrf-token"] == "<redacted>" and api.content_type == "application/json"
     assert up.method == "UPLOAD" and up.kind == "upload" and json.loads(recorder.decode_body(up.req_body))["bytes"] == 8
     assert up.canonical_key == recorder.canonical_key("UPLOAD", ORIGIN + "/webapi/iad-upload/atimage/temp",
                                                       upload=("file", "image/jpeg"))
-    assert wsr.method == "WS" and wsr.kind == "send" and wsr.ws_status == "success" and wsr.outcome == "ok"
-    assert json.loads(recorder.decode_body(wsr.req_body))["text"] == "Hallo"
-    assert wss.kind == "chat" and wss.ws_status == "ok"
     assert nav.channel == "navigation" and nav.resp_body is None and nav.status == 200
     assert push.method == "WSPUSH" and push.kind == "chat_push" and b"Noch da?" in recorder.decode_body(push.resp_body)
-    assert all(_event(r).conversation_id == "c1" for r in (api, up, wsr, wss, nav, push))
+    assert all(_event(r).conversation_id == "c1" for r in (api, up, nav, push))
 
 
 # ------------------------------------------------------------------ timeline view, retention

@@ -7,7 +7,7 @@ import pytest
 from app.db import Conversation, Draft, Message, MyAd, session, set_setting, utcnow
 from app.llm.base import LLMError, LLMResult
 from app.services import chats, humanize
-from app.willhaben.account import ChatMessage, SendFailed, parse_messages
+from app.willhaben.account import SendFailed, parse_messages
 
 
 def test_plan_stays_in_window_and_reads_before_sending():
@@ -46,19 +46,6 @@ class FakeSession:
     async def ws_send(self, url, frames, settle_ms=1500):
         self.frames += frames
         return {"status": "ok", "sent": len(frames)}
-
-
-async def test_mark_read_sends_one_frame_per_unread_incoming_message():
-    from app.willhaben.account import AccountClient
-    s = FakeSession()
-    acct = AccountClient(s)
-    msgs = [ChatMessage("a", "?", utcnow(), "in", read=False), ChatMessage("b", "!", utcnow(), "out", read=False),
-            ChatMessage("c", "ok", utcnow(), "in", read=True), ChatMessage("d", "noch da?", utcnow(), "in", read=False)]
-    assert await acct.mark_read("conv1", msgs) == 2
-    assert s.frames == [
-        {"payload": {"conversation_id": "conv1", "message_id": "a"}, "req_type": "mark_message_as_read"},
-        {"payload": {"conversation_id": "conv1", "message_id": "d"}, "req_type": "mark_message_as_read"},
-    ]
 
 
 @pytest.fixture
