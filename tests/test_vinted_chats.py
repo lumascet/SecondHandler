@@ -649,3 +649,14 @@ def test_an_event_worded_anew_is_kept_once_with_its_fuller_words():
     vinted_inbox.apply_conversation("01a1-uuid", {**CONV, "messages": [other, short]})
     vinted_inbox.apply_conversation("01a1-uuid", {**CONV, "messages": [short, other]})
     assert sorted(m.text for m in chats.messages_of("01a1-uuid")) == ["Gekauft! – Versand bis Dienstag", "Zweites"]
+
+
+def test_a_notice_stored_with_markup_is_cleaned_on_the_next_read():
+    vinted_inbox.apply_inbox(INBOX)
+    with session() as db:
+        db.add(Message(conversation_id="01a1-uuid", ext_id="vinted-ev-fedcba9876543210", direction="unknown",
+                       text='Angekommen – Hol es ab: <a class="msg-status__link" href="/">Abholstelle</a>',
+                       kind="integration"))
+        db.commit()
+    vinted_inbox.apply_conversation("01a1-uuid", {**CONV, "messages": []})
+    assert [m.text for m in chats.messages_of("01a1-uuid")] == ["Angekommen – Hol es ab:"]

@@ -391,6 +391,10 @@ def apply_conversation(cid: str, data: dict[str, Any], escrow: dict[str, Any] | 
                                                  ~col(Message.ext_id).like("vinted-ev-%"))):
             db.delete(old)
         db.flush()
+        for old in db.exec(select(Message).where(Message.conversation_id == cid, Message.kind == "integration",
+                                                 col(Message.text).contains("<"))):
+            old.text = plain(old.text)     # stored with Vinted's markup before 10-30 (notices it no longer lists too)
+            db.add(old)
         current = {message_key(m) for m in msgs}
         seconds = [str(m.get("created_at")) for m in msgs if message_key(m).startswith("vinted-ev-")]
         for m in msgs:
