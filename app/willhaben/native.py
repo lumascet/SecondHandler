@@ -16,9 +16,10 @@ Kept in DATA_DIR/willhaben-native.json (mode 600, like the other secrets): app t
 Requests go through the same limiter, access log and recorder as the browser's (authorization and the app token are
 never recorded; the login and token requests are recorded without their bodies).
 
-`route()` sends the browser's account reads here once logged in: the app API serves the same backends with the same
-answers, only under other hosts (seen live 2026-10-30 for the profile, the chats, an ad's edit data and images). Writes,
-pages and the chat WebSocket stay with the browser until each was tried live. `probe()` reads a few of the account's own
+`route()` sends the browser's account requests here once logged in: the app API serves the same backends with the same
+answers, only under other hosts (seen live 2026-10-30 for the profile, the chats, the own ads, an ad's edit data and
+images). The writes of WRITE_PREFIXES follow the same paths; pages, uploads, chat messages and the chat WebSocket stay
+with the browser. `probe()` reads a few of the account's own
 endpoints once (GET only), so the recordings show the shapes of the ones not routed yet.
 """
 from __future__ import annotations
@@ -544,16 +545,29 @@ def active() -> NativeClient | None:
     return c if c.logged_in else None
 
 
+# writes that go to the app API too: the same backends behind both (the action links in the app's own ads list point
+# there). Chat messages, new chats and photo uploads are not plain path changes and stay with the browser.
+WRITE_PREFIXES = ("/webapi/myatz/", "/webapi/iad/", "/webapi/p2p-aggregator/", "/webapi/chat-api/v1/conversations")
+
+
 def route(method: str, path: str, accept: str = "application/json") -> str | None:
-    """Where an account request of the browser goes instead: the app API's URL for reads (GET of JSON), else None."""
-    if method.upper() != "GET" or "json" not in accept or not (c := active()):
+    """Where an account request of the browser goes instead: the app API's URL for JSON reads and for the writes of
+    WRITE_PREFIXES, else None."""
+    if "json" not in accept or not (c := active()):
         return None
+    if method.upper() != "GET":
+        web = path[len("https://www.willhaben.at"):] if path.startswith("https://www.willhaben.at/") else path
+        if not web.startswith(WRITE_PREFIXES):
+            return None
     return native_url(c, path)
 
 
-def falls_back(status: int) -> bool:
-    """An app API answer to a read that the browser should answer instead: login gone there, not found, its error."""
-    return status in (401, 403, 404) or status >= 500
+def falls_back(status: int, method: str = "GET") -> bool:
+    """An app API answer the browser should give instead. Reads: login gone there, not found, its error. Writes only
+    when willhaben surely did nothing (refused or no such endpoint): after a 5xx it may have, so no second try."""
+    if method.upper() == "GET":
+        return status in (401, 403, 404) or status >= 500
+    return status in (401, 403, 404, 405)
 
 
 async def my_ads_list() -> dict[str, Any] | None:

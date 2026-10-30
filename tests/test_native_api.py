@@ -205,6 +205,7 @@ def _routed_client(monkeypatch):
     c.st.links.update({"ChatApiCounter": "https://publicapi.willhaben.at/chat-api/v1/counter",
                        "IAD_API_BASE_URL": "https://api.willhaben.at",
                        "UserDataResource": "https://api.willhaben.at/restapi/v2/user"})
+    c.st.user_links["showPagedAdsFromUserLink"] = "https://publicapi.willhaben.at/myatz/v1/atverz/showpagedadsfromuser"
     monkeypatch.setattr(native, "_client", c)
     return c
 
@@ -220,13 +221,15 @@ def test_web_paths_map_to_the_app_api(data, monkeypatch):
     assert native.native_url(c, "/iad/myprofile/myadverts") is None
 
 
-def test_only_reads_are_routed(data, monkeypatch):
+def test_reads_and_plain_writes_are_routed(data, monkeypatch):
     from app.db import set_setting
 
     _routed_client(monkeypatch)
     assert native.route("GET", "/webapi/iad/bap/1")
-    assert native.route("PUT", "/webapi/iad/bap/edit") is None                 # writes stay with the browser
-    assert native.route("DELETE", "/webapi/chat-api/v1/conversations") is None
+    assert native.route("PUT", "/webapi/iad/bap/edit") == "https://api.willhaben.at/restapi/v2/bap/edit"
+    assert native.route("DELETE", "/webapi/chat-api/v1/conversations")
+    assert native.route("POST", "/webapi/iad-messaging/sendrequest/chat") is None     # a new chat: the browser
+    assert native.route("PUT", "/webapi/myatz/bap/deactivate/1") == "https://publicapi.willhaben.at/myatz/v1/bap/deactivate/1"
     assert native.route("GET", "/webapi/iad/bap/1", accept="text/html") is None
     set_setting("willhaben_native", "0")
     try:
@@ -303,7 +306,6 @@ async def test_own_ads_from_the_app_api_all_pages(data, monkeypatch):
     c._transport = httpx.MockTransport(handler)
     c.st.access_token, c.st.access_until = "A", 9e12
     c.st.app_token, c.st.app_token_until = "T", 9e12
-    c.st.user_links["showPagedAdsFromUserLink"] = "https://publicapi.willhaben.at/myatz/v1/atverz/showpagedadsfromuser"
     native.MY_ADS_ROWS = 2
     try:
         ads = await AccountClient(session=None).my_adverts()
@@ -323,3 +325,29 @@ def test_more_web_paths(data, monkeypatch):
     assert native.native_url(c, "/webapi/p2p-aggregator/restapi/v2/p2pp/options/ad/5/user/possible") == \
         "https://api.willhaben.at/restapi/v2/p2pp/options/ad/5/user/possible"
     assert [native.falls_back(s) for s in (200, 204, 400, 401, 404, 500)] == [False, False, False, True, True, True]
+    # a write after a 5xx may have happened: never repeated through the browser
+    assert [native.falls_back(s, "PUT") for s in (200, 401, 404, 405, 500, 502)] == [False, True, True, True, False, False]
+
+
+async def test_a_failed_write_is_not_repeated_in_the_browser(data, monkeypatch):
+    from app.willhaben.session import BrowserSession
+
+    _routed_client(monkeypatch)
+
+    async def down(method, url, body=None, **kw):
+        raise native.NativeError("connection reset")
+
+    monkeypatch.setattr(native.get_client(), "request", down)
+    s = BrowserSession()
+    browser = []
+
+    async def in_browser(*a, **k):
+        browser.append(a)
+        return {"status": 200, "text": "{}", "url": "web"}
+
+    s.context = object()
+    s.api_page = type("P", (), {"evaluate": staticmethod(in_browser), "url": "https://www.willhaben.at/robots.txt"})()
+    monkeypatch.setattr(s, "_csrf", _none)
+    with pytest.raises(native.NativeError):
+        await s.api("PUT", "/webapi/myatz/bap/deactivate/1")
+    assert not browser

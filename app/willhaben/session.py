@@ -225,8 +225,8 @@ class BrowserSession:
                   native_ok: bool = True) -> ApiResponse:
         """Run fetch() for an `/webapi/...` path (or a page, with accept=text/html) inside the logged-in browser.
 
-        Reads the app API answers the same way go there instead once it is logged in (app/willhaben/native.py); when it
-        fails or its login is gone, the browser answers. `native_ok=False`: always the browser (its own login check).
+        Requests the app API answers the same way go there instead once it is logged in (app/willhaben/native.py); when
+        it refuses, lacks the endpoint or (reads only) fails, the browser answers. `native_ok=False`: always the browser (its own login check).
         """
         url = path if path.startswith("http") else ORIGIN + path
         payload = json.dumps(body) if body is not None else None
@@ -237,12 +237,14 @@ class BrowserSession:
             try:
                 nr = await native.get_client().request(method, native_url, body)
             except native.NativeError as e:
+                if method.upper() != "GET":     # it may have reached willhaben: never a second try through the browser
+                    raise
                 log.info("app API failed for %s, the browser answers: %s", access_log.classify(url), e)
             else:
                 if nr.status == 429:
                     raise Blocked(t("willhaben responded {status}; pausing {s}s", status=429,
                                     s=f"{self.limiter.penalize():.0f}"))
-                if not native.falls_back(nr.status):
+                if not native.falls_back(nr.status, method):
                     return ApiResponse(status=nr.status, text=nr.text, url=nr.url)
         self._require()
         headers = {"accept": accept, "x-wh-client": WEB_CLIENT}
