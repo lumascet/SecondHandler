@@ -287,7 +287,9 @@ def load_state(name: str = STATE_FILE) -> State:
     return State(**{k: v for k, v in raw.items() if k in known})
 
 
-def save_state(st: State, name: str = STATE_FILE) -> None:
+def save_state(st: State, name: str | None = STATE_FILE) -> None:
+    if name is None:                       # an identity kept in memory only
+        return
     p = _path(name)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
@@ -312,10 +314,13 @@ class NativeResponse:
 
 
 class NativeClient:
-    def __init__(self, transport: httpx.AsyncBaseTransport | None = None, state_file: str = STATE_FILE) -> None:
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None, state_file: str | None = STATE_FILE,
+                 proxy: str | None = None) -> None:
+        """`state_file` None: kept in memory only (an anonymous identity of one VPN server); `proxy`: that server."""
         self._file = state_file
-        self.channel = "anonymous" if state_file == ANON_STATE_FILE else "account"
-        self.st = load_state(state_file)
+        self.proxy = proxy
+        self.channel = "account" if state_file == STATE_FILE else "anonymous"
+        self.st = load_state(state_file) if state_file else State()
         if not self.st.salt:                     # the app makes one per process; one per install is as good
             self.new_identity()
         self._transport = transport
@@ -324,7 +329,7 @@ class NativeClient:
         self.limiter = willhaben_limiter()      # same home IP as the browser and the anonymous visitor
 
     def _client(self, **kw: Any) -> httpx.AsyncClient:
-        return httpx.AsyncClient(timeout=TIMEOUT_S, transport=self._transport, **kw)
+        return httpx.AsyncClient(timeout=TIMEOUT_S, transport=self._transport, proxy=self.proxy, **kw)
 
     # ------------------------------------------------------------ state
     def new_identity(self) -> None:
@@ -768,17 +773,19 @@ async def my_ads_list() -> dict[str, Any] | None:
 ANON_SEARCH = "/webapi/ad-search/"     # the web's search path; the app's is the same under ad-search.willhaben.at
 
 
-async def anon_route(url: str) -> tuple[str, dict[str, str]] | None:
+async def anon_route(url: str, route: Any = None) -> tuple[str, dict[str, str]] | None:
     """The app API's URL and headers for an anonymous search request of the web (same answer, seen 2026-10-30), or
     None (setting willhaben_native_search = 0, not a search, no app token to be had). The visitor's own app identity,
-    never the account's: renewed like the web visitor (ANON_SESSION_S), never logged in."""
+    never the account's: renewed like the web visitor (ANON_SESSION_S), never logged in. `route`: the VPN server the
+    request goes through – that server gets an identity of its own, its app token fetched through it (one fetched at
+    home would link the server to the home IP)."""
     from app.db import get_setting
     from app.platforms.httpclient import ANON_SESSION_S
 
     web = url[len("https://www.willhaben.at"):] if url.startswith("https://www.willhaben.at/") else url
     if not web.startswith(ANON_SEARCH) or (get_setting("willhaben_native_search") or "1") == "0":
         return None
-    c = anon_client()
+    c = anon_client(route)
     if time.time() - c.st.logged_in_at > ANON_SESSION_S:      # here: when this identity began
         c.new_identity()
         c.st.logged_in_at = time.time()
@@ -795,10 +802,18 @@ async def anon_route(url: str) -> tuple[str, dict[str, str]] | None:
 
 
 _anon: NativeClient | None = None
+_anon_vpn: dict[str, NativeClient] = {}      # VPN server -> its anonymous identity (memory only)
 
 
-def anon_client() -> NativeClient:
+def anon_client(route: Any = None) -> NativeClient:
+    """The anonymous identity at home, or the one of the VPN server `route` (a vpn.Route: proxy, name)."""
     global _anon
+    if route is not None:
+        key = getattr(route, "name", "") or route.proxy
+        c = _anon_vpn.get(key)
+        if c is None or c.proxy != route.proxy:          # the server's local proxy moved with a restart
+            c = _anon_vpn[key] = NativeClient(state_file=None, proxy=route.proxy)
+        return c
     if _anon is None:
         _anon = NativeClient(state_file=ANON_STATE_FILE)
     return _anon

@@ -533,3 +533,18 @@ async def test_anonymous_search_falls_back_to_the_web(data, monkeypatch):
     finally:
         set_setting("willhaben_native_search", "1")
     assert await native.anon_route("https://www.willhaben.at/iad/object?adId=1") is None    # pages: the web
+
+
+def test_each_vpn_server_has_its_own_anonymous_identity(data):
+    from app.platforms.vpn import Route
+
+    a, b = Route("http://127.0.0.1:9001", 1, "at-vie-1"), Route("http://127.0.0.1:9002", 1, "de-fra-1")
+    home = native.anon_client()
+    one, two = native.anon_client(a), native.anon_client(b)
+    assert one is native.anon_client(a) and one is not two and home not in (one, two)
+    assert one.proxy == "http://127.0.0.1:9001" and one.st.visitor_id != two.st.visitor_id
+    one.st.app_token = "X"
+    native.save_state(one.st, one._file)                          # memory only: nothing written
+    assert not list(data.glob("willhaben-native*.json"))
+    moved = native.anon_client(Route("http://127.0.0.1:9101", 2, "at-vie-1"))   # restarted: a new local port
+    assert moved is not one and moved.proxy.endswith(":9101")

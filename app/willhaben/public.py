@@ -75,12 +75,14 @@ class PublicClient(httpclient.HttpPlatformClient):
                    refresh: bool = False) -> httpclient.FetchResponse:
         """GET through the shared limiter; `cache_s` > 0 reuses a recent 200/404 answer for the same URL (not with
         `refresh`)."""
-        if json_api and self._tunnel() is None and self._lane() is None:
-            # the app API's search: same answer, its own anonymous app identity. Only from the home IP: through the VPN
-            # its app token (fetched from home) would link the two.
+        tunnel = self._tunnel()
+        route = tunnel.current() if tunnel is not None else None
+        if json_api and self._lane() is None and (tunnel is None or route is not None):
+            # the app API's search: same answer, an anonymous app identity of its own – one per VPN server, its app
+            # token fetched through that server (never at home for a server). Parallel lanes: the web search.
             from app.willhaben import native
 
-            if alt := await native.anon_route(url):
+            if alt := await native.anon_route(url, route):
                 app_url, app_headers = alt
                 r = await super()._get(app_url, headers=app_headers, cache_s=cache_s, kind=kind or self.classify(url),
                                        refresh=refresh)
