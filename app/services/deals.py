@@ -1795,6 +1795,12 @@ async def analyze(ad: AdDetail, *, query: str | None = None, own_query: bool = F
     ruled_out = (known_geizhals or {}).get("checked") and not (known_geizhals or {}).get("price_from")
     known = {k: v for k, v in (known_geizhals or {}).items() if k in ("name", "url", "price_from", "by", "checked")} \
         if (known_geizhals or {}).get("price_from") and (known_geizhals or {}).get("url") else None
+    # a product the agent's lookup found and nobody checked meets the same test as a lookup now (10-30: a Captiva
+    # found before the test knew "mini" kept rating a Nigopi a bargain)
+    if known and not known.get("checked") and known.get("by") != "claude" \
+            and (why := geizhals.title_conflict(known.get("name") or "", ad.heading or "")):
+        log.info("the hit's Geizhals product %r dropped for %r: %s", known.get("name"), ad.heading, why)
+        known = None
     res = cached(ad.ref, query, category_url, own)
     if res is not None and ((res.get("ad") or {}).get("price") != ad.price
                             or (res.get("ad") or {}).get("item_condition") != ad.item_condition
