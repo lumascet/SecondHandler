@@ -224,5 +224,10 @@
  "Confirm on Vinted that the order is all right? The money then goes to the seller; a problem cannot be reported afterwards.": "Auf Vinted bestätigen, dass die Bestellung in Ordnung ist? Das Geld geht dann an den Verkäufer; ein Problem kann danach nicht mehr gemeldet werden.",
  "Vinted asks nothing to confirm here": "Vinted fragt hier nichts zu bestätigen",
  "Confirmed on Vinted: all is good": "Auf Vinted bestätigt: alles in Ordnung",
- "connection broke ({error})": "Verbindung abgebrochen ({error})"
+ "connection broke ({error})": "Verbindung abgebrochen ({error})",
+ "The message was sent, the chat shows up shortly: {error}": "Die Nachricht ist verschickt, der Chat erscheint gleich: {error}",
+ "Go to chat": "Zum Chat",
+ "Message the seller": "Nachricht an Verkäufer",
+ "Hello, is the ad still available?": "Hallo, ist die Anzeige noch verfügbar?",
+ "Opens the chat on willhaben with this message – it goes to the seller at once.": "Öffnet den Chat auf willhaben mit dieser Nachricht – sie geht sofort an den Verkäufer."
 }

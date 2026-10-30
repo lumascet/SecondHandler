@@ -307,7 +307,8 @@ def _seller_trust(since, ratings, platform=None, reply=None) -> dict:
 
 
 templates.env.globals.update(seller_trust=_seller_trust)      # the ad viewer's seller line (_seller_trust.html)
-templates.env.globals.update(credentials_state=credentials_svc.stored)   # login details card (services/credentials.py)
+templates.env.globals.update(credentials_state=credentials_svc.stored)
+templates.env.globals.update(chat_for_ad=chats.chat_for_ad, is_own_ad=chats.is_own_ad)   # the ad pane's chat button   # login details card (services/credentials.py)
 templates.env.globals.update(login_sites=lambda: [("willhaben", "willhaben")] + [(s.id, s.name) for s in site_accounts.SITES.values()])
 templates.env.globals.update(paylivery_step=lambda d, conv: paylivery_advice.view(d, conv))   # the draft's PayLivery step
 templates.env.globals.update(intent_label=chats.intent_label, ad_status_label=chats.ad_status_label)        # the draft's header on the chat page
@@ -1213,6 +1214,24 @@ async def wh_paylivery_fee(request: Request, ad_id: str, price: float | None = N
         log.warning("PayLivery fee for %s failed: %s", ad_id, e)
         error = t("willhaben did not show the fee")
     return templates.TemplateResponse(request, "_wh_fee.html", {"fee": fee, "error": error, "price": price, "sp": sp})
+
+
+@app.post("/hits/ad/willhaben/{ad_id}/message")
+async def ad_message_seller(ad_id: str, text: str = Form("")):
+    """The ad pane's "Message the seller": opens the chat on willhaben with this first message, then the chat page.
+    A chat about this ad that is already there is opened instead (no second opener)."""
+    from app.willhaben.account import OpenerUnconfirmed, SendFailed
+    if not ad_id.isdigit():
+        raise HTTPException(400)
+    if cid := chats.chat_for_ad(ad_id):
+        return back(f"/chats/{quote(cid, safe='')}")
+    try:
+        cid = await chats.contact_seller(ad_id, text)
+    except (SendFailed, NotLoggedIn, SessionUnavailable, ValueError) as e:      # nothing went out
+        return back(f"/deals/ad/{ad_id}?msg={quote(t('willhaben did not open the chat: {error}', error=e), safe='')}")
+    except OpenerUnconfirmed as e:        # it went out: the chat shows up with the next sync, never write again
+        return back(f"/chats?msg={quote(t('The message was sent, the chat shows up shortly: {error}', error=e), safe='')}")
+    return back(f"/chats/{quote(cid, safe='')}")
 
 
 @app.get("/hits/ad/{ad_id}", response_class=HTMLResponse)

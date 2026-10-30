@@ -178,3 +178,44 @@ async def test_seller_answered_already_the_history_decides():
                                                _entry(cid="c9", preview="Ja, noch da", mine=False)]}])
     assert await AccountClient(s).create_conversation("77", TEXT) == "c9"
 
+
+
+def test_the_ad_pane_writes_to_the_seller_and_opens_the_chat(monkeypatch):
+    """"Message the seller": the opener opens the chat, it is kept as a buyer's chat with that message, the chat page
+    follows; with a chat about the ad already there that one opens and nothing is sent."""
+    from fastapi.testclient import TestClient
+
+    from app.db import Conversation, Message, session
+    from app.main import app
+    from app.services import chats
+
+    sent = []
+
+    class Acc:
+        async def create_conversation(self, ad_id, text):
+            sent.append((ad_id, text))
+            return "conv-new-1"
+
+    async def nothing(*a, **k):
+        return None
+
+    monkeypatch.setattr(chats, "_account", lambda: Acc())
+    monkeypatch.setattr(chats, "sync_messages", nothing)
+    monkeypatch.setattr(chats, "ensure_ad_context", nothing)
+
+    class Pub:
+        async def get_detail(self, ad_id):
+            return None
+
+    monkeypatch.setattr("app.willhaben.public.get_public", lambda: Pub())
+    with TestClient(app) as c:
+        r = c.post("/hits/ad/willhaben/987654/message", data={"text": " Hallo, noch da? "}, follow_redirects=False)
+        assert r.status_code in (302, 303) and r.headers["location"].endswith("/chats/conv-new-1")
+        assert sent == [("987654", "Hallo, noch da?")]
+        with session() as db:
+            conv = db.get(Conversation, "conv-new-1")
+            assert conv.role == "buyer" and conv.ad_id == "987654"
+            assert db.query(Message).filter(Message.conversation_id == "conv-new-1").count() == 1
+        r = c.post("/hits/ad/willhaben/987654/message", data={"text": "noch einmal"}, follow_redirects=False)
+        assert r.headers["location"].endswith("/chats/conv-new-1") and len(sent) == 1      # no second opener
+        assert chats.chat_for_ad("987654") == "conv-new-1"

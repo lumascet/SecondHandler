@@ -296,6 +296,62 @@ def _upsert_message(db, conversation_id: str, ext_id: str, direction: str, text:
                    read=read if direction == "out" else None))
 
 
+def chat_for_ad(ad_id: str | None) -> str | None:
+    """The willhaben chat in which I write to the seller of this ad (role buyer), or None."""
+    if not ad_id:
+        return None
+    with session() as db:
+        conv = db.exec(select(Conversation).where(Conversation.ad_id == str(ad_id), Conversation.platform.is_(None),
+                                                  Conversation.role == "buyer")
+                       .order_by(col(Conversation.last_message_at).desc())).first()
+    return conv.id if conv else None
+
+
+def is_own_ad(ad_id: str | None) -> bool:
+    if not ad_id:
+        return False
+    with session() as db:
+        return db.get(MyAd, str(ad_id)) is not None
+
+
+async def contact_seller(ad_id: str, text: str) -> str:
+    """Write to the seller of an ad (the ad pane's "Message the seller"): willhaben's contact form opens the chat
+    (AccountClient.create_conversation), which is kept as my chat as a buyer with the opener, then synced. Returns the
+    conversation id. SendFailed / ValueError: nothing went out; OpenerUnconfirmed: it went out, the chat did not show
+    up yet – never send it again."""
+    from app.willhaben.public import get_public
+
+    text = (text or "").strip()
+    if not text:
+        raise ValueError(t("Empty message"))
+    try:
+        detail = await get_public().get_detail(ad_id)
+    except Exception as e:  # noqa: BLE001 - title and seller are niceties: the chat brings them later
+        log.info("contact %s: ad detail not read (%s)", ad_id, e)
+        detail = None
+    sent_at = utcnow()
+    cid = await _account().create_conversation(ad_id, text)
+    with session() as db:
+        conv = db.get(Conversation, cid) or Conversation(id=cid)
+        conv.ad_id, conv.role = str(ad_id), "buyer"
+        if detail is not None:
+            conv.ad_title = conv.ad_title or detail.heading
+            conv.partner_name = conv.partner_name or detail.seller_name
+            conv.ad_context, conv.ad_context_at = detail.as_context(), utcnow()
+        db.add(conv)
+        ext_id = f"draft-contact-{cid}"
+        if db.exec(select(Message).where(Message.conversation_id == cid, Message.ext_id == ext_id)).first() is None:
+            # stamped with the send time, so the sync can match it with willhaben's copy (SENT_MATCH_WINDOW)
+            db.add(Message(conversation_id=cid, ext_id=ext_id, direction="out", text=text, created_at=sent_at))
+        db.commit()
+    try:
+        await sync_messages(cid)
+        await ensure_ad_context(cid)
+    except Exception as e:  # noqa: BLE001 - the chat exists; the history follows at the next sync
+        log.info("first sync of chat %s failed: %s", cid, e)
+    return cid
+
+
 async def sync_messages(conversation_id: str) -> str:
     """Fetch the full history; falls back to the list's last message while the endpoint is unverified."""
     from app.platforms import vinted_inbox
