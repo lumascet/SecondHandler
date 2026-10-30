@@ -837,3 +837,40 @@ async def test_ad_details_come_from_the_app_api_as_the_web_page_has_them(data, m
     assert await pc.get_detail("333") is None
     with pytest.raises(Exception, match="no __NEXT_DATA__"):        # the app API failed: the web page answered
         await pc.get_detail("444")
+
+
+async def test_the_paylivery_fee_through_the_apps_web_login(data, monkeypatch):
+    """As the app opens the PayLivery window in a web view: a one-time login token (scope wh-login-token) in the
+    WH_AUTH_LOGIN cookie lets Keycloak log the window in; GETs only, then the preview's data call has the fee."""
+    from app.willhaben import paylivery_fee
+
+    pid = "2df73a4b-950a-47d5-9788-fdefbedc6738"
+    seen = []
+
+    def answer(req):
+        url = str(req.url)
+        seen.append((req.method, url.split("?")[0]))
+        if url.endswith("/openid-connect/token"):
+            form = parse_qs(req.content.decode())
+            assert form["scope"] == ["wh-login-token"] and form["client_id"] == ["apps"]
+            return httpx.Response(200, json={"access_token": "WEBLOGIN", "refresh_token": "REFRESH2"})
+        assert req.method == "GET"                                      # nothing but GETs on the window
+        if "/p2p/buynow/init" in url:
+            return httpx.Response(302, headers={"location": "https://sso.willhaben.at/auth/realms/willhaben/protocol/openid-connect/auth?client_id=mint"})
+        if "/openid-connect/auth" in url:
+            assert "WH_AUTH_LOGIN=WEBLOGIN" in req.headers.get("cookie", "")
+            return httpx.Response(302, headers={"location": "https://mint.willhaben.at/p2p/buynow?token=t"})
+        if url.startswith("https://mint.willhaben.at/p2p/buynow?"):
+            return httpx.Response(302, headers={"location": f"https://mint.willhaben.at/p2p/payment/preview/{pid}"})
+        if url.endswith(f"/p2p/payment/preview/{pid}"):
+            return httpx.Response(200, text="<html>Vorschau</html>")
+        if url.endswith(f"/p2p/payment/preview/data/{pid}"):
+            return httpx.Response(200, json={"paymentPreviewPriceBreakdown": {"buyerProtectionPrice": 20.25}})
+        return httpx.Response(404)
+
+    c = _chat_client(monkeypatch, answer)
+    page = await paylivery_fee._through_app("https://mint.willhaben.at/p2p/buynow/init?itemId=i&partnerId=p&activeUserId=u")
+    assert paylivery_fee.fee_from_bodies(page["bodies"]) == 20.25
+    assert native.get_client().st.refresh_token == "REFRESH2"            # the rotated refresh token is kept
+    assert [m for m, _u in seen].count("POST") == 1
+    assert c is not None
