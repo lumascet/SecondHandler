@@ -506,11 +506,16 @@ class NativeClient:
         log.info("willhaben app API probe: %s", ", ".join(f"{k}={v}" for k, v in out))
         return out
 
-WEB_PREFIXES = (     # the web's /webapi path -> (context link whose URI starts the app API's, path in between)
+WEB_PREFIXES = (     # the web's /webapi path -> (context link, path after its host; None: the link's URI itself)
     ("/webapi/chat-api/v1/", "ChatApiCounter", "/chat-api/v1/"),
     ("/webapi/iad/", "IAD_API_BASE_URL", "/restapi/v2/"),
+    ("/webapi/myatz/", "showPagedAdsFromUserLink", "/myatz/v1/"),
+    ("/webapi/p2p-aggregator/restapi/v2/", "IAD_API_BASE_URL", "/restapi/v2/"),   # the app lists p2pp under iad
+    ("/webapi/convoad/v1/chat/ad_list/", "ChatInitialCTAConvoAd", None),
 )
 WEB_ME = "/webapi/userprofile-service/userprofile/me"
+MY_ADS_ROWS = 50
+MY_ADS_PAGES = 6
 
 
 def native_url(c: NativeClient, path: str) -> str | None:
@@ -522,24 +527,63 @@ def native_url(c: NativeClient, path: str) -> str | None:
         return f"{base.rstrip('/')}/{c.st.user_id}" if base and c.st.user_id else None
     for prefix, link_id, middle in WEB_PREFIXES:
         if path.startswith(prefix) and (base := c.link(link_id)):
+            if middle is None:
+                return base.rstrip("/") + "/" + path[len(prefix):]
             host = "{0.scheme}://{0.netloc}".format(urlsplit(base))
             return host + middle + path[len(prefix):]
     return None
 
 
-def route(method: str, path: str, accept: str = "application/json") -> str | None:
-    """Where an account request of the browser goes instead: the app API's URL for reads (GET of JSON) once logged in
-    there, else None. Switched off with the setting willhaben_native = 0."""
-    if method.upper() != "GET" or "json" not in accept:
-        return None
+def active() -> NativeClient | None:
+    """The app API client when it is logged in and not switched off (setting willhaben_native = 0)."""
     from app.db import get_setting
 
     if (get_setting("willhaben_native") or "1") == "0":
         return None
     c = get_client()
-    if not c.logged_in:
+    return c if c.logged_in else None
+
+
+def route(method: str, path: str, accept: str = "application/json") -> str | None:
+    """Where an account request of the browser goes instead: the app API's URL for reads (GET of JSON), else None."""
+    if method.upper() != "GET" or "json" not in accept or not (c := active()):
         return None
     return native_url(c, path)
+
+
+def falls_back(status: int) -> bool:
+    """An app API answer to a read that the browser should answer instead: login gone there, not found, its error."""
+    return status in (401, 403, 404) or status >= 500
+
+
+async def my_ads_list() -> dict[str, Any] | None:
+    """The account's ads as the app lists them (same shape as the my-adverts page's initialUserAdsList, all pages
+    merged), or None when the app API is not there for it."""
+    c = active()
+    url = c.link("showPagedAdsFromUserLink") if c else None
+    if not c or not url:
+        return None
+    merged: dict[str, Any] | None = None
+    for page in range(1, MY_ADS_PAGES + 1):
+        r = await c.request("GET", f"{url}?page={page}&rows={MY_ADS_ROWS}", kind="myadverts")
+        if not r.ok:
+            raise NativeError(f"own ads: HTTP {r.status}")
+        data = r.json()
+        if merged is None:
+            merged = data
+        else:
+            for vertical in data.get("verticalList") or []:
+                into = next((v for v in merged["verticalList"] if v.get("verticalId") == vertical.get("verticalId")), None)
+                if into is None:
+                    merged["verticalList"].append(vertical)
+                else:
+                    into.setdefault("advertDetails", []).extend(vertical.get("advertDetails") or [])
+        have = sum(len(v.get("advertDetails") or []) for v in merged.get("verticalList") or [])
+        total = merged.get("totalNumberOfAdvertDetails")
+        if not isinstance(total, int) or have >= total or not any(v.get("advertDetails") for v in data.get("verticalList") or []):
+            break
+    return merged
+
 
 _client: NativeClient | None = None
 

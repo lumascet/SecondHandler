@@ -248,6 +248,11 @@ def parse_my_adverts(next_data: dict[str, Any]) -> AdvertList:
         lst = next_data["props"]["pageProps"]["initialUserAdsList"]
     except (KeyError, TypeError) as e:
         raise ValueError(t("Page contains no ad list")) from e
+    return parse_ads_list(lst)
+
+
+def parse_ads_list(lst: dict[str, Any]) -> AdvertList:
+    """Own ads from an ads list: the page's initialUserAdsList or the app API's showpagedadsfromuser answer."""
     out = AdvertList()
     total = lst.get("totalNumberOfAdvertDetails")
     out.total = total if isinstance(total, int) else None
@@ -471,7 +476,17 @@ class AccountClient:
         return any(m.direction == "out" and _preview_matches(m.text, text) for m in msgs)
 
     async def my_adverts(self) -> AdvertList:
-        """The account's ads; willhaben renders them server-side into the my-adverts page."""
+        """The account's ads: from the app API when it is logged in (every page), else from the my-adverts page that
+        willhaben renders server-side (first 50). Same list either way."""
+        from app.willhaben import native
+
+        try:
+            lst = await native.my_ads_list()
+        except native.NativeError as e:
+            log.info("own ads through the app API failed, the browser lists them: %s", e)
+            lst = None
+        if lst is not None:
+            return parse_ads_list(lst)
         r = await self.s.api("GET", MYADVERTS_PAGE, accept="text/html")
         nd = extract_next_data(r.text) if r.ok else None
         if not nd or nd.get("page") != MYADVERTS_PAGE:   # anonymous users land on the login page

@@ -216,7 +216,7 @@ def test_web_paths_map_to_the_app_api(data, monkeypatch):
     assert native.native_url(c, "/webapi/iad/bap/1234567890") == "https://api.willhaben.at/restapi/v2/bap/1234567890"
     assert native.native_url(c, "https://www.willhaben.at/webapi/userprofile-service/userprofile/me") == \
         "https://api.willhaben.at/restapi/v2/user/42"
-    assert native.native_url(c, "/webapi/p2p-aggregator/restapi/v2/p2pp/options/delivery") is None
+    assert native.native_url(c, "/webapi/iad-upload/atimage/temp") is None
     assert native.native_url(c, "/iad/myprofile/myadverts") is None
 
 
@@ -277,3 +277,49 @@ async def test_the_browser_session_uses_it_and_falls_back(data, monkeypatch):
 
 async def _none(*a, **k):
     return None
+
+
+def _ad(ad_id, status="active"):
+    return {"id": ad_id, "description": f"Ad {ad_id}", "advertStatus": {"id": status, "description": "Aktiv"},
+            "attributes": {"attribute": [{"name": "PRICE_FOR_DISPLAY", "values": ["€ 20"]}]},
+            "advertImageList": {"advertImage": []}, "startDate": None, "endDate": None,
+            "deleteReasonQueryParameter": None,
+            "advertEditStatusActionsList": {"contextLinkList": {"contextLink": [
+                {"id": "2", "relativePath": f"/bap/deactivate/{ad_id}", "serviceName": "myatz",
+                 "uri": f"https://publicapi.willhaben.at/myatz/v1/bap/deactivate/{ad_id}"}]}}}
+
+
+async def test_own_ads_from_the_app_api_all_pages(data, monkeypatch):
+    from app.willhaben.account import AccountClient
+
+    pages = {1: [_ad(1), _ad(2)], 2: [_ad(3)]}
+
+    def handler(req):
+        page = int(req.url.params["page"])
+        return httpx.Response(200, json={"totalNumberOfAdvertDetails": 3, "verticalList": [
+            {"verticalId": 2, "advertDetails": []}, {"verticalId": 5, "advertDetails": pages.get(page, [])}]})
+
+    c = _routed_client(monkeypatch)
+    c._transport = httpx.MockTransport(handler)
+    c.st.access_token, c.st.access_until = "A", 9e12
+    c.st.app_token, c.st.app_token_until = "T", 9e12
+    c.st.user_links["showPagedAdsFromUserLink"] = "https://publicapi.willhaben.at/myatz/v1/atverz/showpagedadsfromuser"
+    native.MY_ADS_ROWS = 2
+    try:
+        ads = await AccountClient(session=None).my_adverts()
+    finally:
+        native.MY_ADS_ROWS = 50
+    assert [a.ad_id for a in ads] == ["1", "2", "3"] and ads.complete
+    assert ads[0].actions["2"]["serviceName"] == "myatz"
+    assert native.native_url(c, "/webapi/myatz/bap/deactivate/1") == \
+        "https://publicapi.willhaben.at/myatz/v1/bap/deactivate/1"
+
+
+def test_more_web_paths(data, monkeypatch):
+    c = _routed_client(monkeypatch)
+    c.st.links["ChatInitialCTAConvoAd"] = "https://publicapi.willhaben.at/atdetail/v1/chat/ad_list"
+    assert native.native_url(c, "/webapi/convoad/v1/chat/ad_list/u-1?ids=5") == \
+        "https://publicapi.willhaben.at/atdetail/v1/chat/ad_list/u-1?ids=5"
+    assert native.native_url(c, "/webapi/p2p-aggregator/restapi/v2/p2pp/options/ad/5/user/possible") == \
+        "https://api.willhaben.at/restapi/v2/p2pp/options/ad/5/user/possible"
+    assert [native.falls_back(s) for s in (200, 204, 400, 401, 404, 500)] == [False, False, False, True, True, True]

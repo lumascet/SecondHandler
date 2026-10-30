@@ -242,7 +242,7 @@ class BrowserSession:
                 if nr.status == 429:
                     raise Blocked(t("willhaben responded {status}; pausing {s}s", status=429,
                                     s=f"{self.limiter.penalize():.0f}"))
-                if nr.status not in (401, 403):
+                if not native.falls_back(nr.status):
                     return ApiResponse(status=nr.status, text=nr.text, url=nr.url)
         self._require()
         headers = {"accept": accept, "x-wh-client": WEB_CLIENT}
