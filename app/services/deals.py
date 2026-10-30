@@ -2060,13 +2060,19 @@ PARTS_RULE = """\
   Geräten), je Teil eine kurze Geizhals-Suche (2 bis 5 Wörter, Hersteller und Modell, z. B. "Intel Core i7-3770K",
   "NVIDIA GeForce GTX 1050", "Kingston 16GB DDR3-1600 Kit"), die teuersten zuerst, höchstens 8; Kleinteile ohne
   Modell (Gehäuse, Kabel, No-Name-Maus) weglassen. Die App sucht jedes Teil und zählt die Neupreise zusammen. Sonst
-  leer – auch bei mehreren Stück desselben Artikels und bei Beigaben zu einem Hauptgerät (Hülle, Netzteil, Kabel).
+  leer – auch bei mehreren Stück desselben Artikels und bei Beigaben zu einem Hauptgerät (Hülle, Netzteil, Kabel),
+  und bei einem Fertiggerät eines Herstellers (Mini-PC, Laptop, NAS, Konsole, Tablet): das ist ein Produkt, auch
+  wenn die Anzeige seine Bauteile (Prozessor, RAM, SSD) aufzählt.
 """
 
 
 # a complete computer or device: never the product of a component ("NVIDIA GeForce RTX 3060" found a gaming PC with one)
 _SYSTEM_RE = re.compile(r"\b(komplettsystem|komplett-pc|gaming-pc|pc-system|desktop-pc|komplett|notebook|laptop|"
                         r"mini-pc|barebone|all-in-one|nettop|workstation)\b", re.I)
+
+
+# a device that comes complete: a system with its own RAM ("… Komplettsystem, Ryzen 7 7735HS, 32GB RAM"), not a barebone
+_COMPLETE_RE = re.compile(r"komplettsystem|komplett-pc|\b\d+\s?GB\s+(?:DDR\d\s+)?RAM\b", re.I)
 
 
 def _part_of(query: str, gh: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -2094,6 +2100,11 @@ async def parts_new_price(parts: list[str]) -> dict[str, Any] | None:
         else:
             missing.append(q)
     if not found or len(found) * 2 < len(names):
+        return None
+    if len(found) > 1 and any(_COMPLETE_RE.search(p["name"]) for p in found):
+        # a whole device with its memory already in it, plus memory and storage on top: counted twice (10-30: a mini
+        # PC priced as "Komplettsystem … 32GB RAM" + 16 GB RAM + 512 GB SSD = € 1,361); a barebone (no RAM) still adds
+        log.info("parts sum refused: %s is a complete device", next(p["name"] for p in found if _COMPLETE_RE.search(p["name"])))
         return None
     return {"name": " + ".join(p["name"] for p in found)[:300], "url": found[0]["url"],
             "price_from": round(sum(p["price_from"] for p in found), 2), "parts": found, "missing": missing}

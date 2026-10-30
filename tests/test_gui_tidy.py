@@ -86,3 +86,23 @@ def test_a_mini_pc_of_another_brand_is_not_the_ad():
                             "Mini pc Nigopi Ryzen 7") == "product"
     assert g.title_conflict("Apple Mac mini M2 8GB 256GB", "Mac Mini M2 256GB") is None
     assert g.title_conflict("Beelink Mini S12 Pro N100 16GB 500GB", "Beelink Mini PC S12 Pro") is None
+
+
+async def test_a_complete_device_and_its_own_parts_are_not_summed(monkeypatch):
+    """10-30: "Mini-PC/Barebone Komplettsystem … 32GB RAM" + 16 GB RAM + 512 GB SSD = € 1,361 for a mini PC."""
+    from app.services import deals
+    found = {"Nigopi Ryzen 7 7735HS Mini-PC Barebone": {"name": "Mini-PC/Barebone Komplettsystem, AMD Ryzen 7 7735HS, 32GB RAM",
+                                                        "url": "https://g/1", "price_from": 959.0},
+             "Crucial 16GB DDR5 SO-DIMM": {"name": "Crucial SO-DIMM 16GB DDR5-4800", "url": "https://g/2", "price_from": 240.9},
+             "NVMe SSD 512GB": {"name": "Kingston KC3000 512GB", "url": "https://g/3", "price_from": 161.24},
+             "Minisforum UM773 Lite Barebone": {"name": "Minisforum UM773 Lite Barebone", "url": "https://g/4", "price_from": 299.0}}
+
+    async def match(q, raise_errors=False):
+        return found.get(q)
+    monkeypatch.setattr(deals, "geizhals_match", match)
+    monkeypatch.setattr(deals, "_part_of", lambda q, gh: gh)
+    assert await deals.parts_new_price(["Nigopi Ryzen 7 7735HS Mini-PC Barebone", "Crucial 16GB DDR5 SO-DIMM",
+                                        "NVMe SSD 512GB"]) is None
+    r = await deals.parts_new_price(["Minisforum UM773 Lite Barebone", "Crucial 16GB DDR5 SO-DIMM"])
+    assert r["price_from"] == 539.9                                    # a real barebone and its RAM still add up
+    assert "Fertiggerät" in deals.PARTS_RULE
