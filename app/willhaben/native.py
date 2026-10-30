@@ -738,6 +738,7 @@ WEB_PREFIXES = (     # the web's /webapi path -> (context link, path after its h
     ("/webapi/iad-upload/", "IAD_API_BASE_URL", "/restapi/v2/"),      # photos: the app's own image resource
 )
 WEB_ME = "/webapi/userprofile-service/userprofile/me"
+WEB_NEW_CHAT = "/webapi/iad-messaging/sendrequest/chat"   # the ad page's contact form: the app's ContactAdvertiserByNewChat
 MY_ADS_ROWS = 50
 MY_ADS_PAGES = 6
 
@@ -746,6 +747,8 @@ def native_url(c: NativeClient, path: str) -> str | None:
     """The app API's URL for a web /webapi path with the same answer, or None (stays with the browser)."""
     if path.startswith("https://www.willhaben.at/"):
         path = path[len("https://www.willhaben.at"):]
+    if path.split("?")[0] == WEB_NEW_CHAT:
+        return c.link("ContactAdvertiserByNewChat")
     if path.split("?")[0] == WEB_ME:
         base = c.link("UserDataResource")
         return f"{base.rstrip('/')}/{c.st.user_id}" if base and c.st.user_id else None
@@ -769,9 +772,10 @@ def active() -> NativeClient | None:
 
 
 # writes that go to the app API too: the same backends behind both (the action links in the app's own ads list point
-# there). Chat messages and read receipts have calls of their own (account.py), photo uploads too (session.upload).
+# there), the contact form that opens a chat too (the app's own body, app_body). Chat messages and read receipts have
+# calls of their own (account.py), photo uploads too (session.upload).
 WRITE_PREFIXES = ("/webapi/myatz/", "/webapi/iad/", "/webapi/iad-upload/", "/webapi/p2p-aggregator/",
-                  "/webapi/chat-api/v1/conversations")
+                  "/webapi/chat-api/v1/conversations", WEB_NEW_CHAT)
 
 
 def route(method: str, path: str, accept: str = "application/json") -> str | None:
@@ -791,6 +795,13 @@ def app_body(path: str, body: Any) -> Any:
     text with line breaks – the app API keeps a description as text and strips HTML tags, so the web editor's
     <p>…</p><p><br></p> lost its paragraphs (seen live 2026-10-30)."""
     web = path[len("https://www.willhaben.at"):] if path.startswith("https://www.willhaben.at/") else path
+    if web.split("?")[0] == WEB_NEW_CHAT and isinstance(body, dict):
+        # the app's AdvertRequestDto (APK 8.67.0): the web form's fields without its own extras
+        out = {k: body[k] for k in ("mailContent", "firstName", "lastName", "telephone", "from", "copyToSender",
+                                    "showTelephoneNumber", "shareTenantProfile") if k in body}
+        if body.get("adId") is not None:
+            out["adId"] = str(body["adId"])
+        return out
     if not web.startswith("/webapi/iad/bap/") or not isinstance(body, dict) or "<" not in str(body.get("description") or ""):
         return body
     from app.willhaben.insert import description_text
@@ -798,11 +809,14 @@ def app_body(path: str, body: Any) -> Any:
     return {**body, "description": description_text(body["description"])}
 
 
-def falls_back(status: int, method: str = "GET") -> bool:
+def falls_back(status: int, method: str = "GET", path: str = "") -> bool:
     """An app API answer the browser should give instead. Reads: login gone there, not found, its error. Writes only
-    when willhaben surely did nothing (refused or no such endpoint): after a 5xx it may have, so no second try."""
+    when willhaben surely did nothing (refused or no such endpoint): after a 5xx it may have, so no second try. The
+    new-chat form also when willhaben rejected the body (400/422): nothing went to the seller then."""
     if method.upper() == "GET":
         return status in (401, 403, 404) or status >= 500
+    if path.split("?")[0].endswith(WEB_NEW_CHAT) and status in (400, 422):
+        return True
     return status in (401, 403, 404, 405)
 
 

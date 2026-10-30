@@ -247,8 +247,9 @@ class BrowserSession:
                 if nr.status == 429:
                     raise Blocked(t("willhaben responded {status}; pausing {s}s", status=429,
                                     s=f"{self.limiter.penalize():.0f}"))
-                if not native.falls_back(nr.status, method):
+                if not native.falls_back(nr.status, method, path):
                     return ApiResponse(status=nr.status, text=nr.text, url=nr.url)
+                log.info("app API answered HTTP %s for %s, the browser does it", nr.status, access_log.classify(url))
             native.counts["fallback"] += 1
         else:
             native.counts["browser"] += 1

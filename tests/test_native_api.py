@@ -793,3 +793,18 @@ def test_the_key_field_shows_the_env_value_read_only_with_a_yellow_outline(monke
         monkeypatch.setattr(get_settings(), "willhaben_app_key", "")
         field = re.search(r'<input name="key"[^>]*>', c.get("/settings/willhaben").text).group(0)
         assert "readonly" not in field and 'type="password"' in field and "value=" not in field
+
+
+def test_the_new_chat_form_goes_to_the_app_with_its_own_fields(data, monkeypatch):
+    c = _routed_client(monkeypatch)
+    c.st.links["ContactAdvertiserByNewChat"] = "https://api.willhaben.at/restapi/v2/sendrequest/chat"
+    path = "/webapi/iad-messaging/sendrequest/chat"
+    assert native.route("POST", path) == "https://api.willhaben.at/restapi/v2/sendrequest/chat"
+    web = {"fromFullName": "A B", "shareTenantProfile": False, "from": "a@example.org", "adId": 123, "copyToSender": False,
+           "showTelephoneNumber": False, "telephone": "", "selectedContactSuggestions": [], "mailContent": "Hallo",
+           "firstName": "A", "lastName": "B"}
+    out = native.app_body(path, web)
+    assert out == {"mailContent": "Hallo", "firstName": "A", "lastName": "B", "telephone": "", "from": "a@example.org",
+                   "copyToSender": False, "showTelephoneNumber": False, "shareTenantProfile": False, "adId": "123"}
+    assert native.falls_back(400, "POST", path) and not native.falls_back(500, "POST", path)   # a 5xx may have gone out
+    assert not native.falls_back(400, "PUT", "/webapi/iad/bap/edit")
