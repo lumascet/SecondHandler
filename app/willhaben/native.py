@@ -65,7 +65,7 @@ CONFIG_ITEMS = ("root-links",)
 APP_TOKEN_MARGIN_S = 2 * 86400          # renewed two days before it runs out
 ACCESS_MARGIN_S = 60
 LOGIN_PAUSE_S = 24 * 3600               # after a refused login: no new attempt by itself for a day
-CODE_WAIT_S = 15 * 60                   # a login waits this long for the e-mail code
+CODE_WAIT_S = 15 * 60                   # a login waits this long for the code
 TIMEOUT_S = 30
 
 # read once after the first login (GET only): what the account calls would need, to see the shapes. {uid}/{uuid}: the
@@ -90,12 +90,12 @@ class LoginRefused(NativeError):
 
 
 class CodeNeeded(LoginRefused):
-    """willhaben sent a code by e-mail (a device it does not know yet): the login waits for submit_code()."""
+    """willhaben sent a code by SMS or e-mail (a device it does not know yet): the login waits for submit_code()."""
 
 
 @dataclass
 class Pending:
-    """A password login stopped at the e-mail code form, until the code comes (in memory only)."""
+    """A password login stopped at the code form, until the code comes (in memory only)."""
     action: str
     fields: dict[str, str]
     code_fields: list[str]
@@ -173,8 +173,8 @@ def _attr(tag: str, name: str) -> str | None:
 
 
 def challenge_form(html: str) -> tuple[str, dict[str, str], list[str]] | None:
-    """A Keycloak form asking for a code: (action, fields to send as they are, the code field names), or None.
-    Hidden fields and named buttons go back unchanged, checkboxes ticked (e.g. "trust this device")."""
+    """A Keycloak form asking for a code (by SMS or e-mail): (action, fields to send as they are, the code field names),
+    or None. Hidden fields and named buttons go back unchanged, checkboxes ticked (e.g. "trust this device")."""
     for attrs, inner in _ANY_FORM.findall(html):
         action = _attr(attrs, "action")
         if not action or "login-actions" not in action:
@@ -194,6 +194,10 @@ def challenge_form(html: str) -> tuple[str, dict[str, str], list[str]] | None:
                 fields[name] = _attr(tag, "value") or "on"
             elif kind in ("text", "number", "tel") and name not in ("username", "password", "email"):
                 codes.append(name)
+        if not codes:      # willhaben's SMS page: unnamed boxes per digit, its script fills a hidden "code" field
+            codes = [n for n in fields if n.lower() in ("code", "otp", "totp", "emailcode", "smscode") and not fields[n]]
+            for n in codes:
+                fields.pop(n)
         if codes:
             return action, fields, codes
     return None
@@ -450,7 +454,7 @@ class NativeClient:
                                cookies=[(ck.name, ck.value, ck.domain, ck.path) for ck in c.cookies.jar],
                                verifier=verifier, state=state, user=user, referer=str(r.url),
                                until=time.time() + CODE_WAIT_S)
-        raise CodeNeeded(t("willhaben sent a code by e-mail – enter it in Settings → willhaben"))
+        raise CodeNeeded(t("willhaben sent a code (SMS or e-mail) – enter it in Settings → willhaben"))
 
     async def submit_code(self, code: str) -> None:
         """Finish a login waiting for willhaben's e-mail code."""
@@ -769,7 +773,7 @@ async def code_now(code: str) -> str:
     try:
         await n.submit_code(code)
     except CodeNeeded:
-        return t("The code did not fit – enter the code from the newest e-mail")
+        return t("The code did not fit – enter the newest code willhaben sent")
     except LoginRefused as e:
         return str(e)
     await _after_login(n)

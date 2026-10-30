@@ -417,3 +417,19 @@ def test_code_form_and_token_id():
     body = base64.urlsafe_b64encode(json.dumps({"sub": "a-b", "loginId": 42}).encode()).decode().rstrip("=")
     assert native.token_user_id(f"h.{body}.s") == "42"
     assert native.token_user_id("garbage") == ""
+
+
+# willhaben's SMS page (seen 2026-10-30, reduced): one unnamed box per digit, the script fills the hidden "code" field
+SMS_PAGE = ('<form id="kc-mobile-update-form" action="https://sso.willhaben.at/auth/realms/willhaben/login-actions/'
+            'authenticate?session_code=s&amp;execution=e" method="post"><input type="hidden" id="otp" name="code" value/>'
+            '<input id="otp-input-1" class="wh-otp-input" type="text" inputmode="numeric" maxlength="1" data-pos="0"  />'
+            '<input id="otp-input-2" class="wh-otp-input" type="text" inputmode="numeric" maxlength="1" data-pos="1"  />'
+            '<input type="hidden" id="referenceID" name="referenceID" value="ref1"/>'
+            '<button id="submitOneTimePassword" class="submit-button" name="registration" type="submit">Weiter</button>'
+            '</form>')
+
+
+def test_the_sms_code_page():
+    action, fields, codes = native.challenge_form(SMS_PAGE)
+    assert action.endswith("session_code=s&execution=e")
+    assert codes == ["code"] and fields == {"referenceID": "ref1", "registration": ""}
