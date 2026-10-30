@@ -70,18 +70,19 @@ class PublicClient(httpclient.HttpPlatformClient):
         super().__init__("willhaben", willhaben_limiter(), name="willhaben",
                          headers={"user-agent": s.user_agent, "accept-language": "de-AT,de;q=0.9,en;q=0.5"},
                          httpx_transport=transport)
+        self.app_search = transport is None     # a test's canned transport answers the web's search, not the app's
 
     async def _get(self, url: str, *, json_api: bool, cache_s: float = 0, kind: str | None = None,  # type: ignore[override]
                    refresh: bool = False) -> httpclient.FetchResponse:
         """GET through the shared limiter; `cache_s` > 0 reuses a recent 200/404 answer for the same URL (not with
         `refresh`)."""
         tunnel, route = self._tunnel(), None
-        if json_api and tunnel is not None and self._lane() is None:
+        if json_api and self.app_search and tunnel is not None and self._lane() is None:
             try:
                 route = await tunnel.ensure()       # the server this request goes through (the VPN send asks the same)
             except PlatformError:
                 route = None                        # none now: the web path reports it as before
-        if json_api and self._lane() is None and (tunnel is None or route is not None):
+        if json_api and self.app_search and self._lane() is None and (tunnel is None or route is not None):
             # the app API's search: same answer, an anonymous app identity of its own – one per VPN server, its app
             # token fetched through that server (never at home for a server). Parallel lanes: the web search.
             from app.willhaben import native

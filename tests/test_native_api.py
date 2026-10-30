@@ -503,6 +503,7 @@ async def test_anonymous_search_through_the_app_api_never_as_the_account(data, m
     web = []
     pc = public.PublicClient(transport=httpx.MockTransport(lambda r: (seen.append(r) or web.append(r) or
                                                                        httpx.Response(200, json={"rowsFound": 0}))))
+    pc.app_search = True                       # a canned transport skips it otherwise
     url = "https://www.willhaben.at/webapi/ad-search/search/atz/seo/kaufen-und-verkaufen/marktplatz?keyword=rad&rows=30"
     r = await pc._get(url, json_api=True)
     assert r.status_code == 200
@@ -526,6 +527,7 @@ async def test_anonymous_search_falls_back_to_the_web(data, monkeypatch):
         return httpx.Response(503 if "ad-search.willhaben.at" in str(req.url) else 200, json={"rowsFound": 0})
 
     pc = public.PublicClient(transport=httpx.MockTransport(site))
+    pc.app_search = True
     url = "https://www.willhaben.at/webapi/ad-search/search/atz/seo/x?rows=5"
     monkeypatch.setattr(pc, "_check_status", lambda r: None)
     assert (await pc._get(url, json_api=True)).status_code == 200
@@ -725,3 +727,26 @@ async def test_the_live_chat_socket_logs_in_like_the_app_and_hands_over_when_ref
         refused.start()
         await asyncio.wait_for(refused.task, 5)
         assert refused.refused and got[-1] == {"_state": "closed", "code": 403}
+
+
+def test_ad_bodies_carry_the_description_as_text_to_the_app_api():
+    html = "<p>Wurde getestet.</p><p><br></p><p>Zwei Stück.</p><ul><li>Kabel</li></ul>"
+    body = {"adId": 1, "heading": "Lüfter", "description": html}
+    out = native.app_body("/webapi/iad/bap/edit", body)
+    assert out["description"] == "Wurde getestet.\n\nZwei Stück.\n• Kabel" and out["heading"] == "Lüfter"
+    assert body["description"] == html                                  # the browser path keeps its HTML
+    assert native.app_body("/webapi/iad/bap/save", {"description": "schon Text"})["description"] == "schon Text"
+    assert native.app_body("/webapi/chat-api/v1/conversations", {"description": html})["description"] == html
+
+
+async def test_a_failed_anonymous_app_token_pauses_the_app_search(data, monkeypatch):
+    def down(req):
+        raise httpx.ConnectError("unreachable")
+
+    anon = native.NativeClient(transport=httpx.MockTransport(down), state_file=native.ANON_STATE_FILE)
+    monkeypatch.setattr(native, "_anon", anon)
+    url = "https://www.willhaben.at/webapi/ad-search/search/atz/seo/x?rows=5"
+    assert await native.anon_route(url) is None
+    assert anon.st.paused_until > 0
+    anon._transport = httpx.MockTransport(FakeWillhaben())                 # back, but the pause holds
+    assert await native.anon_route(url) is None and not anon.st.app_token

@@ -763,6 +763,18 @@ def route(method: str, path: str, accept: str = "application/json") -> str | Non
     return native_url(c, path)
 
 
+def app_body(path: str, body: Any) -> Any:
+    """The body of a web request as the app API wants it. Ad bodies (bap edit/presave/save): the description as plain
+    text with line breaks – the app API keeps a description as text and strips HTML tags, so the web editor's
+    <p>…</p><p><br></p> lost its paragraphs (seen live 2026-10-30)."""
+    web = path[len("https://www.willhaben.at"):] if path.startswith("https://www.willhaben.at/") else path
+    if not web.startswith("/webapi/iad/bap/") or not isinstance(body, dict) or "<" not in str(body.get("description") or ""):
+        return body
+    from app.willhaben.insert import description_text
+
+    return {**body, "description": description_text(body["description"])}
+
+
 def falls_back(status: int, method: str = "GET") -> bool:
     """An app API answer the browser should give instead. Reads: login gone there, not found, its error. Writes only
     when willhaben surely did nothing (refused or no such endpoint): after a 5xx it may have, so no second try."""
@@ -800,6 +812,7 @@ async def my_ads_list() -> dict[str, Any] | None:
     return merged
 
 
+ANON_PAUSE_S = 10 * 60   # after a failed app token: the web search for this long (no failing request per search)
 ANON_SEARCH = "/webapi/ad-search/"     # the web's search path; the app's is the same under ad-search.willhaben.at
 
 
@@ -816,13 +829,16 @@ async def anon_route(url: str, route: Any = None) -> tuple[str, dict[str, str]] 
     if not web.startswith(ANON_SEARCH) or (get_setting("willhaben_native_search") or "1") == "0":
         return None
     c = anon_client(route)
+    if c.st.paused_until > time.time():                       # its app token failed lately: the web for a while
+        return None
     if time.time() - c.st.logged_in_at > ANON_SESSION_S:      # here: when this identity began
         c.new_identity()
         c.st.logged_in_at = time.time()
     try:
         await c.ensure_app_token()
     except (NativeError, httpx.HTTPError) as e:
-        log.info("willhaben app API (anonymous): no app token, the web answers: %s", e)
+        c.st.paused_until = time.time() + ANON_PAUSE_S
+        log.info("willhaben app API (anonymous): no app token, the web answers for %d min: %s", ANON_PAUSE_S // 60, e)
         return None
     base = c.link("Search")
     if not base:

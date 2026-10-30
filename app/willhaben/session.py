@@ -238,7 +238,7 @@ class BrowserSession:
             return ApiResponse(*replay.as_api_response(rec))
         if native_ok and not replay.enabled() and (native_url := native.route(method, path, accept)):
             try:
-                nr = await native.get_client().request(method, native_url, body)
+                nr = await native.get_client().request(method, native_url, native.app_body(path, body))
             except native.NativeError as e:
                 if method.upper() != "GET":     # it may have reached willhaben: never a second try through the browser
                     raise
