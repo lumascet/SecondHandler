@@ -82,9 +82,12 @@ class FakeWillhaben:
 
 @pytest.fixture
 def data(monkeypatch, tmp_path):
+    from app.willhaben import access_log
+
     monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
     monkeypatch.setattr(native.asyncio, "sleep", _nosleep)
-    return tmp_path
+    yield tmp_path
+    access_log.reset()                  # the fake requests counted here must not reach the access statistics tests
 
 
 async def _nosleep(*_a, **_k):
@@ -466,3 +469,67 @@ async def test_selftest_runs_every_read_and_says_who_answered(data, monkeypatch)
     assert res["PayLivery fee window"]["summary"] == "no ad or user"
     assert all(r["ok"] for r in res.values())
     assert native.get_client().status()["selftest"]
+
+
+def _anon(handler):
+    """The anonymous visitor's app identity, its app token already fetched (this hour's identity)."""
+    import time
+
+    anon = native.NativeClient(transport=httpx.MockTransport(handler), state_file=native.ANON_STATE_FILE)
+    anon.st.links["Search"] = "https://ad-search.willhaben.at/restapi/v2/search/atz"
+    anon.st.app_token, anon.st.app_token_until, anon.st.logged_in_at = "APPTOKEN", 9e12, time.time()
+    return anon
+
+
+async def test_anonymous_search_through_the_app_api_never_as_the_account(data, monkeypatch):
+    from app.willhaben import public
+
+    account = _routed_client(monkeypatch)
+    account.st.access_token, account.st.visitor_id = "ACCOUNT", "account-device"
+    seen = []
+
+    def app_side(req):
+        if str(req.url).endswith("service-registry.json") or str(req.url).startswith(APPDATA):
+            return FakeWillhaben()(req)
+        seen.append(req)
+        return httpx.Response(200, json={"rowsFound": 1, "advertSummaryList": {"advertSummary": []}})
+
+    anon = _anon(app_side)
+    monkeypatch.setattr(native, "_anon", anon)
+    # the anonymous client's own requests go through PublicClient's transport (pacing, recording, VPN)
+    web = []
+    pc = public.PublicClient(transport=httpx.MockTransport(lambda r: (seen.append(r) or web.append(r) or
+                                                                       httpx.Response(200, json={"rowsFound": 0}))))
+    url = "https://www.willhaben.at/webapi/ad-search/search/atz/seo/kaufen-und-verkaufen/marktplatz?keyword=rad&rows=30"
+    r = await pc._get(url, json_api=True)
+    assert r.status_code == 200
+    req = seen[-1]
+    assert str(req.url) == ("https://ad-search.willhaben.at/restapi/v2/search/atz/seo/kaufen-und-verkaufen/marktplatz"
+                            "?keyword=rad&rows=30")
+    assert "authorization" not in req.headers and req.headers["x-wh-application-token"] == "APPTOKEN"
+    assert req.headers["x-wh-visitor-id"] != "account-device" and native.get_client().st.visitor_id == "account-device"
+
+
+async def test_anonymous_search_falls_back_to_the_web(data, monkeypatch):
+    from app.db import set_setting
+    from app.willhaben import public
+
+    anon = _anon(FakeWillhaben())
+    monkeypatch.setattr(native, "_anon", anon)
+    asked = []
+
+    def site(req):
+        asked.append(str(req.url))
+        return httpx.Response(503 if "ad-search.willhaben.at" in str(req.url) else 200, json={"rowsFound": 0})
+
+    pc = public.PublicClient(transport=httpx.MockTransport(site))
+    url = "https://www.willhaben.at/webapi/ad-search/search/atz/seo/x?rows=5"
+    monkeypatch.setattr(pc, "_check_status", lambda r: None)
+    assert (await pc._get(url, json_api=True)).status_code == 200
+    assert asked[-1] == url and any("ad-search.willhaben.at" in u for u in asked)
+    set_setting("willhaben_native_search", "0")
+    try:
+        assert await native.anon_route(url) is None
+    finally:
+        set_setting("willhaben_native_search", "1")
+    assert await native.anon_route("https://www.willhaben.at/iad/object?adId=1") is None    # pages: the web

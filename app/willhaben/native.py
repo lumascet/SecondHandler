@@ -270,21 +270,25 @@ class State:
     paused_until: float = 0
 
 
-def _path():
-    return get_settings().data_dir / "willhaben-native.json"
+STATE_FILE = "willhaben-native.json"
+ANON_STATE_FILE = "willhaben-native-anon.json"     # the anonymous visitor's own app identity (searches)
 
 
-def load_state() -> State:
+def _path(name: str = STATE_FILE):
+    return get_settings().data_dir / name
+
+
+def load_state(name: str = STATE_FILE) -> State:
     try:
-        raw = json.loads(_path().read_text(encoding="utf-8"))
+        raw = json.loads(_path(name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return State()
     known = State.__dataclass_fields__
     return State(**{k: v for k, v in raw.items() if k in known})
 
 
-def save_state(st: State) -> None:
-    p = _path()
+def save_state(st: State, name: str = STATE_FILE) -> None:
+    p = _path(name)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -308,10 +312,12 @@ class NativeResponse:
 
 
 class NativeClient:
-    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        self.st = load_state()
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None, state_file: str = STATE_FILE) -> None:
+        self._file = state_file
+        self.channel = "anonymous" if state_file == ANON_STATE_FILE else "account"
+        self.st = load_state(state_file)
         if not self.st.salt:                     # the app makes one per process; one per install is as good
-            self.st.salt, self.st.visitor_id, self.st.fp = _b64url(os.urandom(12)), str(uuid.uuid4()), fingerprint()
+            self.new_identity()
         self._transport = transport
         self._lock = asyncio.Lock()
         self.pending: Pending | None = None
@@ -321,6 +327,11 @@ class NativeClient:
         return httpx.AsyncClient(timeout=TIMEOUT_S, transport=self._transport, **kw)
 
     # ------------------------------------------------------------ state
+    def new_identity(self) -> None:
+        """Another install as willhaben sees it: salt, device id, login fingerprint; the app token goes with them."""
+        self.st.salt, self.st.visitor_id, self.st.fp = _b64url(os.urandom(12)), str(uuid.uuid4()), fingerprint()
+        self.st.app_token, self.st.app_token_until = "", 0
+
     @property
     def logged_in(self) -> bool:
         return bool(self.st.refresh_token)
@@ -346,7 +357,7 @@ class NativeClient:
         self.st.refresh_token = self.st.access_token = self.st.login_user = self.st.user_id = ""
         self.st.access_until = self.st.logged_in_at = self.st.paused_until = 0
         self.st.user_links, self.st.error = {}, ""
-        save_state(self.st)
+        save_state(self.st, self._file)
 
     def _headers(self, auth: bool = True) -> dict[str, str]:
         h = {"x-wh-client": CLIENT, "x-wh-date": timestamp(), "x-wh-security-version": SECURITY_VERSION,
@@ -364,7 +375,7 @@ class NativeClient:
         async with self._client() as c:
             async with self.limiter:
                 r = await c.get(REGISTRY_URL, headers={"user-agent": USER_AGENT, "accept": "application/json"})
-            recorder.record_http("account", "native", "GET", REGISTRY_URL, status=r.status_code, resp_body=r.text)
+            recorder.record_http(self.channel, "native", "GET", REGISTRY_URL, status=r.status_code, resp_body=r.text)
             if r.status_code != 200:
                 raise NativeError(f"service registry: HTTP {r.status_code}")
             url = ((r.json().get("environments") or {}).get("prod") or {}).get("applicationDataUri")
@@ -377,7 +388,7 @@ class NativeClient:
                 r = await c.post(url, params=[("config_item", i) for i in CONFIG_ITEMS], headers=headers,
                                  json=token_request(self.st.salt, ts))
             # the answer holds the app token: recorded without its body
-            recorder.record_http("account", "native", "POST", url, status=r.status_code, store_response=False)
+            recorder.record_http(self.channel, "native", "POST", url, status=r.status_code, store_response=False)
         if r.status_code != 200:
             raise NativeError(f"application-data: HTTP {r.status_code}")
         data = r.json()
@@ -387,7 +398,7 @@ class NativeClient:
         self.st.app_token = tok["value"]
         self.st.app_token_until = time.time() + float(tok.get("expireInSeconds") or 86400)
         self.st.links = parse_links(data) or self.st.links
-        save_state(self.st)
+        save_state(self.st, self._file)
         log.info("willhaben app API: app token renewed, %d links", len(self.st.links))
 
     async def ensure_app_token(self) -> None:
@@ -505,7 +516,7 @@ class NativeClient:
                                for ck in c.cookies.jar if ck.name != "wh-fp"]
         self.st.login_user, self.st.logged_in_at, self.st.error, self.st.paused_until = user, time.time(), "", 0
         self.st.login_via = "password"
-        save_state(self.st)
+        save_state(self.st, self._file)
         log.info("willhaben app API: logged in with the stored password")
 
     async def login_via_browser(self, session: Any, timeout_s: float = 25) -> None:
@@ -544,7 +555,7 @@ class NativeClient:
         self.st.user_id = str((session.user or {}).get("id") or self.st.user_id)
         self.st.login_via = "browser"
         self.st.logged_in_at, self.st.error, self.st.paused_until = time.time(), "", 0
-        save_state(self.st)
+        save_state(self.st, self._file)
         log.info("willhaben app API: logged in through the browser's willhaben login")
 
     @staticmethod
@@ -573,7 +584,7 @@ class NativeClient:
             if form.get("grant_type") == "refresh_token":
                 self.st.refresh_token = self.st.access_token = ""
                 self.st.error = "logged out (refresh token refused)"
-                save_state(self.st)
+                save_state(self.st, self._file)
             raise LoginRefused(f"token: HTTP {r.status_code}")
         if r.status_code != 200:
             raise NativeError(f"token: HTTP {r.status_code}")
@@ -581,7 +592,7 @@ class NativeClient:
         self.st.access_token = data["access_token"]
         self.st.access_until = time.time() + float(data.get("expires_in") or 300)
         self.st.refresh_token = data.get("refresh_token") or self.st.refresh_token
-        save_state(self.st)
+        save_state(self.st, self._file)
 
     async def ensure_access(self) -> None:
         async with self._lock:
@@ -632,7 +643,7 @@ class NativeClient:
         r = await self.request("GET", f"{url.rstrip('/')}/{self.st.user_id}", kind="native")
         if r.ok:
             self.st.user_links = parse_links(r.json())
-            save_state(self.st)
+            save_state(self.st, self._file)
         return self.st.user_links
 
     async def probe(self, ids: dict[str, str] | None = None) -> list[tuple[str, int | None]]:
@@ -658,7 +669,7 @@ class NativeClient:
                 log.info("willhaben app API probe %s: %s", link_id, e)
                 out.append((link_id + suffix, None))
         self.st.probed = PROBE_VERSION
-        save_state(self.st)
+        save_state(self.st, self._file)
         log.info("willhaben app API probe: %s", ", ".join(f"{k}={v}" for k, v in out))
         return out
 
@@ -752,6 +763,45 @@ async def my_ads_list() -> dict[str, Any] | None:
         if not isinstance(total, int) or have >= total or not any(v.get("advertDetails") for v in data.get("verticalList") or []):
             break
     return merged
+
+
+ANON_SEARCH = "/webapi/ad-search/"     # the web's search path; the app's is the same under ad-search.willhaben.at
+
+
+async def anon_route(url: str) -> tuple[str, dict[str, str]] | None:
+    """The app API's URL and headers for an anonymous search request of the web (same answer, seen 2026-10-30), or
+    None (setting willhaben_native_search = 0, not a search, no app token to be had). The visitor's own app identity,
+    never the account's: renewed like the web visitor (ANON_SESSION_S), never logged in."""
+    from app.db import get_setting
+    from app.platforms.httpclient import ANON_SESSION_S
+
+    web = url[len("https://www.willhaben.at"):] if url.startswith("https://www.willhaben.at/") else url
+    if not web.startswith(ANON_SEARCH) or (get_setting("willhaben_native_search") or "1") == "0":
+        return None
+    c = anon_client()
+    if time.time() - c.st.logged_in_at > ANON_SESSION_S:      # here: when this identity began
+        c.new_identity()
+        c.st.logged_in_at = time.time()
+    try:
+        await c.ensure_app_token()
+    except (NativeError, httpx.HTTPError) as e:
+        log.info("willhaben app API (anonymous): no app token, the web answers: %s", e)
+        return None
+    base = c.link("Search")
+    if not base:
+        return None
+    host = "{0.scheme}://{0.netloc}".format(urlsplit(base))
+    return host + "/restapi/v2/" + web[len(ANON_SEARCH):], c._headers(auth=False)
+
+
+_anon: NativeClient | None = None
+
+
+def anon_client() -> NativeClient:
+    global _anon
+    if _anon is None:
+        _anon = NativeClient(state_file=ANON_STATE_FILE)
+    return _anon
 
 
 _client: NativeClient | None = None

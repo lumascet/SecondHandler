@@ -75,6 +75,18 @@ class PublicClient(httpclient.HttpPlatformClient):
                    refresh: bool = False) -> httpclient.FetchResponse:
         """GET through the shared limiter; `cache_s` > 0 reuses a recent 200/404 answer for the same URL (not with
         `refresh`)."""
+        if json_api and self._tunnel() is None and self._lane() is None:
+            # the app API's search: same answer, its own anonymous app identity. Only from the home IP: through the VPN
+            # its app token (fetched from home) would link the two.
+            from app.willhaben import native
+
+            if alt := await native.anon_route(url):
+                app_url, app_headers = alt
+                r = await super()._get(app_url, headers=app_headers, cache_s=cache_s, kind=kind or self.classify(url),
+                                       refresh=refresh)
+                if r.status_code == 200:
+                    return r
+                log.info("willhaben app search: HTTP %s, the web answers", r.status_code)
         headers = {"accept": "application/json", "x-wh-client": WEB_CLIENT} if json_api else {"accept": "text/html"}
         return await super()._get(url, headers=headers, cache_s=cache_s, kind=kind, refresh=refresh)
 
