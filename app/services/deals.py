@@ -1721,7 +1721,7 @@ def cached(ad_id: str, query: str | None = None, category_url: str | None = None
             == _key(ad_id, query, None, own_query)[1]:
         at = _ran_at(row.result)
         age = (utcnow() - at).total_seconds() if at else RESULT_TTL_S
-        if 0 <= age < RESULT_TTL_S and not double_counted(row.result.get("geizhals")):
+        if 0 <= age < RESULT_TTL_S and not stale_product(row.result):
             price = (row.result.get("ad") or {}).get("price")
             res = {**row.result, "claude": _claude_for(row.claude or row.result.get("claude"), price)}
             _put(_results, key, res, RESULT_TTL_S, at=time.monotonic() - age)
@@ -1737,6 +1737,20 @@ def stored_geizhals(ad_id: str) -> dict[str, Any] | None:
     if gh.get("by") != "claude" or double_counted(gh):
         return None              # a sum kept from before its check (10-30) is found anew, not kept
     return gh
+
+
+def stale_product(result: dict[str, Any] | None) -> bool:
+    """A stored check whose product would not pass now: a double-counted sum, or a product nobody checked that the
+    title test rejects (10-30) – the check is run again instead of served."""
+    gh = (result or {}).get("geizhals") or {}
+    if double_counted(gh):
+        return True
+    ad = (result or {}).get("ad") or {}
+    title = ad.get("title") or ad.get("heading") or ""
+    if not title or (result or {}).get("own_query"):     # the owner's own search term found it: not the title's
+        return False
+    return bool(gh.get("name") and gh.get("by") != "claude" and not gh.get("checked")
+                and geizhals.title_conflict(gh["name"], title))
 
 
 def double_counted(gh: dict[str, Any] | None) -> bool:

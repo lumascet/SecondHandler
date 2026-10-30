@@ -116,3 +116,15 @@ def test_a_double_counted_sum_stored_before_is_not_kept():
     assert deals.double_counted(bad)
     assert not deals.double_counted({"parts": [{"name": "Minisforum UM773 Lite Barebone"}, {"name": "Crucial 16GB"}]})
     assert not deals.double_counted({"name": "Captiva Mini PC, Ryzen AI 7 350, 32GB RAM"})   # one product: not a sum
+
+
+def test_a_stored_check_with_a_product_that_would_not_pass_now_is_run_again():
+    from app.services import deals
+    captiva = {"ad": {"title": "Mini pc Nigopi Ryzen 7"},
+               "geizhals": {"name": "Captiva Mini PC Business/Office R10-2597, Ryzen AI 7 350, 32GB RAM, 2TB SSD",
+                            "price_from": 2019.0}}
+    assert deals.stale_product(captiva)
+    assert not deals.stale_product({**captiva, "geizhals": {**captiva["geizhals"], "by": "claude"}})   # Claude's pick
+    assert not deals.stale_product({**captiva, "own_query": True})          # found by the owner's own term
+    assert not deals.stale_product({"ad": {"title": "Samsung 980 Pro 1TB"},
+                                    "geizhals": {"name": "Samsung SSD 980 PRO 1TB", "price_from": 99}})
