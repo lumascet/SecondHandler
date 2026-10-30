@@ -32,6 +32,7 @@ import re
 import secrets
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import unescape
@@ -348,6 +349,49 @@ class NativeClient:
         save_state(self.st)
         log.info("willhaben app API: logged in")
 
+    async def login_via_browser(self, session: Any, timeout_s: float = 25) -> None:
+        """The app's login URL opened in the app's browser: its Keycloak session (same realm as the web login) hands
+        out the code at once, with no password and no new-device check. LoginRefused when the browser is logged out
+        there (the login form shows instead of the redirect)."""
+        await self.ensure_app_token()
+        verifier, challenge = pkce()
+        state = _b64url(os.urandom(12))
+        q = httpx.QueryParams({"client_id": CLIENT_ID, "response_type": "code", "redirect_uri": REDIRECT_URI,
+                               "scope": "openid", "code_challenge": challenge, "code_challenge_method": "S256",
+                               "state": state, "ui_locales": "de"})
+        url = f"{self._sso('auth')}?{q}"
+        got: asyncio.Future = asyncio.get_running_loop().create_future()
+
+        def seen(resp: Any) -> None:
+            loc = resp.headers.get("location") or ""
+            if loc.startswith(REDIRECT_URI) and not got.done():
+                got.set_result(loc)
+
+        page = await session.context.new_page()
+        page.on("response", seen)
+        try:
+            async with self.limiter:
+                with suppress(Exception):          # the redirect to willhaben-app:// ends the navigation with an error
+                    await session._goto(page, url, "login", wait_until="commit", timeout=int(timeout_s * 1000))
+                try:
+                    loc = await asyncio.wait_for(asyncio.shield(got), 3)
+                except TimeoutError:
+                    raise LoginRefused("the browser is not logged in at willhaben") from None
+        finally:
+            with suppress(Exception):
+                await page.close()
+        qs = parse_qs(urlsplit(loc).query)
+        if qs.get("error"):
+            raise LoginRefused(qs.get("error_description", qs["error"])[0])
+        if (qs.get("state") or [""])[0] != state or not qs.get("code"):
+            raise LoginRefused("no code in the redirect")
+        await self._token({"grant_type": "authorization_code", "code": qs["code"][0], "redirect_uri": REDIRECT_URI,
+                           "client_id": CLIENT_ID, "code_verifier": verifier})
+        self.st.login_user = (session.user or {}).get("email") or "browser"
+        self.st.logged_in_at, self.st.error, self.st.paused_until = time.time(), "", 0
+        save_state(self.st)
+        log.info("willhaben app API: logged in through the browser's willhaben login")
+
     @staticmethod
     def _code(r: httpx.Response) -> tuple[str, str] | None:
         loc = r.headers.get("location") or ""
@@ -469,13 +513,22 @@ def get_client() -> NativeClient:
 
 
 async def keep_job() -> None:
-    """Scheduler: app token fresh; logged in with the stored password when there is one and no login yet; the probe
-    once after the first login. A refused login pauses for a day (no retry loop against Keycloak)."""
+    """Scheduler: app token fresh; without a login yet, logged in through the browser's willhaben login (silent), else
+    with the stored password; the probe once after the first login. A refused password login pauses for a day (no retry
+    loop against Keycloak)."""
     from app.services import credentials
+    from app.willhaben.session import get_session
 
     n = get_client()
     try:
         await n.ensure_app_token()
+        if not n.logged_in:
+            sess = get_session()
+            if sess.started and sess.logged_in and getattr(sess, "context", None) is not None:
+                try:
+                    await n.login_via_browser(sess)
+                except LoginRefused as e:
+                    log.info("willhaben app API: no login through the browser (%s)", e)
         if not n.logged_in:
             cred = credentials.get("willhaben")
             if not cred or n.st.paused_until > time.time():

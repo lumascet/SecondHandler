@@ -145,3 +145,53 @@ def test_refusal_reasons():
     assert native.refusal('<input type="hidden" id="g-recaptcha-sitekey-v2" value="6Lc">') == "captcha"
     assert native.refusal('<input type="hidden" id="g-recaptcha-sitekey-v2" value="">') == "login page again"
     assert native.refusal('<input name="otp">') == "code"
+
+
+class _Resp:
+    def __init__(self, location):
+        self.headers = {"location": location}
+
+
+class _Page:
+    def __init__(self, fake, logged_in):
+        self.fake, self.logged_in, self.cb, self.closed = fake, logged_in, None, False
+
+    def on(self, event, cb):
+        self.cb = cb
+
+    async def close(self):
+        self.closed = True
+
+
+class _Session:
+    def __init__(self, fake, logged_in=True):
+        self.user = {"email": "me@example.org"}
+        self.page = _Page(fake, logged_in)
+        self.context = self
+
+    async def new_page(self):
+        return self.page
+
+    async def _goto(self, page, url, kind, **kw):
+        q = parse_qs(urlsplit(url).query)
+        page.fake.challenge, page.fake.state = q["code_challenge"][0], q["state"][0]
+        if page.logged_in:          # Keycloak's SSO session: straight back to the app with a code
+            page.cb(_Resp(f"{native.REDIRECT_URI}?state={q['state'][0]}&code=CODE1"))
+            raise RuntimeError("net::ERR_ABORTED")
+
+
+async def test_login_through_the_browser(data):
+    fake = FakeWillhaben()
+    n = native.NativeClient(transport=httpx.MockTransport(fake))
+    s = _Session(fake)
+    await n.login_via_browser(s)
+    assert n.logged_in and n.st.login_user == "me@example.org" and s.page.closed
+    assert not any("login-actions" in str(c.url) for c in fake.calls)       # no password involved
+
+
+async def test_browser_logged_out_is_refused(data):
+    fake = FakeWillhaben()
+    n = native.NativeClient(transport=httpx.MockTransport(fake))
+    with pytest.raises(native.LoginRefused, match="not logged in"):
+        await n.login_via_browser(_Session(fake, logged_in=False))
+    assert not n.logged_in
