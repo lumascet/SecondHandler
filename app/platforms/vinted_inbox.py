@@ -159,12 +159,47 @@ def message_text(m: dict[str, Any]) -> tuple[str, str | None]:
             or m.get("message_type") in ("legacy_offer_request", "legacy_offer"):
         return offer_text(e), "integration"
     if m.get("message_type") == "legacy_action" or "entity" in d:
-        text = " – ".join(x for x in (e.get("title"), e.get("subtitle")) if x) or str(d.get("event_type") or "")
+        text = " – ".join(x for x in (plain(e.get("title")), plain(e.get("subtitle"))) if x) or str(d.get("event_type") or "")
         return text, "integration"
     for key in ("body", "content", "text", "message"):
         if isinstance(d.get(key), str) and d[key].strip():
             return d[key].strip(), None
     return "", None
+
+
+_LINK = re.compile(r"\s*\(?<a\b[^>]*>.*?</a>\)?", re.S)
+
+
+def plain(text: Any) -> str:
+    """A notice's text without Vinted's markup: its links (10-30 "(<a class=msg-status__link …>Sendungsinformationen
+    </a>)" stood in the chat) go, as they lead nowhere here."""
+    import html
+    if not isinstance(text, str):
+        return ""
+    return html.unescape(re.sub(r"<[^>]+>", "", _LINK.sub("", text))).strip()
+
+
+def open_question(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Vinted's question to the owner that still waits: the newest notice of the order, when it is an action_message
+    with buttons (10-30 "Prüfe deine Bestellung …" with "Alles in Ordnung" / "Ich habe ein Problem"). A later notice
+    (completed, refunded …) answers it. {title, text, actions: [{action, title, primary}], at}."""
+    latest = None
+    for m in messages:
+        d = m.get("data") or {}
+        if (m.get("message_type") in ("legacy_action", "legacy_status") or d.get("entity_type") in
+                ("action_message", "status_message")) and \
+                (latest is None or str(m.get("created_at") or "") >= str(latest.get("created_at") or "")):
+            latest = m
+    if latest is None:
+        return None
+    d = latest.get("data") or {}
+    e = d.get("entity") or {}
+    actions = [{"action": str(a.get("action")), "title": plain(a.get("title")) or str(a.get("action")),
+                "primary": bool(a.get("primary"))} for a in e.get("actions") or [] if isinstance(a, dict) and a.get("action")]
+    if not actions:
+        return None
+    return {"title": plain(e.get("title")), "text": plain(e.get("subtitle")), "actions": actions,
+            "at": latest.get("created_at")}
 
 
 OFFER_PENDING, OFFER_ACCEPTED, OFFER_REJECTED, OFFER_CANCELLED = 10, 20, 30, 40   # Vinted's offer statuses (its web
@@ -185,6 +220,11 @@ def offer_state(data: dict[str, Any], partner_id: str) -> dict[str, Any] | None:
     out: dict[str, Any] = {}
     if dd.get("transaction_id"):
         out["transaction_id"] = str(dd["transaction_id"])
+    if dd.get("order_id"):            # a bought item: its order is the transaction (Vinted's own page: 10-30)
+        out["order_id"] = str(dd["order_id"])
+        out.setdefault("transaction_id", out["order_id"])
+    if ask := open_question(data.get("messages") or []):
+        out["ask"] = ask
     if (now := _money_of(dd.get("inquiry_value"))) is not None:
         out["price"] = now
     latest = None
@@ -263,7 +303,9 @@ def message_key(m: dict[str, Any]) -> str:
     if m.get("message_type") == "reply_plain" and d.get("id"):
         return f"vinted-msg-{d['id']}"
     if m.get("message_type") == "legacy_action" or "entity" in d:
-        raw = "|".join(str(x or "") for x in (d.get("event_type"), e.get("title"), e.get("subtitle"), m.get("created_at")))
+        # not its words: Vinted words the same event anew between loads (10-30 "Gekauft! – … Zeit für den Versand"
+        # became "Gekauft!", "Sendung wurde an dich verschickt – …" became "Verschickt": each stood twice)
+        raw = "|".join(str(x or "") for x in ("ev", d.get("entity_type"), d.get("event_type"), m.get("created_at")))
         return "vinted-ev-" + hashlib.sha1(raw.encode()).hexdigest()[:16]
     return f"vinted-msg-{d.get('id') or m.get('id')}"      # another kind of written message
 
@@ -349,6 +391,8 @@ def apply_conversation(cid: str, data: dict[str, Any], escrow: dict[str, Any] | 
                                                  ~col(Message.ext_id).like("vinted-ev-%"))):
             db.delete(old)
         db.flush()
+        current = {message_key(m) for m in msgs}
+        seconds = [str(m.get("created_at")) for m in msgs if message_key(m).startswith("vinted-ev-")]
         for m in msgs:
             log_shape(m)
             text, kind = message_text(m)
@@ -356,8 +400,10 @@ def apply_conversation(cid: str, data: dict[str, Any], escrow: dict[str, Any] | 
                 continue
             sender = str(m.get("sender_id") or "")
             direction = "unknown" if kind == "integration" else ("in" if sender and sender == partner_id else "out")
-            chats._upsert_message(db, cid, message_key(m), direction, text, _when(m.get("created_at")),
-                                  authoritative=True, kind=kind)
+            key, at = message_key(m), _when(m.get("created_at"))
+            if key.startswith("vinted-ev-"):
+                text = _merge_event(db, cid, key, text, at, current, seconds.count(str(m.get("created_at"))) == 1)
+            chats._upsert_message(db, cid, key, direction, text, at, authoritative=True, kind=kind)
         row = db.get(Conversation, cid)
         if row is not None:
             row.messages_synced_at = utcnow()
@@ -376,6 +422,37 @@ def apply_conversation(cid: str, data: dict[str, Any], escrow: dict[str, Any] | 
             db.add(row)
         db.commit()
     return len(msgs)
+
+
+def _merge_event(db: Any, cid: str, key: str, text: str, at: Any, current: set[str] = frozenset(),
+                 alone: bool = True) -> str:
+    """The rows of one order event stored before under other words (another key, the same second): one is kept under
+    `key`, the others go (not those of this load's other events; when another event of this load has the same second,
+    only those that share a word with it). Its text: the fullest wording seen (Vinted's later ones are the shorter)."""
+    from sqlmodel import col, select
+
+    from app.db import Message
+    if at is None:
+        return text
+    rows = [r for r in db.exec(select(Message).where(Message.conversation_id == cid, Message.kind == "integration",
+                                                     col(Message.ext_id).like("vinted-ev-%")))
+            if (r.ext_id == key or r.ext_id not in current) and r.created_at is not None and abs((r.created_at.replace(tzinfo=None) - at.replace(tzinfo=None))
+                                                .total_seconds()) < 1]
+    if not alone:
+        words = set(re.findall(r"\w{4,}", text.lower()))
+        rows = [r for r in rows if r.ext_id == key or words & set(re.findall(r"\w{4,}", (r.text or "").lower()))]
+    if not rows:
+        return text
+    texts = [text] + [plain(r.text) for r in rows]
+    best = max(texts, key=len)
+    keep = next((r for r in rows if r.ext_id == key), rows[0])
+    for r in rows:
+        if r is not keep:
+            db.delete(r)
+    keep.ext_id = key
+    db.add(keep)
+    db.flush()
+    return best
 
 
 _ESCROW = re.compile(r"/escrow-orders/api/v2/escrow-orders/\d+(?:\?|$)")

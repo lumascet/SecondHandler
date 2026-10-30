@@ -7,6 +7,8 @@ The calls are those of Vinted's own web app (read from its code 10-29, the offer
   POST /api/v2/transactions/<t>/offers          {offer: {price, currency}}           the seller's offer
   POST /api/v2/transactions/<t>/offer_requests  {offer_request: {price, currency}}   the buyer's offer
   PUT  /api/v2/transactions/<t>/reservation     {reserved: true|false}
+  PUT  /api/v2/transactions/<t>/complete        "Alles in Ordnung": a bought item that arrived is accepted (10-30;
+                                                 an order's transaction is its order id)
 They run in a tab of the logged-in browser on the chat's page (platforms/vinted_listing.Upload: the page's own token),
 then the chat is read again. Nothing runs without the owner's click; accepting asks first. Not yet tried against a
 real offer – the first one is worth watching.
@@ -23,7 +25,7 @@ from app.platforms import vinted_inbox as vi
 log = logging.getLogger(__name__)
 
 API = "https://www.vinted.at/api/v2"
-STEPS = ("accept", "decline", "counter", "offer", "reserve", "unreserve")
+STEPS = ("accept", "decline", "counter", "offer", "reserve", "unreserve", "complete")
 
 
 class OfferError(RuntimeError):
@@ -35,13 +37,18 @@ def _eur(v: float | None) -> str:
 
 
 def card(conv: Conversation | None) -> dict[str, Any] | None:
-    """What the chat page shows of the price talk: {line, actions: [{name, label, input, confirm}]}; None for a chat
-    that is not on Vinted or has no transaction yet."""
+    """What the chat page shows of the price talk: {line, actions: [{name, label, input, confirm}], ask}; None for a
+    chat that is not on Vinted or has no transaction yet. `ask`: Vinted's question that waits for the owner (the
+    order arrived: all good, or a problem?) with its buttons – the one Vinted's page runs itself as a step, the
+    others lead to the chat on Vinted. A bought or sold item (an order) has no price talk left."""
     if conv is None or conv.platform != "vinted":
         return None
     st = conv.vinted_offer or {}
     if not st.get("transaction_id"):
         return None
+    ask = _ask(conv, st.get("ask"))
+    if st.get("order_id"):
+        return {"line": None, "actions": [], "open_request": False, "ask": ask, "order": True} if ask else None
     o, seller = st.get("offer") or {}, conv.role == "seller"
     open_request = o.get("kind") == "request" and o.get("status") == vi.OFFER_PENDING and not o.get("from_me")
     if o:
@@ -67,7 +74,21 @@ def card(conv: Conversation | None) -> dict[str, Any] | None:
     if seller:
         actions.append({"name": "reserve", "label": t("Reserve for them"),
                         "confirm": t("Reserve the item for this buyer on Vinted?")})
-    return {"line": line, "actions": actions, "open_request": open_request}
+    return {"line": line, "actions": actions, "open_request": open_request, "ask": ask}
+
+
+def _ask(conv: Conversation, ask: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not ask:
+        return None
+    buttons = []
+    for a in ask.get("actions") or []:
+        if str(a.get("action")).startswith("all_is_good"):
+            buttons.append({"name": "complete", "label": a.get("title") or t("All is good"), "primary": True,
+                            "confirm": t("Confirm on Vinted that the order is all right? The money then goes to the "
+                                         "seller; a problem cannot be reported afterwards.")})
+        else:
+            buttons.append({"label": a.get("title"), "url": f"{vi.ORIGIN}/inbox/{conv.id}"})
+    return {"title": ask.get("title"), "text": ask.get("text"), "buttons": buttons}
 
 
 def _price(amount: str | float | None) -> str:
@@ -98,6 +119,10 @@ def plan(conv: Conversation, step: str, amount: str | None = None) -> tuple[str,
         if conv.role == "seller":
             return "POST", f"{base}/offers", {"offer": {"price": price, "currency": "EUR"}}
         return "POST", f"{base}/offer_requests", {"offer_request": {"price": price, "currency": "EUR"}}
+    if step == "complete":
+        if not any(str(a.get("action")).startswith("all_is_good") for a in (st.get("ask") or {}).get("actions") or []):
+            raise OfferError(t("Vinted asks nothing to confirm here"))
+        return "PUT", f"{base}/complete", None
     return "PUT", f"{base}/reservation", {"reserved": step == "reserve"}
 
 
@@ -124,4 +149,5 @@ async def run(conversation_id: str, step: str, amount: str | None = None) -> str
         log.info("vinted chat %s not read again: %s", conversation_id, e)
     return {"accept": t("Offer accepted on Vinted"), "decline": t("Offer declined on Vinted"),
             "counter": t("Counter-offer sent on Vinted"), "offer": t("Offer sent on Vinted"),
-            "reserve": t("Reserved on Vinted"), "unreserve": t("Reservation removed on Vinted")}[step]
+            "reserve": t("Reserved on Vinted"), "unreserve": t("Reservation removed on Vinted"),
+            "complete": t("Confirmed on Vinted: all is good")}[step]

@@ -625,3 +625,27 @@ def test_offers_in_a_vinted_chat_are_read_with_their_amounts():
     assert vi.message_text(ask) == ("kaeufer_42 hat dir ein neues Angebot gemacht: 30,00 € (was 40,00 €) · Abgelehnt",
                                     "integration")
     assert vi.message_text(sent) == ("Offer: 35,00 € (was 40,00 €)", "integration")
+
+
+def test_a_notices_markup_is_left_out():
+    m = {"message_type": "legacy_action", "data": {"entity_type": "action_message", "entity": {
+        "title": "Angekommen", "subtitle": 'Hol es ab: <a class="msg-status__link" href="/">Abholstelle</a> &amp; mehr'}}}
+    assert vinted_inbox.message_text(m) == ("Angekommen – Hol es ab: & mehr", "integration")
+
+
+def test_an_event_worded_anew_is_kept_once_with_its_fuller_words():
+    vinted_inbox.apply_inbox(INBOX)
+    full = {"id": "a", "created_at": "2026-10-21T16:44:03Z", "sender_id": "0", "message_type": "legacy_status",
+            "data": {"entity_type": "status_message", "event_type": "success",
+                     "entity": {"title": "Gekauft!", "subtitle": "Versand bis Dienstag"}}}
+    with session() as db:       # stored under the key of its words (before 10-30)
+        db.add(Message(conversation_id="01a1-uuid", ext_id="vinted-ev-0123456789abcdef", direction="unknown",
+                       text="Gekauft! – Versand bis Dienstag", kind="integration",
+                       created_at=vinted_inbox._when(full["created_at"])))
+        db.commit()
+    short = {**full, "id": "b", "data": {**full["data"], "entity": {"title": "Gekauft!"}}}
+    other = {"id": "c", "created_at": "2026-10-21T16:44:03Z", "sender_id": "0", "message_type": "legacy_action",
+             "data": {"entity_type": "action_message", "event_type": "other", "entity": {"title": "Zweites"}}}
+    vinted_inbox.apply_conversation("01a1-uuid", {**CONV, "messages": [other, short]})
+    vinted_inbox.apply_conversation("01a1-uuid", {**CONV, "messages": [short, other]})
+    assert sorted(m.text for m in chats.messages_of("01a1-uuid")) == ["Gekauft! – Versand bis Dienstag", "Zweites"]

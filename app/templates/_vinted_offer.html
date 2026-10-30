@@ -3,7 +3,21 @@
    accept, decline, counter-offer, make an offer, reserve. Each runs on Vinted at once (accepting asks first); the
    chat is read again afterwards. #}
 {% set vo = vinted_offer_card(conv) %}
-{% if vo %}
+{% if vo and vo.ask %}
+{# Vinted's question to the owner (the order arrived: all good?) – answered here as on Vinted's own page #}
+<section class="flex min-w-0 flex-col gap-2 rounded-box border border-success/40 bg-success/5 px-3.5 py-3" id="vinted-ask">
+  <h3 class="m-0 text-[13.5px] font-semibold">{{ vo.ask.title }}</h3>
+  {% if vo.ask.text %}<p class="m-0 break-words text-[13px] text-muted">{{ vo.ask.text }}</p>{% endif %}
+  <div class="flex flex-wrap items-center gap-1.5">
+    {% for b in vo.ask.buttons %}
+    {% if b.url %}<a class="btn btn-sm" href="{{ b.url }}" target="_blank" rel="noopener">{{ b.label }} {{ ui.icon('external', 13) }}</a>
+    {% else %}<form method="post" action="/chats/{{ conv.id }}/vinted-offer/{{ b.name }}" onsubmit="return confirm({{ b.confirm|tojson|forceescape }})">
+      <button class="btn btn-sm btn-success" data-vinted-step="{{ b.name }}">{{ b.label }}</button></form>{% endif %}
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% if vo and not vo.order %}
 <section class="flex min-w-0 flex-col gap-2.5 rounded-box border border-base-300 bg-base-100 px-3.5 py-3" id="vinted-offer">
   <div class="flex flex-wrap items-center justify-between gap-2">
     <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">{{ _("Price on Vinted") }} <span class="font-normal tracking-normal normal-case">· {{ _("I am selling") if conv.role == 'seller' else _("I am buying") }}</span></h3>

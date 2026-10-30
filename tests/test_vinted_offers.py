@@ -96,3 +96,52 @@ def test_the_chat_page_shows_the_price_steps(monkeypatch):
         page = client.get(f"/chats/{c.id}").text
     assert 'id="vinted-offer"' in page and f'action="/chats/{c.id}/vinted-offer/accept"' in page
     assert "Accept 30,00 €" in page and "Offer waiting for you" in page
+
+
+def _order_chat(later=None):
+    """A bought item that arrived: Vinted asks whether all is good (the shape of 10-30, made-up words)."""
+    ask = {"created_at": "2026-10-30T16:14:11Z", "sender_id": "0", "message_type": "legacy_action",
+           "data": {"entity_type": "action_message", "event_type": "delivered", "entity": {
+               "title": "Prüfe deine Bestellung", "subtitle": 'Alles gut? (<a class="msg-status__link" href="/">Info</a>)',
+               "actions": [{"action": "all_is_good_delivered", "primary": True, "title": "Alles in Ordnung"},
+                           {"action": "i_have_issues", "primary": False, "title": "Ich habe ein Problem"}]}}}
+    msgs = [{"created_at": "2026-10-21T16:44:03Z", "sender_id": "0", "message_type": "legacy_status",
+             "data": {"entity_type": "status_message", "event_type": "success", "entity": {"title": "Gekauft!"}}}, ask]
+    return {"data": {"order_id": "4242", "escrow_order_id": "4242"}, "messages": msgs + ([later] if later else [])}
+
+
+def _order_conv(data):
+    with session() as db:
+        c = Conversation(id="v-order", platform="vinted", role="buyer", partner_name="verkaeufer_7",
+                         vinted_offer=vi.offer_state(data, PARTNER))
+        db.add(c)
+        db.commit()
+        db.refresh(c)
+        return c
+
+
+def test_vinteds_question_on_an_arrived_order_gets_its_buttons(monkeypatch):
+    c = _order_conv(_order_chat())
+    card = vo.card(c)
+    assert card["order"] and card["ask"]["title"] == "Prüfe deine Bestellung" and card["ask"]["text"] == "Alles gut?"
+    ok, issue = card["ask"]["buttons"]
+    assert ok["name"] == "complete" and ok["label"] == "Alles in Ordnung" and ok["confirm"]
+    assert issue["url"].endswith("/inbox/v-order") and "name" not in issue
+    assert vo.plan(c, "complete") == ("PUT", f"{vo.API}/transactions/4242/complete", None)
+    from app.main import app
+    with TestClient(app) as client:
+        page = client.get(f"/chats/{c.id}").text
+    assert 'id="vinted-ask"' in page and 'action="/chats/v-order/vinted-offer/complete"' in page
+    assert 'id="vinted-offer"' not in page              # an order has no price talk left
+
+
+def test_an_answered_question_asks_no_more():
+    done = {"created_at": "2026-10-31T09:00:00Z", "sender_id": "0", "message_type": "legacy_status",
+            "data": {"entity_type": "status_message", "event_type": "completed", "entity": {"title": "Abgeschlossen"}}}
+    c = _order_conv(_order_chat(later=done))
+    assert vo.card(c) is None
+    try:
+        vo.plan(c, "complete")
+        raise AssertionError("confirmed without a question")
+    except vo.OfferError:
+        pass

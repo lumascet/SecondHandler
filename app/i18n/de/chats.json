@@ -219,5 +219,9 @@
  "Price on Vinted": "Preis auf Vinted",
  "Offer waiting for you": "Angebot wartet auf dich",
  "Each step runs on Vinted right away, as Vinted's own page sends it.": "Jeder Schritt läuft sofort auf Vinted, so wie Vinteds eigene Seite ihn sendet.",
- "Your latest offer: {price}": "Dein letztes Angebot: {price}"
+ "Your latest offer: {price}": "Dein letztes Angebot: {price}",
+ "All is good": "Alles in Ordnung",
+ "Confirm on Vinted that the order is all right? The money then goes to the seller; a problem cannot be reported afterwards.": "Auf Vinted bestätigen, dass die Bestellung in Ordnung ist? Das Geld geht dann an den Verkäufer; ein Problem kann danach nicht mehr gemeldet werden.",
+ "Vinted asks nothing to confirm here": "Vinted fragt hier nichts zu bestätigen",
+ "Confirmed on Vinted: all is good": "Auf Vinted bestätigt: alles in Ordnung"
 }
