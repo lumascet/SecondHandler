@@ -63,13 +63,24 @@ ACCESS_MARGIN_S = 60
 LOGIN_PAUSE_S = 24 * 3600               # after a refused login: no new attempt by itself for a day
 TIMEOUT_S = 30
 
-# read once after the first login (GET only): what the account calls would need, to see the shapes
+# read once after the first login (GET only): what the account calls would need, to see the shapes. {uid}/{uuid}: the
+# account's ids; {ad}: one own ad; {conv}: one conversation. A placeholder without a value skips the entry.
+PROBE_VERSION = "2"
 PROBE = (
     ("UserSpecificContextLinks", ""),
-    ("UserDataResource", ""),
-    ("UserProfilePublicApiBaseUrl", "/userprofile/me"),
-    ("ChatApiCounter", ""),
-    ("ChatApiSendMessage", "?limit=5&offset=0"),     # the base of the conversations
+    ("UserSpecificContextLinks", "/{uid}"),
+    ("UserDataResource", "/{uid}"),
+    ("UserProfilePublicApiBaseUrl", "/me"),
+    ("UserProfilePublicApiBaseUrl", "/v1/userprofile/me"),
+    ("IAD_API_BASE_URL", "/restapi/v2/userprofile/me"),
+    ("UserAdvertDetails", ""),
+    ("UserAdvertDetails", "/{uid}"),
+    ("IAD_API_BASE_URL", "/restapi/v2/myatz/bap"),
+    ("BapAdInputResource", "/{ad}"),
+    ("AdImageResource", "/{ad}"),
+    ("ChatInitialCTAConvoAd", "/{conv}"),
+    ("ChatApiSendMessage", "{conv}/messages?limit=5&offset=0"),
+    ("MintPublicApiBaseUrl", "/../p2p-aggregator/restapi/v2/p2pp/options/ad/{ad}/user/possible"),
 )
 
 
@@ -174,7 +185,7 @@ class State:
     fp: str = ""
     login_user: str = ""
     logged_in_at: float = 0
-    probed: str = ""                 # app version the probe ran for
+    probed: str = ""                 # PROBE_VERSION that ran
     error: str = ""
     paused_until: float = 0
 
@@ -472,28 +483,35 @@ class NativeClient:
             save_state(self.st)
         return self.st.user_links
 
-    async def probe(self) -> list[tuple[str, int | None]]:
+    async def probe(self, ids: dict[str, str] | None = None) -> list[tuple[str, int | None]]:
         """Read the account's own data once through the app API (GET only), so the recordings show each answer."""
+        ids = {k: v for k, v in (ids or {}).items() if v}
         out: list[tuple[str, int | None]] = []
         for link_id, suffix in PROBE:
             base = self.link(link_id)
+            try:
+                suffix = suffix.format(**ids)
+            except KeyError:
+                base = None
             if not base:
-                out.append((link_id, None))
+                out.append((link_id + suffix, None))
                 continue
             url = base.rstrip("/") + suffix if suffix.startswith("/") else base + suffix
+            if "/../" in url:                              # a sibling service on the same host
+                head, _, rest = url.partition("/../")
+                url = head.rsplit("/", 1)[0] + "/" + rest
             try:
                 r = await self.request("GET", url, kind="native")
-                out.append((link_id, r.status))
+                out.append((link_id + suffix, r.status))
                 if link_id == "UserSpecificContextLinks" and r.ok:
                     self.st.user_links = parse_links(r.json())
             except NativeError as e:
                 log.info("willhaben app API probe %s: %s", link_id, e)
-                out.append((link_id, None))
-        self.st.probed = APP_VERSION
+                out.append((link_id + suffix, None))
+        self.st.probed = PROBE_VERSION
         save_state(self.st)
         log.info("willhaben app API probe: %s", ", ".join(f"{k}={v}" for k, v in out))
         return out
-
 
 _client: NativeClient | None = None
 
@@ -534,9 +552,22 @@ async def keep_job() -> None:
                 log.warning("willhaben app API: login refused (%s), next try in a day", e)
                 return
         await n.ensure_access()
-        if n.st.probed != APP_VERSION:
-            await n.probe()
+        if n.st.probed != PROBE_VERSION:
+            await n.probe(_probe_ids(get_session()))
     except (NativeError, httpx.HTTPError) as e:
         n.st.error = str(e)[:300]
         save_state(n.st)
         log.warning("willhaben app API: %s", e)
+
+
+def _probe_ids(sess: Any) -> dict[str, str]:
+    """The ids the probe fills in: the account's (from the browser's login) and one own ad and one conversation."""
+    from sqlmodel import select
+
+    from app.db import Conversation, MyAd, session
+
+    u = getattr(sess, "user", None) or {}
+    with session() as db:
+        ad = db.exec(select(MyAd.ad_id).where(MyAd.status == "active")).first()
+        conv = db.exec(select(Conversation.id).order_by(Conversation.last_message_at.desc())).first()
+    return {"uid": str(u.get("id") or ""), "uuid": str(u.get("uuid") or ""), "ad": str(ad or ""), "conv": str(conv or "")}

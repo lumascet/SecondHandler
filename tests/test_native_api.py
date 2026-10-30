@@ -186,3 +186,17 @@ async def test_browser_logged_out_is_refused(data):
     with pytest.raises(native.LoginRefused, match="not logged in"):
         await n.login_via_browser(_Session(fake, logged_in=False))
     assert not n.logged_in
+
+
+async def test_probe_fills_in_the_ids_and_skips_the_rest(data):
+    fake = FakeWillhaben()
+    n = native.NativeClient(transport=httpx.MockTransport(fake))
+    await n.login("me@example.org", "right")
+    n.st.links["MintPublicApiBaseUrl"] = "https://publicapi.willhaben.at/mint"
+    out = dict(await n.probe({"uid": "42", "ad": "1234567890"}))
+    assert out["UserSpecificContextLinks/42"] == 404
+    assert out["ChatInitialCTAConvoAd/{conv}"] is None                    # no conversation id: not requested
+    urls = [str(c.url) for c in fake.calls if c.method == "GET"]
+    assert "https://publicapi.willhaben.at/p2p-aggregator/restapi/v2/p2pp/options/ad/1234567890/user/possible" in urls
+    assert all(c.method == "GET" for c in fake.calls if "willhaben.at/restapi" in str(c.url) or "publicapi" in str(c.url))
+    assert n.st.probed == native.PROBE_VERSION
