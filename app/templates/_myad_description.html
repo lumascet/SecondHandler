@@ -59,7 +59,7 @@
     {% for img in d.images %}<button type="button" @click="i = {{ loop.index0 }}" class="shrink-0 overflow-hidden rounded-md border-2 transition" :class="i === {{ loop.index0 }} ? 'border-primary' : 'border-transparent opacity-70 hover:opacity-100'" aria-label="{{ _('Photo {n} of {total}', n=loop.index, total=d.images|length) }}"><img src="{{ img }}" alt="" loading="lazy" referrerpolicy="no-referrer" class="h-14 w-[72px] object-cover"></button>{% endfor %}
   </div>
   {% endif %}
-  <small class="text-[12px] text-muted">{{ _("{n} photos · the first is the cover", n=d.images|length) }} · <a class="link link-primary no-underline" href="/myads/{{ a.ad_id }}/edit#photos">{{ _("Change photos") }}</a></small>
+  <small class="text-[12px] text-muted">{{ _("{n} photos · the first is the cover", n=d.images|length) }} · <a class="link link-primary no-underline" href="/myads/{{ a.ad_id }}/edit#photos" data-loading>{{ _("Change photos") }}</a></small>
 </div>
 {% endif %}
 <div class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[13px]" data-myad-delivery>

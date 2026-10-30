@@ -481,6 +481,22 @@
   }, {passive: true});
 })();
 </script>
+{# ---- a link to a page that takes a while (data-loading, e.g. "Edit": willhaben is asked first): a spinner in the
+     link at once and no second click while the next page loads; back to this page (bfcache): as before. ---- #}
+<script>
+(() => {
+  const idle = a => { delete a.dataset.busy; a.removeAttribute('aria-busy'); a.classList.remove('pointer-events-none', 'opacity-70');
+                      a.querySelector('[data-loading-spin]')?.remove(); };
+  document.addEventListener('click', e => {
+    const a = e.target.closest('a[data-loading]');
+    if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target === '_blank') return;
+    if (a.dataset.busy) { e.preventDefault(); return; }
+    a.dataset.busy = '1'; a.setAttribute('aria-busy', 'true'); a.classList.add('pointer-events-none', 'opacity-70');
+    a.insertAdjacentHTML('afterbegin', '<span class="loading loading-spinner loading-xs" data-loading-spin></span>');
+  });
+  addEventListener('pageshow', () => document.querySelectorAll('a[data-loading][data-busy]').forEach(idle));
+})();
+</script>
 {# ---- a switch that saves at once (data-autosubmit on the input: its form posts, the page comes back with the new
      state) keeps the page where it was instead of jumping to the top. ---- #}
 <script>

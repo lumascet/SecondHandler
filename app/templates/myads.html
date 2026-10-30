@@ -176,7 +176,7 @@
   {% if wh and not a.pending_action %}
   <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML"
        hx-select-oob="#myads-rows,#myads-chips,#myads-count">
-    <a class="btn whitespace-nowrap max-sm:px-2 max-sm:text-[13px]" href="/myads/{{ a.ad_id }}/edit">{{ _("Edit") }}</a>
+    <a class="btn whitespace-nowrap max-sm:px-2 max-sm:text-[13px]" href="/myads/{{ a.ad_id }}/edit" data-loading>{{ _("Edit") }}</a>
     {% if a.status == 'active' %}<form method="post" action="/myads/{{ a.ad_id }}/deactivate" hx-post="/myads/{{ a.ad_id }}/deactivate"><button class="btn w-full whitespace-nowrap max-sm:px-2 max-sm:text-[13px]" title="{{ _('Take this ad offline on willhaben. You can activate it again.') }}">{{ _("Deactivate") }}</button></form>
     {% elif a.status not in ('sold', 'reserved') %}<form method="post" action="/myads/bulk/activate" hx-post="/myads/bulk/activate"><input type="hidden" name="ids" value="{{ a.ad_id }}"><button class="btn w-full whitespace-nowrap max-sm:px-2 max-sm:text-[13px]" title="{{ _('Put this ad online again on willhaben. If willhaben offers no “Activate”, it is republished as a new ad.') }}">{{ _("Activate") }}</button></form>{% endif %}
     <form method="post" action="/myads/{{ a.ad_id }}/delete" class="col-span-2 sm:ml-auto" hx-post="/myads/{{ a.ad_id }}/delete" hx-confirm="{{ _('Delete „{title}“ on willhaben for good? willhaben cannot bring it back.', title=a.heading or a.ad_id) }}" data-confirm-delete><button class="btn btn-ghost w-full text-error hover:bg-bad-soft" title="{{ _('Deletes the ad on willhaben for good – it waits a few seconds in the queue, where you can still take it back.') }}">{{ _("Delete") }}</button></form>
