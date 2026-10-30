@@ -71,6 +71,7 @@ TIMEOUT_S = 30
 # read once after the first login (GET only): what the account calls would need, to see the shapes. {uid}/{uuid}: the
 # account's ids; {ad}: one own ad; {conv}: one conversation. A placeholder without a value skips the entry.
 PROBE_VERSION = "3"
+SELFTEST_VERSION = "1"
 PROBE = (
     ("UserSpecificContextLinks", "/{uid}"),
     ("showPagedAdsFromUserLink", ""),
@@ -79,6 +80,11 @@ PROBE = (
     ("myTransactionsOverviewBuyerV2", ""),
     ("ChatInitialCTAConvoAd", "/{conv}?adId={ad}"),
 )
+
+
+# which side answered the account requests since the start: the app API, the browser after an app API answer it could
+# not use, or the browser alone (not routed) – the self-test reads the difference per check
+counts = {"native": 0, "fallback": 0, "browser": 0}
 
 
 class NativeError(RuntimeError):
@@ -257,6 +263,9 @@ class State:
     user_id: str = ""                # willhaben's numeric login id: part of the user URLs
     logged_in_at: float = 0
     probed: str = ""                 # PROBE_VERSION that ran
+    selftested: str = ""             # SELFTEST_VERSION that ran by itself
+    selftest: list[dict[str, Any]] = field(default_factory=list)    # its last results
+    selftest_at: float = 0
     error: str = ""
     paused_until: float = 0
 
@@ -328,7 +337,9 @@ class NativeClient:
                 "app_token_until": datetime.fromtimestamp(st.app_token_until).astimezone() if st.app_token_until else None,
                 "logged_in_at": datetime.fromtimestamp(st.logged_in_at).astimezone() if st.logged_in_at else None,
                 "paused_until": datetime.fromtimestamp(st.paused_until).astimezone()
-                if st.paused_until > time.time() else None}
+                if st.paused_until > time.time() else None,
+                "selftest": st.selftest,
+                "selftest_at": datetime.fromtimestamp(st.selftest_at).astimezone() if st.selftest_at else None}
 
     def forget(self) -> None:
         """Log out of the app API (the browser's login stays)."""
@@ -610,6 +621,7 @@ class NativeClient:
                 self.st.access_until = 0
                 await self.ensure_access()
                 continue
+            counts["native"] += 1
             return NativeResponse(r.status_code, r.text, str(r.url))
         raise AssertionError("unreachable")
 
@@ -840,6 +852,10 @@ async def keep_job() -> None:
             await n.load_user_links()
         if n.st.probed != PROBE_VERSION:
             await n.probe(_probe_ids(get_session()))
+        if n.st.selftested != SELFTEST_VERSION and get_session().started:
+            await selftest(get_session())
+            n.st.selftested = SELFTEST_VERSION
+            save_state(n.st)
     except (NativeError, httpx.HTTPError) as e:
         n.st.error = str(e)[:300]
         save_state(n.st)
@@ -856,3 +872,91 @@ def _probe_ids(sess: Any) -> dict[str, str]:
         ad = db.exec(select(MyAd.ad_id).where(MyAd.status == "active")).first()
         conv = db.exec(select(Conversation.id).order_by(Conversation.last_message_at.desc())).first()
     return {"uid": str(u.get("id") or ""), "uuid": str(u.get("uuid") or ""), "ad": str(ad or ""), "conv": str(conv or "")}
+
+
+async def selftest(sess: Any) -> list[dict[str, Any]]:
+    """Every account read of the app once, through the account code itself (GET only): did it work, and did the app
+    API answer it ("api"), the browser ("browser") or both ("mixed")? Summaries hold counts only, no content."""
+    from app.willhaben import insert, paylivery_fee
+    from app.willhaben.account import AccountClient
+
+    acc, ctx, results = AccountClient(sess), {}, []
+
+    async def check(name: str, fn: Any) -> None:
+        before = dict(counts)
+        try:
+            summary, ok, error = await fn(), True, ""
+        except Exception as e:  # noqa: BLE001 - one failing read must not stop the others
+            summary, ok, error = "", False, f"{type(e).__name__}: {e}"[:200]
+        d = {k: counts[k] - before[k] for k in counts}
+        via = ("api" if d["native"] and not d["fallback"] and not d["browser"] else
+               "mixed" if d["native"] else "browser" if d["browser"] or d["fallback"] else "-")
+        results.append({"name": name, "ok": ok, "via": via, "summary": summary, "error": error})
+
+    async def me():
+        data = await acc.me()
+        return f"{len((data or {}).get('userData') or {})} fields"
+
+    async def unread():
+        return f"{await acc.unread_count()} unread"
+
+    async def conversations():
+        convs = await acc.conversations(limit=5)
+        ctx["conv"] = convs[0].id if convs else None
+        return f"{len(convs)} conversations"
+
+    async def messages():
+        if not ctx.get("conv"):
+            return "no conversation"
+        return f"{len(await acc.messages(ctx['conv']))} messages"
+
+    async def my_ads():
+        ads = await acc.my_adverts()
+        live = [a for a in ads if a.status == "active"]
+        ctx["ad"] = live[0].ad_id if live else (ads[0].ad_id if ads else None)
+        return f"{len(ads)} of {ads.total} ads, {len(live)} active"
+
+    async def own_ad():
+        if not ctx.get("ad"):
+            return "no ad"
+        ctx["ad_json"] = await insert.get_own_ad(sess, ctx["ad"])
+        return f"{len(ctx['ad_json'])} fields"
+
+    async def images():
+        if not ctx.get("ad_json"):
+            return "no ad"
+        imgs = await insert.get_own_images(sess, ctx["ad_json"])
+        return f"{len(imgs.get('advertImage') or [])} images"
+
+    async def shipping():
+        if not ctx.get("ad_json"):
+            return "no ad"
+        return f"handover {(await insert.shipping_of(sess, ctx['ad_json'])).get('handover')}"
+
+    async def categories():
+        heading = (ctx.get("ad_json") or {}).get("heading") or "Fahrrad"
+        tree = await insert.suggest_categories(sess, heading)
+        return f"{len(str(tree))} bytes"
+
+    async def paylivery_window():
+        me_uuid = (getattr(sess, "user", None) or {}).get("uuid")
+        if not ctx.get("ad") or not me_uuid:
+            return "no ad or user"
+        data = await sess.api_json("GET", paylivery_fee.AD_LIST.format(me=me_uuid, ad_id=ctx["ad"]))
+        return "PayLivery window found" if paylivery_fee.pick_integration(data) else "no PayLivery window"
+
+    async def form():
+        page = await insert.load_form(sess)
+        return f"{len(page)} parts"
+
+    for name, fn in (("profile", me), ("unread counter", unread), ("conversations", conversations),
+                     ("messages", messages), ("own ads", my_ads), ("ad edit data", own_ad), ("ad images", images),
+                     ("handover / PayLivery options", shipping), ("category suggestion", categories),
+                     ("PayLivery fee window", paylivery_window), ("insertion form (web page)", form)):
+        await check(name, fn)
+    c = get_client()
+    c.st.selftest, c.st.selftest_at = results, time.time()
+    save_state(c.st)
+    log.info("willhaben app API self-test: %s", "; ".join(
+        f"{r['name']}={'ok' if r['ok'] else 'FAIL'}/{r['via']} {r['summary'] or r['error']}" for r in results))
+    return results

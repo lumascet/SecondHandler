@@ -433,3 +433,36 @@ def test_the_sms_code_page():
     action, fields, codes = native.challenge_form(SMS_PAGE)
     assert action.endswith("session_code=s&execution=e")
     assert codes == ["code"] and fields == {"referenceID": "ref1", "registration": ""}
+
+
+async def test_selftest_runs_every_read_and_says_who_answered(data, monkeypatch):
+    from app.willhaben import account, insert
+
+    _routed_client(monkeypatch)
+
+    async def fake(name, value, side="native"):
+        native.counts[side] += 1
+        return value
+
+    conv = type("C", (), {"id": "c1"})()
+    ad = type("A", (), {"ad_id": "7", "status": "active"})()
+    ads = account.AdvertList([ad])
+    ads.total = 1
+    monkeypatch.setattr(account.AccountClient, "me", lambda self: fake("me", {"userData": {"a": 1}}))
+    monkeypatch.setattr(account.AccountClient, "unread_count", lambda self: fake("u", 2))
+    monkeypatch.setattr(account.AccountClient, "conversations", lambda self, limit=5: fake("c", [conv]))
+    monkeypatch.setattr(account.AccountClient, "messages", lambda self, cid: fake("m", [1, 2]))
+    monkeypatch.setattr(account.AccountClient, "my_adverts", lambda self: fake("a", ads))
+    monkeypatch.setattr(insert, "get_own_ad", lambda s, i: fake("o", {"heading": "Rad"}))
+    monkeypatch.setattr(insert, "get_own_images", lambda s, a: fake("i", {"advertImage": [1]}))
+    monkeypatch.setattr(insert, "shipping_of", lambda s, a: fake("s", {"handover": "pickup"}))
+    monkeypatch.setattr(insert, "suggest_categories", lambda s, h: fake("t", {"x": 1}))
+    monkeypatch.setattr(insert, "load_form", lambda s: fake("f", {"p": 1}, side="browser"))
+
+    sess = type("S", (), {"user": None})()
+    res = {r["name"]: r for r in await native.selftest(sess)}
+    assert res["messages"]["summary"] == "2 messages" and res["own ads"]["summary"] == "1 of 1 ads, 1 active"
+    assert res["profile"]["via"] == "api" and res["insertion form (web page)"]["via"] == "browser"
+    assert res["PayLivery fee window"]["summary"] == "no ad or user"
+    assert all(r["ok"] for r in res.values())
+    assert native.get_client().status()["selftest"]

@@ -246,6 +246,9 @@ class BrowserSession:
                                     s=f"{self.limiter.penalize():.0f}"))
                 if not native.falls_back(nr.status, method):
                     return ApiResponse(status=nr.status, text=nr.text, url=nr.url)
+            native.counts["fallback"] += 1
+        else:
+            native.counts["browser"] += 1
         self._require()
         headers = {"accept": accept, "x-wh-client": WEB_CLIENT}
         csrf = await self._csrf()

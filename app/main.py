@@ -3091,6 +3091,10 @@ async def native_login(action: str, code: str = Form("")):
     elif action == "logout":
         native.get_client().forget()
         msg = t("Logged out of the app API")
+    elif action == "selftest":
+        res = await native.selftest(get_session())
+        msg = t("Read test: {ok} of {n} worked, {api} through the app API",
+                ok=sum(r["ok"] for r in res), n=len(res), api=sum(r["via"] == "api" for r in res))
     else:
         raise HTTPException(404)
     return back(f"/settings/willhaben?msg={quote(msg, safe='')}#s-native")

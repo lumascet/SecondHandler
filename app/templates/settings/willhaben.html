@@ -29,6 +29,7 @@
       </div>
       <div class="flex flex-wrap gap-1.5">
         {% if credentials_state('willhaben').has_password %}<form method="post" action="/settings/native/login"><button class="btn btn-sm{{ ' btn-primary' if not na.logged_in else '' }}">{{ _("Log in via API") }}</button></form>{% endif %}
+        {% if na.logged_in %}<form method="post" action="/settings/native/selftest"><button class="btn btn-ghost btn-sm">{{ _("Test reads") }}</button></form>{% endif %}
         {% if na.logged_in %}<form method="post" action="/settings/native/logout"><button class="btn btn-ghost btn-sm">{{ _("Log out of the API") }}</button></form>{% endif %}
       </div>
     </div>
@@ -36,6 +37,9 @@
       <input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="{{ _('Code from willhaben') }}" class="input input-sm w-40 bg-base-200">
       <button class="btn btn-primary btn-sm">{{ _("Confirm") }}</button>
     </form>{% endif %}
+    {% if na.selftest %}<details class="text-[12px]"><summary class="cursor-pointer text-muted">{{ _("Last read test {ago}", ago=na.selftest_at|ago) }}: {{ na.selftest|selectattr('ok')|list|length }}/{{ na.selftest|length }}</summary>
+      <ul class="mt-1 flex flex-col gap-0.5">{% for r in na.selftest %}<li><span class="{{ 'text-success' if r.ok else 'text-error' }}">{{ '✓' if r.ok else '✗' }}</span> {{ r.name }} · {{ r.via }} · <span class="text-muted">{{ r.summary or r.error }}</span></li>{% endfor %}</ul>
+    </details>{% endif %}
     {% if na.error and not na.logged_in %}<p class="text-[12px] text-muted">{{ na.error }}{% if na.paused_until %} · {{ _("next automatic try {when}", when=na.paused_until|ago) }}{% endif %}</p>{% endif %}
     <p class="text-[11.5px] text-muted">{{ _("Chats, your ads and their actions go through willhaben's app interface; the browser takes over when it is not logged in. A new device gets a code by SMS or e-mail once; after that the login is remembered.") }}</p>
   </div>

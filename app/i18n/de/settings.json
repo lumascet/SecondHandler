@@ -233,5 +233,8 @@
  "The code did not fit – enter the newest code willhaben sent": "Der Code passte nicht – gib den neuesten Code von willhaben ein",
  "waiting for the code willhaben sent": "wartet auf den Code von willhaben",
  "Code from willhaben": "Code von willhaben",
- "Chats, your ads and their actions go through willhaben's app interface; the browser takes over when it is not logged in. A new device gets a code by SMS or e-mail once; after that the login is remembered.": "Chats, deine Anzeigen und ihre Aktionen laufen über willhabens App-Schnittstelle; ist sie nicht angemeldet, übernimmt der Browser. Ein neues Gerät bekommt einmal einen Code per SMS oder E-Mail, danach bleibt die Anmeldung gemerkt."
+ "Chats, your ads and their actions go through willhaben's app interface; the browser takes over when it is not logged in. A new device gets a code by SMS or e-mail once; after that the login is remembered.": "Chats, deine Anzeigen und ihre Aktionen laufen über willhabens App-Schnittstelle; ist sie nicht angemeldet, übernimmt der Browser. Ein neues Gerät bekommt einmal einen Code per SMS oder E-Mail, danach bleibt die Anmeldung gemerkt.",
+ "Read test: {ok} of {n} worked, {api} through the app API": "Lesetest: {ok} von {n} gingen, {api} über die App-Schnittstelle",
+ "Test reads": "Lesen testen",
+ "Last read test {ago}": "Letzter Lesetest {ago}"
 }
