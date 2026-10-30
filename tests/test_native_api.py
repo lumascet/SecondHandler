@@ -808,3 +808,32 @@ def test_the_new_chat_form_goes_to_the_app_with_its_own_fields(data, monkeypatch
                    "copyToSender": False, "showTelephoneNumber": False, "shareTenantProfile": False, "adId": "123"}
     assert native.falls_back(400, "POST", path) and not native.falls_back(500, "POST", path)   # a 5xx may have gone out
     assert not native.falls_back(400, "PUT", "/webapi/iad/bap/edit")
+
+
+async def test_ad_details_come_from_the_app_api_as_the_web_page_has_them(data, monkeypatch):
+    from app.willhaben import public
+
+    def app_side(req):
+        url = str(req.url)
+        if url.endswith("/atverz/111"):
+            return httpx.Response(200, json={"id": "111", "description": "Fahrrad", "advertStatus": {"id": "active"},
+                                             "attributes": {"attribute": [{"name": "PRICE", "values": ["120"]}]}})
+        if url.endswith("/atverz/222"):
+            return httpx.Response(200, json={"id": "222", "description": "Weg", "advertStatus": {"id": "sold"}})
+        if url.endswith("/atverz/333"):
+            return httpx.Response(404, text="")
+        if url.endswith("/atverz/444"):
+            return httpx.Response(503, text="")
+        return httpx.Response(200, text="<html>no next data</html>")      # the web page
+
+    anon = _anon(FakeWillhaben())
+    anon.st.links["AdvertDetails"] = "https://api.willhaben.at/restapi/v2/atverz"
+    monkeypatch.setattr(native, "_anon", anon)
+    pc = public.PublicClient(transport=httpx.MockTransport(app_side))
+    pc.app_search = True
+    d = await pc.get_detail("111")
+    assert d.heading == "Fahrrad" and d.price == 120
+    assert await pc.get_detail("222") is None                      # not active: gone, as the web page would say
+    assert await pc.get_detail("333") is None
+    with pytest.raises(Exception, match="no __NEXT_DATA__"):        # the app API failed: the web page answered
+        await pc.get_detail("444")

@@ -853,17 +853,15 @@ ANON_PAUSE_S = 10 * 60   # after a failed app token: the web search for this lon
 ANON_SEARCH = "/webapi/ad-search/"     # the web's search path; the app's is the same under ad-search.willhaben.at
 
 
-async def anon_route(url: str, route: Any = None) -> tuple[str, dict[str, str]] | None:
-    """The app API's URL and headers for an anonymous search request of the web (same answer, seen 2026-10-30), or
-    None (setting willhaben_native_search = 0, not a search, no app token to be had). The visitor's own app identity,
-    never the account's: renewed like the web visitor (ANON_SESSION_S), never logged in. `route`: the VPN server the
-    request goes through – that server gets an identity of its own, its app token fetched through it (one fetched at
-    home would link the server to the home IP)."""
+async def _anon_ready(route: Any = None) -> NativeClient | None:
+    """The anonymous app identity (at home, or of the VPN server `route`) with a valid app token, or None (no app
+    key, setting willhaben_native_search = 0, its app token failed lately). Never the account's identity: renewed
+    like the web visitor (ANON_SESSION_S), never logged in; a VPN server's app token is fetched through it (one fetched
+    at home would link the server to the home IP)."""
     from app.db import get_setting
     from app.platforms.httpclient import ANON_SESSION_S
 
-    web = url[len("https://www.willhaben.at"):] if url.startswith("https://www.willhaben.at/") else url
-    if not web.startswith(ANON_SEARCH) or (get_setting("willhaben_native_search") or "1") == "0" or not app_key()[0]:
+    if (get_setting("willhaben_native_search") or "1") == "0" or not app_key()[0]:
         return None
     c = anon_client(route)
     if c.st.paused_until > time.time():                       # its app token failed lately: the web for a while
@@ -877,11 +875,25 @@ async def anon_route(url: str, route: Any = None) -> tuple[str, dict[str, str]] 
         c.st.paused_until = time.time() + ANON_PAUSE_S
         log.info("willhaben app API (anonymous): no app token, the web answers for %d min: %s", ANON_PAUSE_S // 60, e)
         return None
-    base = c.link("Search")
-    if not base:
+    return c
+
+
+async def anon_route(url: str, route: Any = None) -> tuple[str, dict[str, str]] | None:
+    """The app API's URL and headers for an anonymous search request of the web (same answer, seen 2026-10-30), or
+    None (not a search, or the anonymous identity is not there for it, _anon_ready)."""
+    web = url[len("https://www.willhaben.at"):] if url.startswith("https://www.willhaben.at/") else url
+    if not web.startswith(ANON_SEARCH) or not (c := await _anon_ready(route)) or not (base := c.link("Search")):
         return None
     host = "{0.scheme}://{0.netloc}".format(urlsplit(base))
     return host + "/restapi/v2/" + web[len(ANON_SEARCH):], c._headers(auth=False)
+
+
+async def anon_detail_route(ad_id: str, route: Any = None) -> tuple[str, dict[str, str]] | None:
+    """URL and headers of an ad's detail in the app API (AdvertDetails, restapi/v2/atverz/<id>): the same advertDetails
+    object the web page carries (all 52 fields, seen 2026-10-30), or None (the web page answers)."""
+    if not (c := await _anon_ready(route)) or not (base := c.link("AdvertDetails")):
+        return None
+    return f"{base.rstrip('/')}/{int(ad_id)}", c._headers(auth=False)
 
 
 _anon: NativeClient | None = None

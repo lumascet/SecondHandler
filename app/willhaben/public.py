@@ -56,6 +56,12 @@ NOT_FOUND_CACHE_S = httpclient.NOT_FOUND_CACHE_S
 ANON_SESSION_S = httpclient.ANON_SESSION_S
 
 
+def _native():
+    from app.willhaben import native        # the anonymous app identities only (never the account's)
+
+    return native
+
+
 class PublicClient(httpclient.HttpPlatformClient):
     """The anonymous willhaben visitor: search JSON, filters and ad detail pages (app/platforms/httpclient.py does
     the pacing, caching, recording and block handling).
@@ -76,24 +82,13 @@ class PublicClient(httpclient.HttpPlatformClient):
                    refresh: bool = False) -> httpclient.FetchResponse:
         """GET through the shared limiter; `cache_s` > 0 reuses a recent 200/404 answer for the same URL (not with
         `refresh`)."""
-        tunnel, route = self._tunnel(), None
-        if json_api and self.app_search and tunnel is not None and self._lane() is None:
-            try:
-                route = await tunnel.ensure()       # the server this request goes through (the VPN send asks the same)
-            except PlatformError:
-                route = None                        # none now: the web path reports it as before
-        if json_api and self.app_search and self._lane() is None and (tunnel is None or route is not None):
-            # the app API's search: same answer, an anonymous app identity of its own – one per VPN server, its app
-            # token fetched through that server (never at home for a server). Parallel lanes: the web search.
-            from app.willhaben import native
-
-            if alt := await native.anon_route(url, route):
-                app_url, app_headers = alt
-                r = await super()._get(app_url, headers=app_headers, cache_s=cache_s, kind=kind or self.classify(url),
-                                       refresh=refresh)
-                if r.status_code == 200:
-                    return r
-                log.info("willhaben app search: HTTP %s, the web answers", r.status_code)
+        if json_api and (alt := await self._app_route(lambda route: _native().anon_route(url, route))):
+            app_url, app_headers = alt
+            r = await super()._get(app_url, headers=app_headers, cache_s=cache_s, kind=kind or self.classify(url),
+                                   refresh=refresh)
+            if r.status_code == 200:
+                return r
+            log.info("willhaben app search: HTTP %s, the web answers", r.status_code)
         headers = {"accept": "application/json", "x-wh-client": WEB_CLIENT} if json_api else {"accept": "text/html"}
         return await super()._get(url, headers=headers, cache_s=cache_s, kind=kind, refresh=refresh)
 
@@ -121,8 +116,40 @@ class PublicClient(httpclient.HttpPlatformClient):
                              price_to: float | None = None, sort: int = 1) -> SearchPage:
         return await self.search(keyword_search_url(keyword, rows, price_from, price_to, sort), cache_s=300)
 
+    async def _app_route(self, make) -> tuple[str, dict[str, str]] | None:
+        """The app API's (url, headers) from `make(route)` for this request, or None (the web answers): an anonymous
+        app identity of its own – one per VPN server, its app token fetched through that server (never at home for a
+        server). Parallel lanes and a test's canned transport: the web."""
+        if not self.app_search or self._lane() is not None:
+            return None
+        tunnel, route = self._tunnel(), None
+        if tunnel is not None:
+            try:
+                route = await tunnel.ensure()       # the server this request goes through (the VPN send asks the same)
+            except PlatformError:
+                return None                         # none now: the web path reports it as before
+        return await make(route)
+
     async def get_detail(self, ad_id: str, refresh: bool = False) -> AdDetail | None:
-        """Full ad detail; None if the ad is gone (expired, deleted, sold). refresh: not the copy kept for 5 minutes."""
+        """Full ad detail; None if the ad is gone (expired, deleted, sold). refresh: not the copy kept for 5 minutes.
+
+        From the app API when it is there (the same advertDetails as the web page, as JSON); the web page shows only
+        active ads, so any other status counts as gone there too. Anything unexpected: the web page answers."""
+        if alt := await self._app_route(lambda route: _native().anon_detail_route(ad_id, route)):
+            app_url, app_headers = alt
+            r = await super()._get(app_url, headers=app_headers, cache_s=300, kind="detail", refresh=refresh)
+            if r.status_code in (404, 410):
+                return None
+            if r.status_code == 200:
+                try:
+                    data = r.json()
+                except ValueError:
+                    data = None
+                if isinstance(data, dict) and data.get("id"):
+                    if ((data.get("advertStatus") or {}).get("id") or "") != "active":
+                        return None
+                    return parse_detail({"advertDetails": data})
+            log.info("willhaben app detail of %s: HTTP %s, the web page answers", ad_id, r.status_code)
         r = await self._get(f"https://www.willhaben.at/iad/object?adId={ad_id}", json_api=False, cache_s=300,
                             refresh=refresh)
         if r.status_code == 404:
