@@ -27,6 +27,9 @@ HEADER = b"x-tg-back"
 TWINS: dict[str, str] = {
     "myad_edit.html": "tg/myad_edit.html",
     "_myad_description.html": "tg/_myad_description.html",
+    # an ad text's translation, loaded into the Mini App's ad page: the fragment itself (inline styles), never a
+    # way back – that page came back into its own description, again and again (10-30)
+    "_ad_translation.html": "_ad_translation.html",
 }
 
 

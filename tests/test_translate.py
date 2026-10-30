@@ -127,3 +127,21 @@ def test_the_viewer_loads_the_translation(monkeypatch):
         r = c.post("/hits/ad/vinted/123/translation", data={"text": "Ottime condizioni"})
         assert r.status_code == 200 and "data-ad-translation" in r.text and "Sehr guter Zustand." in r.text
         assert c.post("/hits/ad/nope/123/translation", data={"text": "x"}).status_code == 400
+
+
+def test_the_mini_app_gets_the_translation_itself_not_its_page_again(monkeypatch):
+    """10-30: from the Mini App the translation's request came back as the ad page itself, swapped into its own
+    description – which loaded its translation again, endlessly."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    async def fake(pid, ad_id, text):
+        from app.db import AdTranslation
+        return AdTranslation(key=f"{pid}:{ad_id}", text_hash="x", lang="fr", translation="Sehr guter Zustand.")
+    monkeypatch.setattr(translate, "translate_ad", fake)
+    with TestClient(app) as c:
+        r = c.post("/hits/ad/vinted/123/translation", data={"text": "Très bon état"},
+                   headers={"X-TG-Back": "/tg/ad/vinted:123", "HX-Request": "true"}, follow_redirects=False)
+    assert r.status_code == 200 and "data-ad-translation" in r.text and "Sehr guter Zustand." in r.text
+    assert "<html" not in r.text.lower()
