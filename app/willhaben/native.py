@@ -70,15 +70,13 @@ TIMEOUT_S = 30
 
 # read once after the first login (GET only): what the account calls would need, to see the shapes. {uid}/{uuid}: the
 # account's ids; {ad}: one own ad; {conv}: one conversation. A placeholder without a value skips the entry.
-PROBE_VERSION = "3"
+PROBE_VERSION = "4"
 SELFTEST_VERSION = "1"
-PROBE = (
-    ("UserSpecificContextLinks", "/{uid}"),
-    ("showPagedAdsFromUserLink", ""),
-    ("showPagedAdsFromUserLink", "?page=1&rows=30"),
-    ("myTransactionsOverviewSellerV2", ""),
-    ("myTransactionsOverviewBuyerV2", ""),
-    ("ChatInitialCTAConvoAd", "/{conv}?adId={ad}"),
+PROBE = (     # v4: where the app's insertion form starts (its image component names the upload URL)
+    ("AdInsertionVerticalSelection", ""),
+    ("AdInsertionDeepLinkAdInput", "?adTypeId=67&productId=67"),
+    ("BapAdInputResource", ""),
+    ("ChatRealtimeWS", ""),            # not requested: a wss URL (see probe())
 )
 
 
@@ -665,6 +663,9 @@ class NativeClient:
                 out.append((link_id + suffix, None))
                 continue
             url = base.rstrip("/") + suffix if suffix.startswith("/") else base + suffix
+            if not url.startswith("http"):
+                out.append((link_id + suffix, None))
+                continue
             try:
                 r = await self.request("GET", url, kind="native")
                 out.append((link_id + suffix, r.status))

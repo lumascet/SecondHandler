@@ -195,9 +195,12 @@ async def test_probe_fills_in_the_ids_and_skips_the_rest(data):
     fake = FakeWillhaben()
     n = native.NativeClient(transport=httpx.MockTransport(fake))
     await n.login("me@example.org", "right")
+    n.st.links.update({"AdInsertionVerticalSelection": "https://app-aggregator-adin.willhaben.at/api/v1/adin/vs",
+                       "ChatRealtimeWS": "wss://chat-realtime-apps.willhaben.at/v1/ws/"})
     out = dict(await n.probe({"uid": "42", "ad": "1234567890"}))
-    assert out["UserSpecificContextLinks/42"] == 404
-    assert out["ChatInitialCTAConvoAd/{conv}?adId={ad}"] is None          # no conversation id: not requested
+    assert out["AdInsertionVerticalSelection"] == 404                  # asked (the fake knows no such page)
+    assert out["AdInsertionDeepLinkAdInput?adTypeId=67&productId=67"] is None   # no such link: not requested
+    assert out["ChatRealtimeWS"] is None                               # a socket: never fetched as a page
     assert all(c.method == "GET" for c in fake.calls if "willhaben.at/restapi" in str(c.url) or "publicapi" in str(c.url))
     assert n.st.probed == native.PROBE_VERSION
 
@@ -548,3 +551,94 @@ def test_each_vpn_server_has_its_own_anonymous_identity(data):
     assert not list(data.glob("willhaben-native*.json"))
     moved = native.anon_client(Route("http://127.0.0.1:9101", 2, "at-vie-1"))   # restarted: a new local port
     assert moved is not one and moved.proxy.endswith(":9101")
+
+
+class _History:
+    """The session part send_message confirms with: the conversation's newest messages (through the app API in real
+    life, routed by BrowserSession.api), and the browser's socket, which must stay unused here."""
+
+    def __init__(self, shows=True):
+        self.shows, self.sent, self.ws = shows, [], []
+        self.user = {}
+
+    async def api_json(self, method, path, body=None):
+        msgs = [{"client_message_id": cid, "message_id": f"m-{cid[:4]}", "text": txt, "is_mine": True}
+                for cid, txt in self.sent] if self.shows else []
+        return {"messages": msgs}
+
+    async def ws_request(self, *a, **k):
+        self.ws.append(a)
+        return {"status": "success"}
+
+    async def ws_send(self, url, frames, settle_ms=1500):
+        self.ws.append(frames)
+        return {"status": "ok"}
+
+
+def _chat_client(monkeypatch, answer):
+    c = _routed_client(monkeypatch)
+    c.st.links["ChatApiSendMessage"] = "https://publicapi.willhaben.at/chat-api/v1/conversations/"
+    c.st.links["ChatApiMarkConversationRead"] = \
+        "https://publicapi.willhaben.at/chat-api/v1/conversations/$conversation_id/read"
+    c.st.access_token, c.st.access_until, c.st.app_token, c.st.app_token_until = "A", 9e12, "T", 9e12
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        return answer(req)
+
+    c._transport = httpx.MockTransport(handler)
+    return calls
+
+
+async def test_a_message_goes_through_the_app_api_and_counts_once_the_history_shows_it(data, monkeypatch):
+    from app.willhaben.account import AccountClient
+
+    hist = _History()
+
+    def answer(req):
+        body = json.loads(req.content)
+        hist.sent.append((body["client_message_id"], body["text"]))
+        return httpx.Response(204)
+
+    calls = _chat_client(monkeypatch, answer)
+    mid = await AccountClient(hist).send_message("c-1", "  Hallo, noch da?  ")
+    req = calls[0]
+    assert req.method == "POST" and str(req.url) == "https://publicapi.willhaben.at/chat-api/v1/conversations/c-1"
+    body = json.loads(req.content)
+    assert body["text"] == "Hallo, noch da?" and body["createdAt"].endswith("Z") and "type" not in body
+    assert mid.startswith("m-") and not hist.ws                     # the browser's socket stayed unused
+
+
+async def test_a_refused_message_goes_through_the_browser_a_broken_one_never_twice(data, monkeypatch):
+    from app.willhaben.account import AccountClient, SendFailed
+
+    hist = _History()
+    _chat_client(monkeypatch, lambda req: httpx.Response(404))           # no such endpoint: nothing went out
+    hist.sent.append(("x", "Hallo"))
+    await AccountClient(hist).send_message("c-1", "Hallo")
+    assert len(hist.ws) == 1
+
+    hist = _History(shows=False)
+    _chat_client(monkeypatch, lambda req: httpx.Response(502))           # may have gone out: only the history decides
+    with pytest.raises(SendFailed, match="history"):
+        await AccountClient(hist).send_message("c-1", "Hallo")
+    assert not hist.ws
+
+    hist = _History()
+    _chat_client(monkeypatch, lambda req: httpx.Response(400, text="too long"))   # explained: nothing went out
+    with pytest.raises(SendFailed, match="rejected"):
+        await AccountClient(hist).send_message("c-1", "Hallo")
+    assert not hist.ws
+
+
+async def test_read_receipt_is_one_put(data, monkeypatch):
+    from app.willhaben.account import AccountClient, ChatMessage
+
+    hist = _History()
+    calls = _chat_client(monkeypatch, lambda req: httpx.Response(204))
+    msgs = [ChatMessage(ext_id=f"m{i}", direction="in", text="x", created_at=None, read=False) for i in range(3)]
+    assert await AccountClient(hist).mark_read("c-9", msgs) == 3
+    assert [(r.method, str(r.url)) for r in calls] == \
+        [("PUT", "https://publicapi.willhaben.at/chat-api/v1/conversations/c-9/read")]
+    assert not hist.ws
