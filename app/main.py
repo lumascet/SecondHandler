@@ -308,7 +308,8 @@ def _seller_trust(since, ratings, platform=None, reply=None) -> dict:
 
 templates.env.globals.update(seller_trust=_seller_trust)      # the ad viewer's seller line (_seller_trust.html)
 templates.env.globals.update(credentials_state=credentials_svc.stored)
-templates.env.globals.update(chat_for_ad=chats.chat_for_ad, is_own_ad=chats.is_own_ad)   # the ad pane's chat button   # login details card (services/credentials.py)
+templates.env.globals.update(chat_for_ad=chats.chat_for_ad, is_own_ad=chats.is_own_ad,    # the ad pane's chat button
+                             contact_questions=chats.contact_questions)   # login details card (services/credentials.py)
 templates.env.globals.update(login_sites=lambda: [("willhaben", "willhaben")] + [(s.id, s.name) for s in site_accounts.SITES.values()])
 templates.env.globals.update(paylivery_step=lambda d, conv: paylivery_advice.view(d, conv))   # the draft's PayLivery step
 templates.env.globals.update(intent_label=chats.intent_label, ad_status_label=chats.ad_status_label)        # the draft's header on the chat page
@@ -1214,6 +1215,28 @@ async def wh_paylivery_fee(request: Request, ad_id: str, price: float | None = N
         log.warning("PayLivery fee for %s failed: %s", ad_id, e)
         error = t("willhaben did not show the fee")
     return templates.TemplateResponse(request, "_wh_fee.html", {"fee": fee, "error": error, "price": price, "sp": sp})
+
+
+@app.post("/hits/ad/willhaben/{ad_id}/message/draft", response_class=HTMLResponse)
+async def ad_message_draft(request: Request, ad_id: str, instruction: str = Form(""), text: str = Form("")):
+    """"Claude writes" in the ad pane's message form: my instruction and what the field holds (e.g. standard questions)
+    become a first message in my style – back into the field, nothing is sent."""
+    from app.llm.base import LLMError
+    if not ad_id.isdigit():
+        raise HTTPException(400)
+    error = None
+    try:
+        text = await chats.draft_contact(ad_id, instruction, text.splitlines())
+    except LLMError as e:
+        error = t("Claude could not write the message: {error}", error=e)
+    return render(request, "_contact_text.html", ad_id=ad_id, text=text, error=error)
+
+
+@app.post("/settings/contact-questions")
+async def contact_questions_save(questions: str = Form("")):
+    """The standard questions of the ad pane's message form (Settings → Chats), one per line."""
+    set_setting("contact_questions", "\n".join(q.strip() for q in questions.splitlines() if q.strip()))
+    return back(f"/settings/chats?msg={quote(t('Standard questions saved'), safe='')}#s-contact-questions")
 
 
 @app.post("/hits/ad/willhaben/{ad_id}/message")

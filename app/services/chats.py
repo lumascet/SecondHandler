@@ -320,6 +320,42 @@ def is_own_ad(ad_id: str | None) -> bool:
         return db.get(MyAd, str(ad_id)) is not None
 
 
+MAX_CONTACT_QUESTIONS = 12
+
+
+def contact_questions() -> list[str]:
+    """The standard questions the ad pane offers for a first message (Settings → Chats), one per line."""
+    out: list[str] = []
+    for q in (get_setting("contact_questions") or "").splitlines():
+        q = q.strip()[:200]
+        if q and q not in out:
+            out.append(q)
+    return out[:MAX_CONTACT_QUESTIONS]
+
+
+async def draft_contact(ad_id: str, instruction: str, questions: list[str]) -> str:
+    """Claude's first message to the seller from my instruction and the chosen questions, in my style – only a
+    draft: the ad pane puts it into the message field, I send it myself. LLMError when Claude does not answer."""
+    from app.llm.prompts import CONTACT_OPENER_SCHEMA, CONTACT_OPENER_SYSTEM, contact_opener_prompt
+    from app.services import style
+    from app.willhaben.public import get_public
+
+    try:
+        detail = await get_public().get_detail(ad_id)
+    except Exception as e:  # noqa: BLE001 - Claude can still write from the instruction
+        log.info("contact draft %s: ad detail not read (%s)", ad_id, e)
+        detail = None
+    prompt = contact_opener_prompt(detail.as_context() if detail else None, (instruction or "")[:1000],
+                                   [q.strip()[:200] for q in questions if q.strip()][:MAX_CONTACT_QUESTIONS],
+                                   seller_name=detail.seller_name if detail else None,
+                                   style=style.profile() or None, examples=style.examples())
+    out = await get_backend("chat").complete(system=CONTACT_OPENER_SYSTEM, prompt=prompt, schema=CONTACT_OPENER_SCHEMA)
+    text = str((out.data or {}).get("message") or "").strip()
+    if not text:
+        raise LLMError(t("Claude wrote no message."))
+    return text
+
+
 async def contact_seller(ad_id: str, text: str) -> str:
     """Write to the seller of an ad (the ad pane's "Message the seller"): willhaben's contact form opens the chat
     (AccountClient.create_conversation), which is kept as my chat as a buyer with the opener, then synced. Returns the

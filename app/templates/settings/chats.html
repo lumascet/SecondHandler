@@ -29,3 +29,13 @@
     <span class="text-[12.5px] text-muted">{{ _("Sending via willhaben:") }} {% if values.send_verified == '1' %}{{ ui.pill(_("confirmed"), 'ok') }}{% else %}{{ ui.pill(_("not confirmed yet")) }}{% endif %}</span>
     <button class="btn btn-ghost btn-sm" formaction="/settings/test-chat" formnovalidate>{{ _("Test chat connection") }}</button></div>
 </form>
+{# the ad pane's "Message the seller": its standard questions, one per line (chats.contact_questions) #}
+<section id="s-contact-questions" class="mt-4 flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 px-5 py-4">
+  <h3 class="font-semibold">{{ _("Standard questions for sellers") }}</h3>
+  <p class="text-[12.5px] text-muted">{{ _("Offered in an ad's “Message the seller”: a tap puts the question into the message, Claude can turn it into a whole message.") }}</p>
+  <form method="post" action="/settings/contact-questions" class="flex flex-col gap-2">
+    <textarea name="questions" rows="6" class="textarea w-full bg-base-200">{{ contact_questions()|join('\n') }}</textarea>
+    <small class="text-[12px] text-muted">{{ _("One question per line, at most 12.") }}</small>
+    <button class="btn btn-sm self-start">{{ _("Save") }}</button>
+  </form>
+</section>

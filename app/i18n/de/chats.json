@@ -229,5 +229,13 @@
  "Go to chat": "Zum Chat",
  "Message the seller": "Nachricht an Verkäufer",
  "Hello, is the ad still available?": "Hallo, ist die Anzeige noch verfügbar?",
- "Opens the chat on willhaben with this message – it goes to the seller at once.": "Öffnet den Chat auf willhaben mit dieser Nachricht – sie geht sofort an den Verkäufer."
+ "Opens the chat on willhaben with this message – it goes to the seller at once.": "Öffnet den Chat auf willhaben mit dieser Nachricht – sie geht sofort an den Verkäufer.",
+ "Claude could not write the message: {error}": "Claude konnte die Nachricht nicht schreiben: {error}",
+ "Standard questions saved": "Standardfragen gespeichert",
+ "Claude wrote no message.": "Claude hat keine Nachricht geschrieben.",
+ "Tell Claude what to write, e.g. offer 80 € and ask about shipping": "Sag Claude, was rein soll, z. B. 80 € anbieten und nach Versand fragen",
+ "Claude writes": "Claude schreibt",
+ "Standard questions for sellers": "Standardfragen an Verkäufer",
+ "Offered in an ad's “Message the seller”: a tap puts the question into the message, Claude can turn it into a whole message.": "Angeboten bei „Nachricht an Verkäufer“ einer Anzeige: Ein Tipp setzt die Frage in die Nachricht, Claude kann daraus eine ganze Nachricht machen.",
+ "One question per line, at most 12.": "Eine Frage pro Zeile, höchstens 12."
 }

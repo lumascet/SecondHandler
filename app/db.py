@@ -820,6 +820,9 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "platform_facebook_product_search": "1",
     "kleinanzeigen_api_auth": "",
     "willhaben_app_key": "",
+    # the ad pane's "Message the seller": standard questions offered as chips, one per line
+    "contact_questions": "Ist der Artikel noch verfügbar?\nIst Versand möglich?\nIst preislich noch etwas machbar?\n"
+                         "Gibt es Mängel oder Gebrauchsspuren?\nWann könnte ich ihn abholen?",
 }
 
 

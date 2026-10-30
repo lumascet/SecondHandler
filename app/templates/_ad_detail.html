@@ -57,11 +57,22 @@
       {# write to the seller: willhaben's contact form opens the chat (POST …/message), a chat that is there opens instead #}
       {% if wh and not is_own_ad(d.ad_id) %}{% set cid = chat_for_ad(d.ad_id) %}{% if cid %}<a class="btn" href="/chats/{{ cid }}" data-loading>{{ ui.icon('chat', 15) }}{{ _("Go to chat") }}</a>
       {% elif d.chat_enabled is not sameas false %}<div x-data="{ open: false }" class="contents">
-        <button type="button" class="btn" @click="open = !open; $nextTick(() => open && $refs.msg.focus())" :aria-expanded="open">{{ ui.icon('chat', 15) }}{{ _("Message the seller") }}</button>
-        <form x-show="open" x-cloak method="post" action="/hits/ad/willhaben/{{ d.ad_id }}/message" class="flex w-full flex-col gap-1.5"
-              onsubmit="this.querySelector('button').disabled = true; this.querySelector('[data-spin]').classList.remove('hidden')">
-          <textarea x-ref="msg" name="text" rows="3" required maxlength="2000" class="textarea w-full bg-base-200" placeholder="{{ _('Hello, is the ad still available?') }}"></textarea>
-          <div class="flex items-center gap-2"><button class="btn btn-primary btn-sm"><span data-spin class="loading loading-spinner loading-xs hidden"></span>{{ _("Send") }}</button>
+        <button type="button" class="btn" @click="open = !open; $nextTick(() => open && $el.closest('[x-data]').querySelector('[data-contact-text]').focus())" :aria-expanded="open">{{ ui.icon('chat', 15) }}{{ _("Message the seller") }}</button>
+        <form x-show="open" x-cloak method="post" action="/hits/ad/willhaben/{{ d.ad_id }}/message" class="flex w-full flex-col gap-2"
+              onsubmit="this.querySelector('[data-send]').disabled = true; this.querySelector('[data-spin]').classList.remove('hidden')">
+          {# standard questions (Settings → Chats): a tap puts the question into the message, where it can be edited #}
+          {% set qs = contact_questions() %}{% if qs %}<div class="flex flex-wrap gap-1.5">{% for q in qs %}
+            <button type="button" class="btn btn-xs btn-outline font-normal" data-q="{{ q }}"
+                    @click="const t = $el.closest('[x-data]').querySelector('[data-contact-text]'); t.value = (t.value.trim() ? t.value.trimEnd() + '\n' : '') + $el.dataset.q; t.focus()">+ {{ q }}</button>{% endfor %}
+            <a href="/settings/chats#s-contact-questions" class="link link-hover self-center text-[12px] text-muted">{{ _("Edit") }}</a></div>{% endif %}
+          {% with ad_id=d.ad_id, text='', error=none %}{% include "_contact_text.html" %}{% endwith %}
+          {# Claude writes: my instruction and what the field holds become the message – back into the field, not sent #}
+          <div class="flex flex-wrap items-center gap-1.5">
+            <input name="instruction" maxlength="1000" class="input input-sm min-w-0 flex-1 bg-base-200" placeholder="{{ _('Tell Claude what to write, e.g. offer 80 € and ask about shipping') }}">
+            <button type="button" class="btn btn-sm" hx-post="/hits/ad/willhaben/{{ d.ad_id }}/message/draft" hx-include="closest form"
+                    hx-target="#contact-text-{{ d.ad_id }}" hx-swap="outerHTML" hx-disabled-elt="this"><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ _("Claude writes") }}</button>
+          </div>
+          <div class="flex items-center gap-2"><button class="btn btn-primary btn-sm" data-send><span data-spin class="loading loading-spinner loading-xs hidden"></span>{{ _("Send") }}</button>
             <small class="text-[12px] text-muted">{{ _("Opens the chat on willhaben with this message – it goes to the seller at once.") }}</small></div>
         </form></div>{% endif %}{% endif %}
       {% if h %}{% for s, label in [('saved', _('Save for later')), ('ignored', _('Ignore'))] %}<button type="button" class="btn disabled:opacity-60 {{ 'border-primary bg-brand-soft text-primary' if h.state == s else '' }}" data-state="{{ 'new' if h.state == s else s }}" data-hit="{{ h.id }}">{{ '✓ ' if h.state == s }}{{ label }}</button>{% endfor %}{% endif %}

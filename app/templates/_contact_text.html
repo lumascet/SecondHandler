@@ -1,0 +1,7 @@
+{# The message field of the ad pane's "Message the seller" (_ad_detail.html), also what "Claude writes" sends back
+   (POST /hits/ad/willhaben/<id>/message/draft): Claude's text in the field, or the old text with the error. #}
+<div id="contact-text-{{ ad_id }}" class="flex flex-col gap-1">
+  <textarea name="text" rows="4" required maxlength="2000" class="textarea w-full bg-base-200" data-contact-text
+            placeholder="{{ _('Hello, is the ad still available?') }}">{{ text or '' }}</textarea>
+  {% if error %}<small class="text-[12px] text-error">{{ error }}</small>{% endif %}
+</div>

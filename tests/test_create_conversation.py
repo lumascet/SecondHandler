@@ -241,3 +241,41 @@ def test_our_copy_of_the_opener_merges_with_willhabens_despite_its_line_breaks()
         left = [m.ext_id for m in db.query(Message).filter(Message.conversation_id == "conv-crlf")]
     assert left == ["133e18d0-7b0e-48c0-ba33-5879a75acacb"]
     assert not chats._same_text("Hallo", "Hallo du")
+
+
+def test_claude_writes_the_first_message_from_my_instruction_and_questions(monkeypatch):
+    """"Claude writes": instruction and the field's lines (standard questions) go to Claude with the ad; its text comes
+    back into the field, nothing is sent. The standard questions are edited in Settings → Chats."""
+    from fastapi.testclient import TestClient
+
+    from app.db import get_setting
+    from app.main import app
+    from app.services import chats
+
+    seen = {}
+
+    class Out:
+        data = {"message": "Hallo, ginge 80€? Versand nach Graz möglich?"}
+
+    class Claude:
+        async def complete(self, *, system, prompt, schema, images=None):
+            seen["prompt"] = prompt
+            return Out()
+
+    class Pub:
+        async def get_detail(self, ad_id):
+            return None
+
+    sent = []
+    monkeypatch.setattr(chats, "get_backend", lambda purpose=None: Claude())
+    monkeypatch.setattr("app.willhaben.public.get_public", lambda: Pub())
+    monkeypatch.setattr(chats, "_account", lambda: sent.append(1))
+    with TestClient(app) as c:
+        r = c.post("/hits/ad/willhaben/555/message/draft",
+                   data={"instruction": "80 € anbieten", "text": "Ist Versand möglich?\nIst preislich noch etwas machbar?"})
+        assert "Hallo, ginge 80€? Versand nach Graz möglich?" in r.text and 'name="text"' in r.text
+        assert "80 € anbieten" in seen["prompt"] and "- Ist Versand möglich?" in seen["prompt"]
+        assert not sent                                                   # a draft only: nothing went to willhaben
+        c.post("/settings/contact-questions", data={"questions": "Noch da?\n\n  Versand?  \nNoch da?"})
+        assert get_setting("contact_questions") == "Noch da?\nVersand?\nNoch da?"
+        assert chats.contact_questions() == ["Noch da?", "Versand?"]
