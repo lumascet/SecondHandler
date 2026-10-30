@@ -40,6 +40,9 @@ def _account() -> AccountClient:
     return AccountClient(get_session())
 
 
+FINISHED_STAYS_H = 24        # a finished chat stays in the list this long after its last message
+
+
 def sync_window() -> tuple[int, datetime | None]:
     """Settings chat_sync_limit (N latest conversations, 1-50) and chat_sync_days (conversations active in the last N
     days: the cutoff is local midnight N days ago, so it moves along every day; 0 = today only, empty = no cutoff)."""
@@ -713,7 +716,12 @@ def overview(db) -> dict[str, Any]:
             return True
         return False
     done = {cid for cid in by_id if finished(cid)}
+    # finished, but within the last day: still in the list (with its tag) – 10-30 a buyer's "ok, vielen dank" took
+    # the newest chat out of the list minutes after it came, and it looked lost
+    recent = datetime.now(timezone.utc) - timedelta(hours=FINISHED_STAYS_H)
+    fresh = {cid for cid in done if by_id[cid].last_message_at is not None and _aware(by_id[cid].last_message_at) >= recent}
     return {"convs": convs, "shown": shown, "old": old, "open_drafts": open_drafts, "finished": done, "finished_why": why,
+            "finished_fresh": fresh,
             "thumbs": _thumbs(db, convs),
             "waiting": {cid for cid, d in last_dir.items() if d == "in" and cid not in done}, "unread": unread}
 

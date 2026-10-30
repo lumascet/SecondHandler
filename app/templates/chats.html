@@ -81,7 +81,7 @@
   <div id="chat-list-items" class="flex flex-col gap-0.5 px-2.5 pb-4">
     {% for c in convs if (not site_filter or (c.platform or 'willhaben') == site_filter)
                          and (not role_filter or c.role == role_filter)
-                         and ((not show_filter and c.id not in finished) or show_filter == 'all'
+                         and ((not show_filter and (c.id not in finished or c.id in finished_fresh)) or show_filter == 'all'
                               or (show_filter == 'finished' and c.id in finished)
                               or (show_filter == 'unread' and unread_by_chat.get(c.id)) or (show_filter == 'reply' and (c.id in waiting or c.id in open_drafts))
                               or (show_filter == 'draft' and c.id in open_drafts)) %}

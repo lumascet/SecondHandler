@@ -10,13 +10,13 @@ from tests.test_dashboard import client  # noqa: F401  (pytest fixture)
 T = utcnow() - timedelta(hours=3)
 
 
-def _conv(cid, *msgs, **kw):
+def _conv(cid, *msgs, at=T, **kw):
     with session() as db:
         db.add(Conversation(id=cid, ad_id="1", ad_title=f"Ding {cid}", partner_name=f"P{cid}",
-                            last_message_at=T + timedelta(minutes=len(msgs)), **kw))
+                            last_message_at=at + timedelta(minutes=len(msgs)), **kw))
         for i, (direction, text, kind) in enumerate(msgs):
             db.add(Message(conversation_id=cid, ext_id=f"{cid}{i}", direction=direction, text=text, kind=kind,
-                           created_at=T + timedelta(minutes=i)))
+                           created_at=at + timedelta(minutes=i)))
         db.commit()
 
 
@@ -56,7 +56,8 @@ async def test_claude_marks_a_chat_it_judges_over_once_per_new_message(monkeypat
 
 def test_the_list_shows_open_chats_and_finished_behind_their_filter(client):  # noqa: F811
     _conv("o1", ("in", "Noch da?", None))
-    _conv("f1", ("in", "Danke, alles bestens!", None), ("unknown", "Das Paket wurde zugestellt.", "integration"))
+    _conv("f1", ("in", "Danke, alles bestens!", None), ("unknown", "Das Paket wurde zugestellt.", "integration"),
+          at=utcnow() - timedelta(days=2))
     page = client.get("/chats").text
     assert "Ding o1" in page and "Ding f1" not in page
     page = client.get("/chats?show=finished").text
@@ -64,3 +65,9 @@ def test_the_list_shows_open_chats_and_finished_behind_their_filter(client):  # 
     assert "Ding o1" in client.get("/chats?show=all").text and "Ding f1" in client.get("/chats?show=all").text
     tg = client.get("/tg/chats").text
     assert "Ding o1" in tg and "Ding f1" not in tg and "Ding f1" in client.get("/tg/chats?show=finished").text
+
+
+def test_a_chat_finished_today_stays_in_the_list_with_its_tag(client):  # noqa: F811
+    _conv("n1", ("out", "Funktioniert mit jedem Anschluss.", None), ("in", "ok, vielen dank", None))
+    page = client.get("/chats").text
+    assert "Ding n1" in page and "data-finished" in page
