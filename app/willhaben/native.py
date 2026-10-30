@@ -16,8 +16,10 @@ Kept in DATA_DIR/willhaben-native.json (mode 600, like the other secrets): app t
 Requests go through the same limiter, access log and recorder as the browser's (authorization and the app token are
 never recorded; the login and token requests are recorded without their bodies).
 
-Nothing here is wired into the account calls until an endpoint was seen answering live: `probe()` reads a few of the
-account's own data once after the first login (read-only), the recordings show the shapes.
+`route()` sends the browser's account reads here once logged in: the app API serves the same backends with the same
+answers, only under other hosts (seen live 2026-10-30 for the profile, the chats, an ad's edit data and images). Writes,
+pages and the chat WebSocket stay with the browser until each was tried live. `probe()` reads a few of the account's own
+endpoints once (GET only), so the recordings show the shapes of the ones not routed yet.
 """
 from __future__ import annotations
 
@@ -65,22 +67,14 @@ TIMEOUT_S = 30
 
 # read once after the first login (GET only): what the account calls would need, to see the shapes. {uid}/{uuid}: the
 # account's ids; {ad}: one own ad; {conv}: one conversation. A placeholder without a value skips the entry.
-PROBE_VERSION = "2"
+PROBE_VERSION = "3"
 PROBE = (
-    ("UserSpecificContextLinks", ""),
     ("UserSpecificContextLinks", "/{uid}"),
-    ("UserDataResource", "/{uid}"),
-    ("UserProfilePublicApiBaseUrl", "/me"),
-    ("UserProfilePublicApiBaseUrl", "/v1/userprofile/me"),
-    ("IAD_API_BASE_URL", "/restapi/v2/userprofile/me"),
-    ("UserAdvertDetails", ""),
-    ("UserAdvertDetails", "/{uid}"),
-    ("IAD_API_BASE_URL", "/restapi/v2/myatz/bap"),
-    ("BapAdInputResource", "/{ad}"),
-    ("AdImageResource", "/{ad}"),
-    ("ChatInitialCTAConvoAd", "/{conv}"),
-    ("ChatApiSendMessage", "{conv}/messages?limit=5&offset=0"),
-    ("MintPublicApiBaseUrl", "/../p2p-aggregator/restapi/v2/p2pp/options/ad/{ad}/user/possible"),
+    ("showPagedAdsFromUserLink", ""),
+    ("showPagedAdsFromUserLink", "?page=1&rows=30"),
+    ("myTransactionsOverviewSellerV2", ""),
+    ("myTransactionsOverviewBuyerV2", ""),
+    ("ChatInitialCTAConvoAd", "/{conv}?adId={ad}"),
 )
 
 
@@ -184,6 +178,7 @@ class State:
     visitor_id: str = ""
     fp: str = ""
     login_user: str = ""
+    user_id: str = ""                # willhaben's numeric login id: part of the user URLs
     logged_in_at: float = 0
     probed: str = ""                 # PROBE_VERSION that ran
     error: str = ""
@@ -258,7 +253,7 @@ class NativeClient:
 
     def forget(self) -> None:
         """Log out of the app API (the browser's login stays)."""
-        self.st.refresh_token = self.st.access_token = self.st.login_user = ""
+        self.st.refresh_token = self.st.access_token = self.st.login_user = self.st.user_id = ""
         self.st.access_until = self.st.logged_in_at = self.st.paused_until = 0
         self.st.user_links, self.st.error = {}, ""
         save_state(self.st)
@@ -392,6 +387,7 @@ class NativeClient:
         await self._token({"grant_type": "authorization_code", "code": qs["code"][0], "redirect_uri": REDIRECT_URI,
                            "client_id": CLIENT_ID, "code_verifier": verifier})
         self.st.login_user = (session.user or {}).get("email") or "browser"
+        self.st.user_id = str((session.user or {}).get("id") or self.st.user_id)
         self.st.logged_in_at, self.st.error, self.st.paused_until = time.time(), "", 0
         save_state(self.st)
         log.info("willhaben app API: logged in through the browser's willhaben login")
@@ -475,9 +471,9 @@ class NativeClient:
 
     async def load_user_links(self) -> dict[str, str]:
         url = self.st.links.get("UserSpecificContextLinks")
-        if not url:
-            raise NativeError("no UserSpecificContextLinks")
-        r = await self.request("GET", url, kind="native")
+        if not url or not self.st.user_id:
+            raise NativeError("no UserSpecificContextLinks or user id")
+        r = await self.request("GET", f"{url.rstrip('/')}/{self.st.user_id}", kind="native")
         if r.ok:
             self.st.user_links = parse_links(r.json())
             save_state(self.st)
@@ -497,9 +493,6 @@ class NativeClient:
                 out.append((link_id + suffix, None))
                 continue
             url = base.rstrip("/") + suffix if suffix.startswith("/") else base + suffix
-            if "/../" in url:                              # a sibling service on the same host
-                head, _, rest = url.partition("/../")
-                url = head.rsplit("/", 1)[0] + "/" + rest
             try:
                 r = await self.request("GET", url, kind="native")
                 out.append((link_id + suffix, r.status))
@@ -512,6 +505,41 @@ class NativeClient:
         save_state(self.st)
         log.info("willhaben app API probe: %s", ", ".join(f"{k}={v}" for k, v in out))
         return out
+
+WEB_PREFIXES = (     # the web's /webapi path -> (context link whose URI starts the app API's, path in between)
+    ("/webapi/chat-api/v1/", "ChatApiCounter", "/chat-api/v1/"),
+    ("/webapi/iad/", "IAD_API_BASE_URL", "/restapi/v2/"),
+)
+WEB_ME = "/webapi/userprofile-service/userprofile/me"
+
+
+def native_url(c: NativeClient, path: str) -> str | None:
+    """The app API's URL for a web /webapi path with the same answer, or None (stays with the browser)."""
+    if path.startswith("https://www.willhaben.at/"):
+        path = path[len("https://www.willhaben.at"):]
+    if path.split("?")[0] == WEB_ME:
+        base = c.link("UserDataResource")
+        return f"{base.rstrip('/')}/{c.st.user_id}" if base and c.st.user_id else None
+    for prefix, link_id, middle in WEB_PREFIXES:
+        if path.startswith(prefix) and (base := c.link(link_id)):
+            host = "{0.scheme}://{0.netloc}".format(urlsplit(base))
+            return host + middle + path[len(prefix):]
+    return None
+
+
+def route(method: str, path: str, accept: str = "application/json") -> str | None:
+    """Where an account request of the browser goes instead: the app API's URL for reads (GET of JSON) once logged in
+    there, else None. Switched off with the setting willhaben_native = 0."""
+    if method.upper() != "GET" or "json" not in accept:
+        return None
+    from app.db import get_setting
+
+    if (get_setting("willhaben_native") or "1") == "0":
+        return None
+    c = get_client()
+    if not c.logged_in:
+        return None
+    return native_url(c, path)
 
 _client: NativeClient | None = None
 
@@ -552,6 +580,11 @@ async def keep_job() -> None:
                 log.warning("willhaben app API: login refused (%s), next try in a day", e)
                 return
         await n.ensure_access()
+        if not n.st.user_id and (uid := (get_session().user or {}).get("id")):
+            n.st.user_id = str(uid)
+            save_state(n.st)
+        if n.st.user_id and not n.st.user_links:
+            await n.load_user_links()
         if n.st.probed != PROBE_VERSION:
             await n.probe(_probe_ids(get_session()))
     except (NativeError, httpx.HTTPError) as e:

@@ -221,13 +221,29 @@ class BrowserSession:
         if not self.api_page.url.startswith(ORIGIN):
             await self._goto(self.api_page, PARK_URL, wait_until="domcontentloaded")
 
-    async def api(self, method: str, path: str, body: Any = None, accept: str = "application/json") -> ApiResponse:
-        """Run fetch() for an `/webapi/...` path (or a page, with accept=text/html) inside the logged-in browser."""
+    async def api(self, method: str, path: str, body: Any = None, accept: str = "application/json",
+                  native_ok: bool = True) -> ApiResponse:
+        """Run fetch() for an `/webapi/...` path (or a page, with accept=text/html) inside the logged-in browser.
+
+        Reads the app API answers the same way go there instead once it is logged in (app/willhaben/native.py); when it
+        fails or its login is gone, the browser answers. `native_ok=False`: always the browser (its own login check).
+        """
         url = path if path.startswith("http") else ORIGIN + path
         payload = json.dumps(body) if body is not None else None
         if replay.enabled() and (rec := replay.find(method, url, payload)):    # WH_REPLAY=1
             replay.note(rec, access_log.classify(url))
             return ApiResponse(*replay.as_api_response(rec))
+        if native_ok and not replay.enabled() and (native_url := native.route(method, path, accept)):
+            try:
+                nr = await native.get_client().request(method, native_url, body)
+            except native.NativeError as e:
+                log.info("app API failed for %s, the browser answers: %s", access_log.classify(url), e)
+            else:
+                if nr.status == 429:
+                    raise Blocked(t("willhaben responded {status}; pausing {s}s", status=429,
+                                    s=f"{self.limiter.penalize():.0f}"))
+                if nr.status not in (401, 403):
+                    return ApiResponse(status=nr.status, text=nr.text, url=nr.url)
         self._require()
         headers = {"accept": accept, "x-wh-client": WEB_CLIENT}
         csrf = await self._csrf()
@@ -405,7 +421,7 @@ class BrowserSession:
     # ---------------------------------------------------------------- login state
     async def _me(self) -> dict[str, Any] | None:
         """Profile of the logged-in user, or None. Anonymous requests get HTTP 204 with no body."""
-        r = await self.api("GET", ME_PATH)
+        r = await self.api("GET", ME_PATH, native_ok=False)    # the browser's own login, which the writes need
         if r.status != 200 or not r.text:
             return None
         try:

@@ -192,11 +192,88 @@ async def test_probe_fills_in_the_ids_and_skips_the_rest(data):
     fake = FakeWillhaben()
     n = native.NativeClient(transport=httpx.MockTransport(fake))
     await n.login("me@example.org", "right")
-    n.st.links["MintPublicApiBaseUrl"] = "https://publicapi.willhaben.at/mint"
     out = dict(await n.probe({"uid": "42", "ad": "1234567890"}))
     assert out["UserSpecificContextLinks/42"] == 404
-    assert out["ChatInitialCTAConvoAd/{conv}"] is None                    # no conversation id: not requested
-    urls = [str(c.url) for c in fake.calls if c.method == "GET"]
-    assert "https://publicapi.willhaben.at/p2p-aggregator/restapi/v2/p2pp/options/ad/1234567890/user/possible" in urls
+    assert out["ChatInitialCTAConvoAd/{conv}?adId={ad}"] is None          # no conversation id: not requested
     assert all(c.method == "GET" for c in fake.calls if "willhaben.at/restapi" in str(c.url) or "publicapi" in str(c.url))
     assert n.st.probed == native.PROBE_VERSION
+
+
+def _routed_client(monkeypatch):
+    c = native.NativeClient(transport=httpx.MockTransport(FakeWillhaben()))
+    c.st.refresh_token, c.st.user_id = "REFRESH", "42"
+    c.st.links.update({"ChatApiCounter": "https://publicapi.willhaben.at/chat-api/v1/counter",
+                       "IAD_API_BASE_URL": "https://api.willhaben.at",
+                       "UserDataResource": "https://api.willhaben.at/restapi/v2/user"})
+    monkeypatch.setattr(native, "_client", c)
+    return c
+
+
+def test_web_paths_map_to_the_app_api(data, monkeypatch):
+    c = _routed_client(monkeypatch)
+    assert native.native_url(c, "/webapi/chat-api/v1/conversations?limit=50&offset=0") == \
+        "https://publicapi.willhaben.at/chat-api/v1/conversations?limit=50&offset=0"
+    assert native.native_url(c, "/webapi/iad/bap/1234567890") == "https://api.willhaben.at/restapi/v2/bap/1234567890"
+    assert native.native_url(c, "https://www.willhaben.at/webapi/userprofile-service/userprofile/me") == \
+        "https://api.willhaben.at/restapi/v2/user/42"
+    assert native.native_url(c, "/webapi/p2p-aggregator/restapi/v2/p2pp/options/delivery") is None
+    assert native.native_url(c, "/iad/myprofile/myadverts") is None
+
+
+def test_only_reads_are_routed(data, monkeypatch):
+    from app.db import set_setting
+
+    _routed_client(monkeypatch)
+    assert native.route("GET", "/webapi/iad/bap/1")
+    assert native.route("PUT", "/webapi/iad/bap/edit") is None                 # writes stay with the browser
+    assert native.route("DELETE", "/webapi/chat-api/v1/conversations") is None
+    assert native.route("GET", "/webapi/iad/bap/1", accept="text/html") is None
+    set_setting("willhaben_native", "0")
+    try:
+        assert native.route("GET", "/webapi/iad/bap/1") is None
+    finally:
+        set_setting("willhaben_native", "1")
+    native.get_client().st.refresh_token = ""
+    assert native.route("GET", "/webapi/iad/bap/1") is None                    # not logged in there: the browser
+
+
+async def test_the_browser_session_uses_it_and_falls_back(data, monkeypatch):
+    from app.willhaben.session import BrowserSession
+
+    _routed_client(monkeypatch)
+    answers = []
+
+    async def request(method, url, body=None, **kw):
+        answers.append(url)
+        r = answers_plan.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return native.NativeResponse(r, '{"unread": 2}', url)
+
+    monkeypatch.setattr(native.get_client(), "request", request)
+    s = BrowserSession()
+    browser = []
+
+    async def in_browser(*a, **k):
+        browser.append(a)
+        return {"status": 200, "text": '{"unread": 1}', "url": "web"}
+
+    s.context = s.api_page = object()
+    monkeypatch.setattr(s, "_csrf", _none)
+    monkeypatch.setattr(s, "_ensure_parked", _none)
+    s.api_page = type("P", (), {"evaluate": staticmethod(in_browser), "url": "https://www.willhaben.at/robots.txt"})()
+
+    answers_plan = [200]
+    r = await s.api("GET", "/webapi/chat-api/v1/counter")
+    assert r.json() == {"unread": 2} and not browser                       # the app API answered
+    answers_plan = [native.NativeError("down")]
+    assert (await s.api("GET", "/webapi/chat-api/v1/counter")).json() == {"unread": 1}
+    answers_plan = [401]
+    assert (await s.api("GET", "/webapi/chat-api/v1/counter")).json() == {"unread": 1}
+    assert len(browser) == 2
+    await s.api("GET", "/webapi/userprofile-service/userprofile/me", native_ok=False)   # the browser's own login check
+    assert len(answers) == 3 and len(browser) == 3
+
+
+async def _none(*a, **k):
+    return None
