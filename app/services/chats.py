@@ -187,12 +187,18 @@ def _is_fallback_id(ext_id: str) -> bool:
 SENT_MATCH_WINDOW = timedelta(minutes=10)   # our clock at send time vs. willhaben's created_at
 
 
+def _same_text(a: str | None, b: str | None) -> bool:
+    """Our copy of a sent text and willhaben's: willhaben changes the line breaks (a "\r\n" comes back as " \n"), so
+    whitespace does not count."""
+    return " ".join((a or "").split()) == " ".join((b or "").split())
+
+
 def _drop_sent_placeholders(db, conversation_id: str) -> None:
     """Remove `draft-<id>` rows once willhaben's history holds the same sent message under its real id."""
     rows = list(db.exec(select(Message).where(Message.conversation_id == conversation_id)))
     real = [r for r in rows if r.direction == "out" and not _is_fallback_id(r.ext_id)]
     for p in (r for r in rows if r.ext_id.startswith("draft-")):
-        if any(r.text == p.text and r.created_at and p.created_at
+        if any(_same_text(r.text, p.text) and r.created_at and p.created_at
                and abs(_aware(r.created_at) - _aware(p.created_at)) <= SENT_MATCH_WINDOW for r in real):
             db.delete(p)
     db.flush()
@@ -243,7 +249,7 @@ def _seen_event(conversation_id: str, frame: dict[str, Any]) -> bool:
 
 
 def _same_message(row: Message, text: str, created_at) -> bool:
-    if row.text != text or not _is_fallback_id(row.ext_id):
+    if not _same_text(row.text, text) or not _is_fallback_id(row.ext_id):
         return False
     if row.created_at == created_at:
         return True

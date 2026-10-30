@@ -219,3 +219,25 @@ def test_the_ad_pane_writes_to_the_seller_and_opens_the_chat(monkeypatch):
         r = c.post("/hits/ad/willhaben/987654/message", data={"text": "noch einmal"}, follow_redirects=False)
         assert r.headers["location"].endswith("/chats/conv-new-1") and len(sent) == 1      # no second opener
         assert chats.chat_for_ad("987654") == "conv-new-1"
+
+
+def test_our_copy_of_the_opener_merges_with_willhabens_despite_its_line_breaks():
+    """willhaben gives "\\r\\n" back as " \\n": the opener must not show twice."""
+    from datetime import timedelta
+
+    from app.db import Conversation, Message, session, utcnow
+    from app.services import chats
+
+    now = utcnow()
+    with session() as db:
+        db.add(Conversation(id="conv-crlf", role="buyer", ad_id="1"))
+        db.add(Message(conversation_id="conv-crlf", ext_id="draft-contact-conv-crlf", direction="out",
+                       text="Hallo, ist preislich noch was machbar?\r\nLG", created_at=now))
+        db.add(Message(conversation_id="conv-crlf", ext_id="133e18d0-7b0e-48c0-ba33-5879a75acacb", direction="out",
+                       text="Hallo, ist preislich noch was machbar? \nLG", created_at=now + timedelta(seconds=3)))
+        db.commit()
+        chats._drop_sent_placeholders(db, "conv-crlf")
+        db.commit()
+        left = [m.ext_id for m in db.query(Message).filter(Message.conversation_id == "conv-crlf")]
+    assert left == ["133e18d0-7b0e-48c0-ba33-5879a75acacb"]
+    assert not chats._same_text("Hallo", "Hallo du")
