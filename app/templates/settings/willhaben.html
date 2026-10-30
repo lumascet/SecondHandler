@@ -38,12 +38,10 @@
       <button class="btn btn-primary btn-sm">{{ _("Confirm") }}</button>
     </form>{% endif %}
     {# the key that signs the app token request (native.app_key): WILLHABEN_APP_KEY wins over the one stored here #}
-    {% if na.key == 'env' %}{{ ui.msg(_("The app key comes from WILLHABEN_APP_KEY in .env and overrides the field below. Remove it there to use the field."), 'warn') }}
-    {% elif not na.key %}{{ ui.msg(_("No app key yet: the app interface stays off and the browser does everything. Enter the key of willhaben's Android app below, or set WILLHABEN_APP_KEY in .env."), 'warn') }}{% endif %}
+    {% if not na.key %}{{ ui.msg(_("No app key yet: the app interface stays off and the browser does everything. Enter the key of willhaben's Android app below, or set WILLHABEN_APP_KEY in .env."), 'warn') }}{% endif %}
     <form method="post" action="/settings/native/key" class="flex flex-wrap items-center gap-1.5" autocomplete="off">
-      <input name="key" type="password" autocomplete="new-password" {% if na.key == 'env' %}disabled{% endif %}
-             placeholder="{{ _('set in .env') if na.key == 'env' else _('stored – leave empty to keep') if na.key == 'settings' else _('App key') }}" class="input input-sm w-64 bg-base-200">
-      <button class="btn btn-sm" name="op" value="save" {% if na.key == 'env' %}disabled{% endif %}>{{ _("Save key") }}</button>
+      {{ ui.env_input('key', 'WILLHABEN_APP_KEY', na.key_env or '', placeholder=_('stored – leave empty to keep') if na.key == 'settings' else _('App key'), cls='w-64') }}
+      {% if na.key != 'env' %}<button class="btn btn-sm" name="op" value="save">{{ _("Save key") }}</button>{% endif %}
       {% if na.key == 'settings' %}<button class="btn btn-ghost btn-sm" name="op" value="forget">{{ _("Delete key") }}</button>{% endif %}
     </form>
     {% if na.selftest %}<details class="text-[12px]"><summary class="cursor-pointer text-muted">{{ _("Last read test {ago}", ago=na.selftest_at|ago) }}: {{ na.selftest|selectattr('ok')|list|length }}/{{ na.selftest|length }}</summary>

@@ -773,3 +773,23 @@ def test_the_app_key_from_env_wins_over_the_setting_and_without_one_the_app_api_
             native.sign("s", "t")
     finally:
         set_setting("willhaben_app_key", "")
+
+
+def test_the_key_field_shows_the_env_value_read_only_with_a_yellow_outline(monkeypatch, tmp_path):
+    import re
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
+    monkeypatch.setattr(get_settings(), "willhaben_app_key", "from-env-123")
+    with TestClient(app) as c:
+        page = c.get("/settings/willhaben").text
+        field = re.search(r'<input name="key"[^>]*>', page).group(0)
+        assert 'value="from-env-123"' in field and "readonly" in field and "border-warning" in field
+        assert "WILLHABEN_APP_KEY" in field and "title=" in field                   # the hover hint
+        assert 'value="save"' not in page.split('action="/settings/native/key"')[1].split("</form>")[0]
+        monkeypatch.setattr(get_settings(), "willhaben_app_key", "")
+        field = re.search(r'<input name="key"[^>]*>', c.get("/settings/willhaben").text).group(0)
+        assert "readonly" not in field and 'type="password"' in field and "value=" not in field

@@ -370,6 +370,7 @@ class NativeClient:
         waiting = self.pending is not None and self.pending.until > time.time()
         return {"logged_in": self.logged_in, "user": st.login_user or None, "links": len(st.links), "via": st.login_via,
                 "key": app_key()[1],
+                "key_env": app_key()[0] if app_key()[1] == "env" else "",   # shown read-only: .env set it
                 "code_needed": waiting,
                 "user_links": len(st.user_links), "error": st.error or None,
                 "app_token_until": datetime.fromtimestamp(st.app_token_until).astimezone() if st.app_token_until else None,

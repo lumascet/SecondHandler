@@ -197,6 +197,15 @@
 {%- endmacro %}
 
 {# flash message; kind info | error | warn #}
+{# A settings field that .env may set: then it shows that value read-only, outlined in yellow, and says on hover that
+   the environment overrides it; otherwise a normal (secret) field. #}
+{% macro env_input(name, env_var, env_value='', placeholder='', type='password', cls='') -%}
+{% if env_value %}<input name="{{ name }}" type="text" value="{{ env_value }}" readonly
+       title="{{ _('Set by {var} in .env – it overrides this field. Change or remove it there.', var=env_var) }}"
+       class="input input-sm cursor-help border-2 border-warning bg-warn-soft {{ cls }}">
+{%- else %}<input name="{{ name }}" type="{{ type }}" autocomplete="new-password" placeholder="{{ placeholder }}" class="input input-sm bg-base-200 {{ cls }}">{% endif %}
+{%- endmacro %}
+
 {% macro msg(text, kind='info') -%}
 <div role="status" class="mb-4 rounded-[10px] px-3.5 py-2.5 whitespace-pre-line {{ {'error': 'bg-bad-soft text-error', 'warn': 'bg-warn-soft text-warning'}.get(kind, 'bg-brand-soft') }}">{{ text }}</div>
 {%- endmacro %}
