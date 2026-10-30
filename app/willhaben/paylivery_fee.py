@@ -110,10 +110,7 @@ async def fetch(sess: Any, ad_id: str, price: float | None = None) -> dict[str, 
                         blobs={"convoad": json.dumps(convoad, ensure_ascii=False)[:100_000]})
         raise FeeError("willhaben bietet für diese Anzeige kein PayLivery-Fenster an")
     url = f"{integ['button']['baseHref']}?itemId={item}&partnerId={seller}&activeUserId={me}"
-    if (fee_app := await _through_app(url)) is not None:
-        page = fee_app
-    else:
-        page = await sess.read_hidden(url, FEE_TEXT + r"[^\n€]{0,60}€\s*\d")
+    page = await sess.read_hidden(url, FEE_TEXT + r"[^\n€]{0,60}€\s*\d")
     fee = fee_from_bodies(page["bodies"])
     if fee is None:
         fee = fee_from_text(price_section(page["text"]) or page["text"])
@@ -129,37 +126,6 @@ async def fetch(sess: Any, ad_id: str, price: float | None = None) -> dict[str, 
     if fee is not None:
         _cache[key] = (time.monotonic(), res)
     return res
-
-
-_PREVIEW = re.compile(r"(https://[^/]+)/p2p/payment/preview/([0-9a-f-]{36})")
-
-
-async def _through_app(url: str) -> dict[str, Any] | None:
-    """The window read without the browser, as willhaben's app opens it in a web view: logged in with the app's
-    one-time web login (native.web_pages), the redirects to the payment preview followed (GET only), then the
-    preview's data call. The same shape as session.read_hidden gives; None when the app API is not there or the
-    window did not end at a preview (the browser reads it then)."""
-    from app.willhaben import native
-
-    c = native.active()
-    if c is None:
-        return None
-
-    def data_call(final: str) -> str | None:
-        m = _PREVIEW.match(final)
-        return f"{m.group(1)}/p2p/payment/preview/data/{m.group(2)}" if m else None
-
-    try:
-        bodies = await c.web_pages(url, data_call)
-    except (native.NativeError, Exception) as e:  # noqa: BLE001 - the browser reads the window then
-        log.info("PayLivery window through the app login failed: %s", e)
-        return None
-    if not any("/p2p/payment/preview/data/" in u for u in bodies):
-        log.info("PayLivery window through the app login ended elsewhere: %s", ", ".join(u.split("?")[0] for u in bodies))
-        return None
-    page = next((b for u, b in bodies.items() if "/p2p/payment/preview/data/" not in u), "")
-    return {"bodies": bodies, "text": re.sub(r"<[^>]+>", "\n", page),
-            "requests": [{"method": "GET", "url": u.split("?")[0], "via": "app"} for u in bodies]}
 
 
 def cached(ad_id: str, price: float | None) -> float | None:

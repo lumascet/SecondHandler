@@ -689,58 +689,6 @@ class NativeClient:
         counts["native"] += 1
         return NativeResponse(r.status_code, r.text, str(r.url))
 
-    async def login_token(self) -> str:
-        """A one-time login for willhaben's web pages, as the app gets it for its web views (APK 8.67.0,
-        WhLoginTokenUseCase): a refresh grant with scope wh-login-token. Its access_token goes into the WH_AUTH_LOGIN
-        cookie, with which Keycloak logs the page in. A refresh token in the answer replaces the stored one."""
-        await self.ensure_access()
-        url = self._sso("token")
-        async with self._client() as c, self.limiter:
-            r = await c.post(url, data={"grant_type": "refresh_token", "refresh_token": self.st.refresh_token,
-                                        "client_id": CLIENT_ID, "scope": "wh-login-token"},
-                             headers={"user-agent": USER_AGENT, "accept": "application/json"})
-        recorder.record_http("account", "login", "POST", url, status=r.status_code, store_response=False)
-        if r.status_code != 200:
-            raise LoginRefused(f"login token: HTTP {r.status_code}")
-        data = r.json()
-        if data.get("refresh_token"):
-            self.st.refresh_token = data["refresh_token"]
-            save_state(self.st, self._file)
-        if not data.get("access_token"):
-            raise NativeError("login token: no access_token")
-        return data["access_token"]
-
-    async def web_pages(self, url: str, then: Any = None) -> dict[str, str]:
-        """GET a willhaben web page logged in like the app's web view (WH_AUTH_LOGIN, see login_token), redirects
-        followed, GET only. `then(final_url)` may name one more GET in the same session (e.g. the page's data call).
-        Returns {url: body} of the final page and that call."""
-        token = await self.login_token()
-        host = urlsplit(self._sso("auth")).hostname or "sso.willhaben.at"
-        out: dict[str, str] = {}
-        async with self._client(headers={"user-agent": LOGIN_UA, "accept": "text/html,application/json",
-                                         "accept-language": "de-AT,de;q=0.9", "x-requested-with": "at.willhaben"},
-                                follow_redirects=True) as c:
-            c.cookies.set("WH_AUTH_LOGIN", token, domain=host, path="/auth/realms/willhaben/protocol/openid-connect/auth")
-
-            async def get(target: str) -> httpx.Response:
-                started = time.monotonic()
-                async with self.limiter:
-                    with access_log.track("account", "paylivery") as tr:
-                        r = await c.get(target)
-                        tr.status = r.status_code
-                # the address only: the page also shows the buyer's address
-                recorder.record_http("account", "paylivery", "GET", target.split("?")[0], status=r.status_code,
-                                     final_url=str(r.url).split("?")[0], store_response=False,
-                                     duration_ms=int((time.monotonic() - started) * 1000))
-                counts["native"] += 1
-                out[str(r.url)] = r.text if r.status_code == 200 else ""
-                return r
-
-            page = await get(url)
-            if then and (more := then(str(page.url))):
-                await get(more)
-        return out
-
     async def load_user_links(self) -> dict[str, str]:
         url = self.st.links.get("UserSpecificContextLinks")
         if not url or not self.st.user_id:
