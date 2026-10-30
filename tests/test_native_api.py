@@ -85,7 +85,7 @@ def data(monkeypatch, tmp_path):
     from app.willhaben import access_log
 
     monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
-    monkeypatch.setattr(native.asyncio, "sleep", _nosleep)
+    monkeypatch.setattr(native, "_typing_pause", _nosleep)
     yield tmp_path
     access_log.reset()                  # the fake requests counted here must not reach the access statistics tests
 
@@ -576,6 +576,9 @@ class _History:
 
 
 def _chat_client(monkeypatch, answer):
+    from app.willhaben import account
+
+    monkeypatch.setattr(account, "CONFIRM_WAIT_S", 0)
     c = _routed_client(monkeypatch)
     c.st.links["ChatApiSendMessage"] = "https://publicapi.willhaben.at/chat-api/v1/conversations/"
     c.st.links["ChatApiMarkConversationRead"] = \
@@ -671,3 +674,54 @@ async def test_the_insertion_form_and_photo_uploads_from_the_app_api(data, monke
     assert str(seen[-1].url) == "https://api.willhaben.at/restapi/v2/atimage/temp"
     assert native.route("PUT", "/webapi/iad-upload/atimage/5/imagelist/order-and-associate") == \
         "https://api.willhaben.at/restapi/v2/atimage/5/imagelist/order-and-associate"
+
+
+async def test_the_live_chat_socket_logs_in_like_the_app_and_hands_over_when_refused(data, monkeypatch):
+    import asyncio
+
+    import websockets
+    from websockets.datastructures import Headers
+    from websockets.http11 import Response
+
+    seen_headers, frames = [], []
+
+    async def handler(ws):
+        seen_headers.append(ws.request.headers)
+        await ws.send(json.dumps({"type": "new_message", "payload": {"conversation_id": "c-1"}}))
+        msg = json.loads(await ws.recv())                       # the ping
+        frames.append(msg)
+        await ws.close()
+
+    def gate(conn, request):
+        if request.headers.get("authorization") != "Bearer A":
+            return Response(403, "Forbidden", Headers())
+        return None
+
+    async with websockets.serve(handler, "127.0.0.1", 0, process_request=gate) as server:
+        port = server.sockets[0].getsockname()[1]
+        c = _routed_client(monkeypatch)
+        c.st.links["ChatRealtimeWS"] = f"ws://127.0.0.1:{port}/v1/ws/"
+        c.st.access_token, c.st.access_until, c.st.app_token, c.st.app_token_until = "A", 9e12, "T", 9e12
+        got = []
+
+        async def on_frame(raw):
+            got.append(json.loads(raw))
+
+        live = native.LiveChat(c, on_frame)
+        monkeypatch.setattr(native.LiveChat, "PING_S", 0.05)
+        live.start()
+        for _ in range(100):
+            if frames:
+                break
+            await asyncio.sleep(0.05)
+        await live.stop()
+        assert got[0] == {"_state": "open"} and got[1]["payload"]["conversation_id"] == "c-1"
+        assert frames == [{"req_type": "ping"}]
+        h = seen_headers[0]
+        assert h["x-wh-application-token"] == "T" and h["x-wh-client"].startswith("api@tailored-apps.com;")
+
+        c.st.access_token = "WRONG"                              # the socket turns the login down: the browser's turn
+        refused = native.LiveChat(c, on_frame)
+        refused.start()
+        await asyncio.wait_for(refused.task, 5)
+        assert refused.refused and got[-1] == {"_state": "closed", "code": 403}

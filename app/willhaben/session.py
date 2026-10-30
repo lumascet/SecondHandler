@@ -102,6 +102,7 @@ class BrowserSession:
         self._chat_cb = None
         self.chat_live: dict[str, Any] = {"state": "off", "since": None, "last_frame": None, "events": 0}
         self.presence: dict[str, dict[str, Any]] = {}   # user uuid -> {online, last_seen, at} (update_presence frames)
+        self.native_chat: Any = None   # the app's chat socket (native.LiveChat) when it holds the live chat
 
     # ---------------------------------------------------------------- lifecycle
     @property
@@ -180,6 +181,8 @@ class BrowserSession:
             await self.stop()
 
     async def stop(self) -> None:
+        if self.native_chat is not None:
+            await self.native_chat.stop()
         try:
             if self.context:
                 await self.context.close()
@@ -808,11 +811,31 @@ class BrowserSession:
         """
         self._require()
         self._chat_cb = on_event
+        if await self._open_native_chat():
+            return
         await self._open_chat_page()
+
+    async def _open_native_chat(self) -> bool:
+        """The live chat through willhaben's app socket (willhaben/native.py LiveChat) when the app API is logged in
+        and its socket has not refused the login; the browser's chat page otherwise."""
+        c = native.active()
+        if c is None or (self.native_chat is not None and self.native_chat.refused):
+            return False
+        if self.chat_page is not None and not self.chat_page.is_closed():
+            with suppress(Exception):
+                await self.chat_page.close()
+            self.chat_page = None
+        if self.native_chat is None:
+            self.native_chat = native.LiveChat(c, self._on_chat_frame)
+        self.native_chat.start()
+        self.chat_live.update(state="connecting", since=utcnow(), via="app")
+        return True
 
     async def track_presence(self, user_uuid: str) -> bool:
         """Ask the live socket for this person's online state (and again after every reconnect); the answer comes as
         an update_presence frame into self.presence. False when the live chat is not running."""
+        if user_uuid and self.native_chat is not None and self.native_chat.task and not self.native_chat.refused:
+            return await self.native_chat.track(user_uuid)
         if not user_uuid or self.chat_page is None or self.chat_page.is_closed():
             return False
         try:
@@ -856,6 +879,9 @@ class BrowserSession:
             if state != self.chat_live["state"]:
                 log.info("live chat: %s", state)
                 self.chat_live.update(state=state, since=now)
+            if self.native_chat is not None and self.native_chat.refused and self.chat_page is None and self.started:
+                self.chat_live["via"] = "browser"
+                asyncio.create_task(self._open_chat_page())     # the app socket refused the login: the browser's page
             return
         if msg.get("req_type") == "ping":
             return
@@ -890,7 +916,10 @@ class BrowserSession:
             if last is None or (utcnow() - last).total_seconds() > 90:
                 log.info("live chat silent, reopening")
                 try:
-                    await self._open_chat_page()
+                    if self.native_chat is not None:
+                        await self.native_chat.stop()
+                    if not await self._open_native_chat():
+                        await self._open_chat_page()
                 except Exception as e:  # noqa: BLE001
                     self.chat_live.update(state=t("Error: {error}", error=e), since=utcnow())
 

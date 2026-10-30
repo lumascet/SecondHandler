@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 CHAT = "/webapi/chat-api/v1"
 MYADVERTS_PAGE = "/iad/myprofile/myadverts"
 CHAT_WS = "wss://chat-realtime-web.willhaben.at/webapi/chat-ws/v1/ws/"
+CONFIRM_WAIT_S = 1.5   # a sent message is looked up in the history after 1×, 2×, 3× this
 SEND_REQUEST_CHAT = "/webapi/iad-messaging/sendrequest/chat"   # the ad page's contact form, opens the chat
 MESSAGE_CANDIDATES = [
     CHAT + "/conversations/{id}/messages?limit=100&offset=0",
@@ -423,7 +424,7 @@ class AccountClient:
         """The message's id once the history shows it (by our client_message_id, or as our newest text), else
         SendFailed – the message may still have gone out, so it is never sent again from here."""
         for attempt in range(3):
-            await asyncio.sleep(1.5 * (attempt + 1))
+            await asyncio.sleep(CONFIRM_WAIT_S * (attempt + 1))
             data = await self.s.api_json("GET", f"{CHAT}/conversations/{conversation_id}/messages?limit=10&offset=0")
             for m in (data or {}).get("messages") or []:
                 if m.get("client_message_id") == client_id or (m.get("is_mine") and (m.get("text") or "").strip() == text):

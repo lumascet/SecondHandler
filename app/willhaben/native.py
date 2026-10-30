@@ -35,6 +35,7 @@ import re
 import secrets
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import unescape
@@ -109,6 +110,11 @@ class Pending:
     user: str
     referer: str
     until: float
+
+
+async def _typing_pause() -> None:
+    """A person types e-mail and password for a moment before the form goes out."""
+    await asyncio.sleep(1.5 + secrets.randbelow(1500) / 1000)
 
 
 def timestamp() -> str:
@@ -434,7 +440,7 @@ class NativeClient:
                 action = login_form(r.text) if r.status_code == 200 else None
                 if not action:
                     raise LoginRefused(f"no login form (HTTP {r.status_code})")
-                await asyncio.sleep(1.5 + secrets.randbelow(1500) / 1000)     # a person types for a moment
+                await _typing_pause()
                 form = {"username": user, "password": password, "rememberMe": "on", "login": ""}
                 async with self.limiter:
                     r = await c.post(urljoin(str(r.url), action), data=form,
@@ -1067,3 +1073,93 @@ async def insertion_form() -> dict[str, Any] | None:
     if not (ad.ok and tree.ok):
         raise NativeError(f"insertion form: HTTP {ad.status}/{tree.status}")
     return {"ad": ad.json(), "categoryTree": tree.json()}
+
+
+class LiveChat:
+    """The chat socket the app keeps open (ChatRealtimeWS, wss://chat-realtime-apps…), logged in with the Bearer token
+    and the app's headers – what the browser's hidden chat page did. Every frame goes to `on_frame(raw)` (the session's
+    frame handler), the socket's state as {"_state": "open"|"closed", code}. Pings every 10 s like the web app;
+    reconnects with backoff (2 s doubling up to 60 s); a fresh access token on every connect. `refused` is set when the
+    socket turned the login down (HTTP 401/403 at the handshake): then the browser takes over."""
+
+    PING_S = 10
+
+    def __init__(self, client: NativeClient, on_frame: Any) -> None:
+        self.c, self.on_frame = client, on_frame
+        self.task: asyncio.Task | None = None
+        self.ws: Any = None
+        self.tracked: list[str] = []
+        self.refused = False
+
+    def start(self) -> None:
+        if self.task is None or self.task.done():
+            self.task = asyncio.create_task(self._run(), name="willhaben-live-chat")
+
+    async def stop(self) -> None:
+        if self.task is not None:
+            self.task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await self.task
+        self.task = self.ws = None
+
+    async def track(self, user_uuid: str) -> bool:
+        if user_uuid not in self.tracked:
+            self.tracked.append(user_uuid)
+        return await self._send({"request_id": str(uuid.uuid4()), "req_type": "track_presence",
+                                 "payload": {"partner_user_uuid": user_uuid}})
+
+    async def _send(self, frame: dict[str, Any]) -> bool:
+        if self.ws is None:
+            return False
+        try:
+            await self.ws.send(json.dumps(frame))
+        except Exception:  # noqa: BLE001 - a closed socket reconnects by itself
+            return False
+        return True
+
+    async def _run(self) -> None:
+        import websockets
+
+        delay = 2.0
+        while True:
+            code: Any = None
+            try:
+                await self.c.ensure_access()
+                url = self.c.link("ChatRealtimeWS")
+                if not url:
+                    raise NativeError("no ChatRealtimeWS link")
+                headers = {k: v for k, v in self.c._headers().items() if k not in ("accept", "user-agent")}
+                async with websockets.connect(url, additional_headers=headers, user_agent_header=USER_AGENT,
+                                              proxy=None, open_timeout=20, ping_interval=None) as ws:
+                    self.ws, delay = ws, 2.0
+                    await self.on_frame(json.dumps({"_state": "open"}))
+                    for u in self.tracked:                   # the online states again after a reconnect
+                        await self.track(u)
+                    pinger = asyncio.create_task(self._ping())
+                    try:
+                        async for raw in ws:
+                            await self.on_frame(raw if isinstance(raw, str) else raw.decode("utf-8", "replace"))
+                    finally:
+                        pinger.cancel()
+                    code = ws.close_code
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 - any failure: report it and connect again
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status in (401, 403):
+                    self.refused = True
+                    log.warning("willhaben app chat socket refused the login (HTTP %s): the browser takes over", status)
+                    await self.on_frame(json.dumps({"_state": "closed", "code": status}))
+                    return
+                code = status or type(e).__name__
+                log.info("willhaben app chat socket: %s", e)
+            finally:
+                self.ws = None
+            await self.on_frame(json.dumps({"_state": "closed", "code": code}))
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60.0)
+
+    async def _ping(self) -> None:
+        while True:
+            await asyncio.sleep(self.PING_S)
+            await self._send({"req_type": "ping"})
