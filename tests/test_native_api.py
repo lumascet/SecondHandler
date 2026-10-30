@@ -223,7 +223,7 @@ def test_web_paths_map_to_the_app_api(data, monkeypatch):
     assert native.native_url(c, "/webapi/iad/bap/1234567890") == "https://api.willhaben.at/restapi/v2/bap/1234567890"
     assert native.native_url(c, "https://www.willhaben.at/webapi/userprofile-service/userprofile/me") == \
         "https://api.willhaben.at/restapi/v2/user/42"
-    assert native.native_url(c, "/webapi/iad-upload/atimage/temp") is None
+    assert native.native_url(c, "/webapi/dac/x") is None
     assert native.native_url(c, "/iad/myprofile/myadverts") is None
 
 
@@ -468,7 +468,7 @@ async def test_selftest_runs_every_read_and_says_who_answered(data, monkeypatch)
     sess = type("S", (), {"user": None})()
     res = {r["name"]: r for r in await native.selftest(sess)}
     assert res["messages"]["summary"] == "2 messages" and res["own ads"]["summary"] == "1 of 1 ads, 1 active"
-    assert res["profile"]["via"] == "api" and res["insertion form (web page)"]["via"] == "browser"
+    assert res["profile"]["via"] == "api" and res["insertion form"]["via"] == "browser"
     assert res["PayLivery fee window"]["summary"] == "no ad or user"
     assert all(r["ok"] for r in res.values())
     assert native.get_client().status()["selftest"]
@@ -642,3 +642,32 @@ async def test_read_receipt_is_one_put(data, monkeypatch):
     assert [(r.method, str(r.url)) for r in calls] == \
         [("PUT", "https://publicapi.willhaben.at/chat-api/v1/conversations/c-9/read")]
     assert not hist.ws
+
+
+async def test_the_insertion_form_and_photo_uploads_from_the_app_api(data, monkeypatch):
+    from app.willhaben import insert
+    from app.willhaben.session import BrowserSession
+
+    seen = []
+
+    def answer(req):
+        seen.append(req)
+        url = str(req.url)
+        if url.endswith("/restapi/v2/bap"):
+            return httpx.Response(200, json={"adId": 0, "contextLinkList": {"contextLink": []}})
+        if "/categorytree/withattributes/67" in url:
+            return httpx.Response(200, json={"categoryNode": {"code": 1, "children": []}, "attributes": []})
+        if url.endswith("/restapi/v2/atimage/temp"):
+            assert b'name="file"; filename="a.jpg"' in req.content
+            return httpx.Response(201, json={"reference": "r1"})
+        return httpx.Response(404)
+
+    _chat_client(monkeypatch, answer)
+    form = await insert.load_form(None)                       # never the web page (no browser here)
+    assert form["ad"]["adId"] == 0 and form["categoryTree"]["categoryNode"]["code"] == 1
+    s = BrowserSession()
+    r = await s.upload("/webapi/iad-upload/atimage/temp", "file", "a.jpg", b"\xff\xd8jpeg", "image/jpeg")
+    assert r.status == 201 and r.json() == {"reference": "r1"}
+    assert str(seen[-1].url) == "https://api.willhaben.at/restapi/v2/atimage/temp"
+    assert native.route("PUT", "/webapi/iad-upload/atimage/5/imagelist/order-and-associate") == \
+        "https://api.willhaben.at/restapi/v2/atimage/5/imagelist/order-and-associate"

@@ -71,7 +71,7 @@ TIMEOUT_S = 30
 # read once after the first login (GET only): what the account calls would need, to see the shapes. {uid}/{uuid}: the
 # account's ids; {ad}: one own ad; {conv}: one conversation. A placeholder without a value skips the entry.
 PROBE_VERSION = "4"
-SELFTEST_VERSION = "1"
+SELFTEST_VERSION = "2"
 PROBE = (     # v4: where the app's insertion form starts (its image component names the upload URL)
     ("AdInsertionVerticalSelection", ""),
     ("AdInsertionDeepLinkAdInput", "?adTypeId=67&productId=67"),
@@ -639,6 +639,27 @@ class NativeClient:
             return NativeResponse(r.status_code, r.text, str(r.url))
         raise AssertionError("unreachable")
 
+    async def upload(self, url: str, field: str, filename: str, data: bytes, mime: str) -> NativeResponse:
+        """multipart/form-data POST of one file (ad photos: field "file", as the app sends them)."""
+        await self.ensure_access()
+        started = time.monotonic()
+        headers = self._headers()
+        async with self.limiter:
+            with access_log.track("account", "upload") as tr:
+                try:
+                    async with self._client() as c:
+                        r = await c.post(url, files={field: (filename, data, mime)}, headers=headers)
+                except httpx.HTTPError as e:
+                    raise NativeError(f"upload {url}: {e}") from e
+                tr.status = r.status_code
+        # the file itself is not stored (photos: size only), it is matched by field and type
+        recorder.record_http("account", "upload", "UPLOAD", url, req_headers=headers,
+                             req_body={"field": field, "filename": filename, "mime": mime, "bytes": len(data)},
+                             status=r.status_code, resp_headers=dict(r.headers), resp_body=r.text, final_url=str(r.url),
+                             upload=(field, mime), duration_ms=int((time.monotonic() - started) * 1000))
+        counts["native"] += 1
+        return NativeResponse(r.status_code, r.text, str(r.url))
+
     async def load_user_links(self) -> dict[str, str]:
         url = self.st.links.get("UserSpecificContextLinks")
         if not url or not self.st.user_id:
@@ -685,6 +706,7 @@ WEB_PREFIXES = (     # the web's /webapi path -> (context link, path after its h
     ("/webapi/myatz/", "showPagedAdsFromUserLink", "/myatz/v1/"),
     ("/webapi/p2p-aggregator/restapi/v2/", "IAD_API_BASE_URL", "/restapi/v2/"),   # the app lists p2pp under iad
     ("/webapi/convoad/v1/chat/ad_list/", "ChatInitialCTAConvoAd", None),
+    ("/webapi/iad-upload/", "IAD_API_BASE_URL", "/restapi/v2/"),      # photos: the app's own image resource
 )
 WEB_ME = "/webapi/userprofile-service/userprofile/me"
 MY_ADS_ROWS = 50
@@ -718,8 +740,9 @@ def active() -> NativeClient | None:
 
 
 # writes that go to the app API too: the same backends behind both (the action links in the app's own ads list point
-# there). Chat messages, new chats and photo uploads are not plain path changes and stay with the browser.
-WRITE_PREFIXES = ("/webapi/myatz/", "/webapi/iad/", "/webapi/p2p-aggregator/", "/webapi/chat-api/v1/conversations")
+# there). Chat messages and read receipts have calls of their own (account.py), photo uploads too (session.upload).
+WRITE_PREFIXES = ("/webapi/myatz/", "/webapi/iad/", "/webapi/iad-upload/", "/webapi/p2p-aggregator/",
+                  "/webapi/chat-api/v1/conversations")
 
 
 def route(method: str, path: str, accept: str = "application/json") -> str | None:
@@ -1018,7 +1041,7 @@ async def selftest(sess: Any) -> list[dict[str, Any]]:
     for name, fn in (("profile", me), ("unread counter", unread), ("conversations", conversations),
                      ("messages", messages), ("own ads", my_ads), ("ad edit data", own_ad), ("ad images", images),
                      ("handover / PayLivery options", shipping), ("category suggestion", categories),
-                     ("PayLivery fee window", paylivery_window), ("insertion form (web page)", form)):
+                     ("PayLivery fee window", paylivery_window), ("insertion form", form)):
         await check(name, fn)
     c = get_client()
     c.st.selftest, c.st.selftest_at = results, time.time()
@@ -1026,3 +1049,21 @@ async def selftest(sess: Any) -> list[dict[str, Any]]:
     log.info("willhaben app API self-test: %s", "; ".join(
         f"{r['name']}={'ok' if r['ok'] else 'FAIL'}/{r['via']} {r['summary'] or r['error']}" for r in results))
     return results
+
+
+async def insertion_form() -> dict[str, Any] | None:
+    """The empty insertion form as the web page's pageProps give it ({ad, categoryTree}): the app's own ad template
+    (GET restapi/v2/bap) and category tree (categorytree/withattributes/<ad type>), the same fields and links (seen
+    2026-10-30). None when the app API is not there for it."""
+    from app.willhaben.insert import AD_TYPE
+
+    c = active()
+    base = c.link("IAD_API_BASE_URL") if c else None
+    if not c or not base:
+        return None
+    base = base.rstrip("/") + "/restapi/v2"
+    ad = await c.request("GET", f"{base}/bap", kind="insert")
+    tree = await c.request("GET", f"{base}/categorytree/withattributes/{AD_TYPE}", kind="insert")
+    if not (ad.ok and tree.ok):
+        raise NativeError(f"insertion form: HTTP {ad.status}/{tree.status}")
+    return {"ad": ad.json(), "categoryTree": tree.json()}

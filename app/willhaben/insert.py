@@ -43,7 +43,15 @@ class InsertError(RuntimeError):
 
 
 async def load_form(s: BrowserSession) -> dict[str, Any]:
-    """pageProps of the empty insertion form: ad template, category tree with required attributes."""
+    """pageProps of the empty insertion form: ad template, category tree with required attributes. From the app API
+    when it is logged in (the same template and tree), else from the web page."""
+    from app.willhaben import native
+
+    try:
+        if (form := await native.insertion_form()) is not None:
+            return form
+    except native.NativeError as e:
+        log.info("insertion form through the app API failed, the web page gives it: %s", e)
     r = await s.api("GET", FORM_PATH, accept="text/html")
     nd = extract_next_data(r.text) if r.ok else None
     if not nd or nd.get("page") != "/iad/anzeigenaufgabe/marktplatz":

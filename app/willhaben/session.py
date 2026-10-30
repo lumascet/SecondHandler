@@ -290,6 +290,16 @@ class BrowserSession:
         if replay.enabled() and (rec := replay.find("UPLOAD", url, upload=(field, mime))):
             replay.note(rec, "upload")
             return ApiResponse(*replay.as_api_response(rec))
+        if not replay.enabled() and (c := native.active()) and (native_url := native.native_url(c, path)):
+            # a temp photo is attached to nothing yet: when the app API refuses it, the browser uploads it
+            try:
+                nr = await c.upload(native_url, field, filename, data, mime)
+            except native.NativeError as e:
+                log.info("photo upload through the app API failed, the browser uploads it: %s", e)
+            else:
+                if not native.falls_back(nr.status, "POST"):
+                    return ApiResponse(status=nr.status, text=nr.text, url=nr.url)
+                native.counts["fallback"] += 1
         self._require()
         headers = {"accept": "application/json", "x-wh-client": WEB_CLIENT}
         csrf = await self._csrf()
