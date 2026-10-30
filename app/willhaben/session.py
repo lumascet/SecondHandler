@@ -26,7 +26,7 @@ from typing import Any, Callable
 from app.config import get_settings
 from app.db import utcnow
 from app.i18n import t
-from app.willhaben import access_log, recorder, replay
+from app.willhaben import access_log, native, recorder, replay
 from app.willhaben.public import WEB_CLIENT, Blocked, willhaben_limiter
 
 log = logging.getLogger(__name__)
@@ -959,6 +959,7 @@ class BrowserSession:
             "capture_count": len(self._capture["entries"]) if self._capture else 0,
             "engine": self.engine,
             "chat_live": dict(self.chat_live),
+            "native": native.get_client().status(),
         }
 
 

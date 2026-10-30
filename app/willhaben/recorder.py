@@ -34,7 +34,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 log = logging.getLogger(__name__)
 
-REDACT_HEADERS = {"cookie", "set-cookie", "authorization", "x-bbx-csrf-token", "x-csrf-token", "proxy-authorization"}
+REDACT_HEADERS = {"cookie", "set-cookie", "authorization", "x-bbx-csrf-token", "x-csrf-token", "proxy-authorization",
+                  "x-wh-application-token"}
 # query parameters that change on every call without changing the answer
 VOLATILE_PARAMS = {"_", "t", "ts", "timestamp", "cb", "nocache", "rnd", "sfid", "isnavigation", "islog"}
 # JSON body keys that differ per call (request ids, client timestamps)

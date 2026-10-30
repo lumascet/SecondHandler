@@ -107,6 +107,13 @@ async def _session_check() -> None:
             log.warning("session check failed: %s", e)
 
 
+async def _native_keep() -> None:
+    from app.willhaben import native
+
+    with timeline.fresh(actor="scheduler"):
+        await native.keep_job()
+
+
 _described = [False]
 
 
@@ -156,6 +163,10 @@ def start() -> None:
     scheduler.add_job(_chat_sync, IntervalTrigger(seconds=s.chat_poll_interval_s, jitter=30), id="chat-sync",
                       replace_existing=True, max_instances=1, coalesce=True,
                       next_run_time=datetime.now().astimezone() + timedelta(seconds=30))
+    if not s.wh_replay:
+        scheduler.add_job(_native_keep, IntervalTrigger(minutes=30, jitter=120), id="willhaben-native",
+                          replace_existing=True, max_instances=1, coalesce=True,
+                          next_run_time=datetime.now().astimezone() + timedelta(seconds=90))
     scheduler.add_job(health.check, IntervalTrigger(seconds=health.CHECK_INTERVAL_S), id="health-check",
                       replace_existing=True, max_instances=1, coalesce=True,
                       next_run_time=datetime.now().astimezone() + timedelta(seconds=120))
