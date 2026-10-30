@@ -77,3 +77,12 @@ def test_the_new_ad_page_shows_where_a_published_draft_stands():
         page = c.get("/new-ad").text
     assert "In review" in page
     assert 'hx-post="/myads/check"' in page and "data-refresh-status" in page     # the button to read it anew
+
+
+def test_a_mini_pc_of_another_brand_is_not_the_ad():
+    """10-30: "Captiva Mini PC Business/Office …" passed for "Mini pc Nigopi Ryzen 7" on its word "mini"."""
+    from app.services import geizhals as g
+    assert g.title_conflict("Captiva Mini PC Business/Office R10-2597, Ryzen AI 7 350, 32GB RAM, 2TB SSD",
+                            "Mini pc Nigopi Ryzen 7") == "product"
+    assert g.title_conflict("Apple Mac mini M2 8GB 256GB", "Mac Mini M2 256GB") is None
+    assert g.title_conflict("Beelink Mini S12 Pro N100 16GB 500GB", "Beelink Mini PC S12 Pro") is None

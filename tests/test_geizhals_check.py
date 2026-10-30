@@ -242,7 +242,9 @@ async def test_agent_run_checks_before_the_rule(monkeypatch):
         fake_site.pages = [[listing("1", "Ubiquiti UniFiSwitch 24 PoE USW-24-POE", 350.0),
                             listing("2", "Ubiquiti UniFiSwitch 24 PoE", 340.0)]]
         await search_agents.run_agent(a.id)
-        assert len(fake.calls) == 3 and "geizhals_ok" not in fake.calls[2]["system"]   # switched off: no check
+        # switched off: the product the app found is still checked in the screening's call (10-30), but no search for
+        # the right one follows – no Geizhals search, no second Claude call
+        assert len(fake.calls) == 3 and "geizhals_ok" in fake.calls[2]["system"]
     finally:
         platforms.reset()
 

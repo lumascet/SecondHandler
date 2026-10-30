@@ -243,7 +243,10 @@ async def screen(agent_id: int, hits: list[Hit]) -> int:
     hits = hits[:MAX_PER_CALL]
     timeline.update_context(hit_ids=[h.id for h in hits])
     # with "Check the Geizhals product" the same call checks the product the app found (one call instead of two)
-    check = [nr for nr, h in enumerate(hits, 1) if agent.geizhals_check and geizhals_check.unchecked(h.geizhals)]
+    # always, also without the switch: a product the app found by itself is checked in the same call (no request
+    # more) – right ones kept, wrong ones not used (10-30: a Captiva at € 2,019 rated a Nigopi a bargain while the
+    # screening's own note said "another, stronger model"); looking for the right one stays the switch's
+    check = [nr for nr, h in enumerate(hits, 1) if geizhals_check.unchecked(h.geizhals)]
     try:
         by_nr, cands = await ask(agent, hits, check, _stats(agent_id, {h.id for h in hits}))
     except LLMError as e:
@@ -264,10 +267,11 @@ async def screen(agent_id: int, hits: list[Hit]) -> int:
         db.commit()
     if check:               # the product check's answers: right ones kept, wrong ones looked for
         nrs = [nr for nr in check if nr in by_nr]
-        await geizhals_check.settle(agent, [hits[nr - 1] for nr in nrs],
-                                    {i: {"ok": by_nr[nr].get("geizhals_ok"), "product": by_nr[nr].get("product"),
-                                         "queries": by_nr[nr].get("queries"), "parts": by_nr[nr].get("parts"), "pick": by_nr[nr].get("geizhals_pick"),
-                                         "candidates": cands.get(nr) or []} for i, nr in enumerate(nrs, 1)})
+        verdicts = {i: {"ok": by_nr[nr].get("geizhals_ok"), "product": by_nr[nr].get("product"),
+                        "queries": by_nr[nr].get("queries"), "parts": by_nr[nr].get("parts"),
+                        "pick": by_nr[nr].get("geizhals_pick"), "candidates": cands.get(nr) or []}
+                    for i, nr in enumerate(nrs, 1)}
+        await geizhals_check.settle(agent, [hits[nr - 1] for nr in nrs], verdicts, search=bool(agent.geizhals_check))
     for h in hits:          # callers keep using their objects
         with session() as db:
             fresh = db.get(Hit, h.id)

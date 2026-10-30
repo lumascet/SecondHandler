@@ -207,12 +207,14 @@ async def check(agent: SearchAgent, hits: list[Hit], with_backlog: bool = True) 
     return await settle(agent, hits, verdicts)
 
 
-async def settle(agent: SearchAgent, hits: list[Hit], verdicts: dict[int, dict[str, Any]]) -> int:
+async def settle(agent: SearchAgent, hits: list[Hit], verdicts: dict[int, dict[str, Any]], search: bool = True) -> int:
     """Claude's check of `hits` ({nr: {ok, product, queries, parts}}, nr counting from 1; parts: an ad of several
     products, priced as the sum of theirs (deals.parts_new_price); from the screening also pick and
     candidates: the lookup's results Claude chose from): keeps the right products, takes the picked ones, looks for
     the others (Geizhals searches, one more Claude call to pick: only when none of the lookup's results was it) and
-    stores the result on the hits and the objects passed in. Returns how many got a final answer."""
+    stores the result on the hits and the objects passed in. Returns how many got a final answer.
+    `search` False (the agent's "Check the Geizhals product" off): no looking for the right product – a wrong one is
+    just not used."""
     backend = get_backend("screen")
     result: dict[int, dict[str, Any]] = {}      # what gets stored; "checked" only for a final answer
     to_search: list[tuple[int, Hit, str, list[str]]] = []
@@ -248,7 +250,7 @@ async def settle(agent: SearchAgent, hits: list[Hit], verdicts: dict[int, dict[s
             continue
         if auto:
             result[nr] = {}                             # wrong product: its price is not used until a later check
-        if len(to_search) < MAX_SEARCHED:
+        if search and len(to_search) < MAX_SEARCHED:
             to_search.append((nr, h, product, queries[:deals.GH_FIND_SEARCHES]))
     searched: list[tuple[int, Hit, str, list[geizhals.Hit]]] = []
     for nr, h, product, queries in to_search:

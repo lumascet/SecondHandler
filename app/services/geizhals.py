@@ -478,9 +478,12 @@ OTHER_THING_WORDS = {"kit", "halterung", "mount", "hülle", "case", "cover", "ad
                      "ersatzteil", "ersatzteile", "zubehör", "pack", "bundle", "bundles"}
 
 
-# words that name a kind of thing or its interface, not a product: shared by any two SSDs
+# words that name a kind of thing or its interface, not a product: shared by any two SSDs – and by any two mini PCs
+# (10-30: "Captiva Mini PC Business/Office …" passed for a "Mini pc Nigopi Ryzen 7" ad on its word "mini")
 GENERIC_WORDS = frozenset({"ssd", "nvme", "hdd", "pcie", "sata", "usb", "m2", "m.2", "intern", "extern", "internal",
-                           "external", "gen3", "gen4", "gen5", "neu", "new"})
+                           "external", "gen3", "gen4", "gen5", "neu", "new",
+                           "mini", "pc", "pcs", "computer", "desktop", "laptop", "notebook", "tablet", "business",
+                           "office", "gaming", "home", "smart", "set", "kit", "bundle", "system"})
 
 
 def _gb(cap: str) -> float:
