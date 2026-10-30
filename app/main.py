@@ -3078,7 +3078,7 @@ async def credentials_login(site: str):
 
 
 @app.post("/settings/native/{action}")
-async def native_login(action: str, code: str = Form("")):
+async def native_login(action: str, code: str = Form(""), key: str = Form(""), op: str = Form("save")):
     """willhaben's app API (willhaben/native.py): log in with the stored details, enter the e-mail code willhaben
     sent for it, or log out of it (the browser's login stays)."""
     from app.services import credentials
@@ -3091,6 +3091,18 @@ async def native_login(action: str, code: str = Form("")):
     elif action == "logout":
         native.get_client().forget()
         msg = t("Logged out of the app API")
+    elif action == "key":
+        if native.app_key()[1] == "env":
+            msg = t("The app key comes from WILLHABEN_APP_KEY in .env – change it there")
+        elif op == "forget":
+            set_setting("willhaben_app_key", "")
+            msg = t("App key deleted – the browser does everything")
+        elif key.strip():
+            set_setting("willhaben_app_key", key.strip())
+            native.get_client().st.app_token = ""      # the next app token is signed with this key
+            msg = t("App key saved")
+        else:
+            msg = t("App key unchanged")
     elif action == "selftest":
         res = await native.selftest(get_session())
         msg = t("Read test: {ok} of {n} worked, {api} through the app API",

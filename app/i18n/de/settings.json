@@ -236,5 +236,15 @@
  "Chats, your ads and their actions go through willhaben's app interface; the browser takes over when it is not logged in. A new device gets a code by SMS or e-mail once; after that the login is remembered.": "Chats, deine Anzeigen und ihre Aktionen laufen über willhabens App-Schnittstelle; ist sie nicht angemeldet, übernimmt der Browser. Ein neues Gerät bekommt einmal einen Code per SMS oder E-Mail, danach bleibt die Anmeldung gemerkt.",
  "Read test: {ok} of {n} worked, {api} through the app API": "Lesetest: {ok} von {n} gingen, {api} über die App-Schnittstelle",
  "Test reads": "Lesen testen",
- "Last read test {ago}": "Letzter Lesetest {ago}"
+ "Last read test {ago}": "Letzter Lesetest {ago}",
+ "The app key comes from WILLHABEN_APP_KEY in .env and overrides the field below. Remove it there to use the field.": "Der App-Schlüssel kommt aus WILLHABEN_APP_KEY in der .env und hat Vorrang vor dem Feld unten. Entferne ihn dort, um das Feld zu verwenden.",
+ "No app key yet: the app interface stays off and the browser does everything. Enter the key of willhaben's Android app below, or set WILLHABEN_APP_KEY in .env.": "Noch kein App-Schlüssel: Die App-Schnittstelle bleibt aus, der Browser erledigt alles. Trag unten den Schlüssel der willhaben-Android-App ein oder setze WILLHABEN_APP_KEY in der .env.",
+ "set in .env": "in der .env gesetzt",
+ "App key": "App-Schlüssel",
+ "Save key": "Schlüssel speichern",
+ "Delete key": "Schlüssel löschen",
+ "The app key comes from WILLHABEN_APP_KEY in .env – change it there": "Der App-Schlüssel kommt aus WILLHABEN_APP_KEY in der .env – ändere ihn dort",
+ "App key deleted – the browser does everything": "App-Schlüssel gelöscht – der Browser erledigt alles",
+ "App key saved": "App-Schlüssel gespeichert",
+ "App key unchanged": "App-Schlüssel unverändert"
 }

@@ -819,6 +819,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "platform_ebay_product_search": "1",
     "platform_facebook_product_search": "1",
     "kleinanzeigen_api_auth": "",
+    "willhaben_app_key": "",
 }
 
 

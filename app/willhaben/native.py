@@ -4,7 +4,7 @@ Taken from the Android app 8.67.0 (build 615389) and checked live 2026-10-30 (bo
 
   1. GET app-aggregator.willhaben.at/service-registry.json -> the application-data URL of each environment.
   2. POST <application-data>?config_item=root-links with an applicationTokenRequest signed by the app (HMAC-SHA1 with a
-     key built into the APK) -> an application token (valid 30 days) and the context links (id -> URL). The app has no
+     key built into the APK; not part of this code: WILLHABEN_APP_KEY or Settings → willhaben, see app_key()) -> an application token (valid 30 days) and the context links (id -> URL). The app has no
      fixed endpoint paths: every URL comes from these links (and, logged in, from UserSpecificContextLinks).
   3. The user logs in at Keycloak (sso.willhaben.at, realm willhaben) as client `apps`: authorization code with PKCE,
      redirect willhaben-app://willhaben.at/token. Here the login form is filled in with the stored password
@@ -54,7 +54,6 @@ log = logging.getLogger(__name__)
 APP_VERSION = "8.67.0"
 APP_BUILD = "615389"
 ORGANIZATION = "api@tailored-apps.com"
-HMAC_KEY = b"REDACTED"      # the app's own (class gq0): signs the app token request only
 SECURITY_VERSION = "20130527022532"
 CLIENT = f"{ORGANIZATION};willhabenapp;android;{APP_VERSION};responsive_app"
 USER_AGENT = f"willhaben/{APP_BUILD} okhttp/5.5.0 Android/14"
@@ -90,6 +89,10 @@ class NativeError(RuntimeError):
     pass
 
 
+class NoAppKey(NativeError):
+    """No key to sign the app token request with: the app API stays off, the browser does it all."""
+
+
 class LoginRefused(NativeError):
     """Keycloak did not hand out a code: wrong password, a captcha, a code that did not fit."""
 
@@ -122,9 +125,23 @@ def timestamp() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
-def sign(salt: str, ts: str) -> str:
+def app_key() -> tuple[str, str]:
+    """(key, where it comes from: "env" | "settings" | "") that signs the app token request. WILLHABEN_APP_KEY wins
+    over the one entered in Settings → willhaben. willhaben checks the signature (a wrong key: HTTP 401)."""
+    if env := get_settings().willhaben_app_key.strip():
+        return env, "env"
+    from app.db import get_setting
+
+    stored = (get_setting("willhaben_app_key") or "").strip()
+    return (stored, "settings") if stored else ("", "")
+
+
+def sign(salt: str, ts: str, key: str | None = None) -> str:
+    key = key if key is not None else app_key()[0]
+    if not key:
+        raise NoAppKey("no willhaben app key (WILLHABEN_APP_KEY or Settings → willhaben)")
     msg = f"{salt};{ts};{ORGANIZATION}".encode()
-    return base64.b64encode(hmac.new(HMAC_KEY, msg, hashlib.sha1).digest()).decode()
+    return base64.b64encode(hmac.new(key.encode(), msg, hashlib.sha1).digest()).decode()
 
 
 def token_request(salt: str, ts: str) -> dict[str, Any]:
@@ -352,6 +369,7 @@ class NativeClient:
         st = self.st
         waiting = self.pending is not None and self.pending.until > time.time()
         return {"logged_in": self.logged_in, "user": st.login_user or None, "links": len(st.links), "via": st.login_via,
+                "key": app_key()[1],
                 "code_needed": waiting,
                 "user_links": len(st.user_links), "error": st.error or None,
                 "app_token_until": datetime.fromtimestamp(st.app_token_until).astimezone() if st.app_token_until else None,
@@ -381,6 +399,8 @@ class NativeClient:
     # ------------------------------------------------------------ app token and links
     async def bootstrap(self) -> None:
         """Service registry -> signed application-data: a fresh app token and the context links."""
+        if not app_key()[0]:
+            raise NoAppKey("no willhaben app key (WILLHABEN_APP_KEY or Settings → willhaben)")
         async with self._client() as c:
             async with self.limiter:
                 r = await c.get(REGISTRY_URL, headers={"user-agent": USER_AGENT, "accept": "application/json"})
@@ -398,6 +418,8 @@ class NativeClient:
                                  json=token_request(self.st.salt, ts))
             # the answer holds the app token: recorded without its body
             recorder.record_http(self.channel, "native", "POST", url, status=r.status_code, store_response=False)
+        if r.status_code == 401:
+            raise NativeError("application-data: HTTP 401 – the app key is not the app's (willhaben refused the signature)")
         if r.status_code != 200:
             raise NativeError(f"application-data: HTTP {r.status_code}")
         data = r.json()
@@ -739,7 +761,7 @@ def active() -> NativeClient | None:
     """The app API client when it is logged in and not switched off (setting willhaben_native = 0)."""
     from app.db import get_setting
 
-    if (get_setting("willhaben_native") or "1") == "0":
+    if (get_setting("willhaben_native") or "1") == "0" or not app_key()[0]:
         return None
     c = get_client()
     return c if c.logged_in else None
@@ -826,7 +848,7 @@ async def anon_route(url: str, route: Any = None) -> tuple[str, dict[str, str]] 
     from app.platforms.httpclient import ANON_SESSION_S
 
     web = url[len("https://www.willhaben.at"):] if url.startswith("https://www.willhaben.at/") else url
-    if not web.startswith(ANON_SEARCH) or (get_setting("willhaben_native_search") or "1") == "0":
+    if not web.startswith(ANON_SEARCH) or (get_setting("willhaben_native_search") or "1") == "0" or not app_key()[0]:
         return None
     c = anon_client(route)
     if c.st.paused_until > time.time():                       # its app token failed lately: the web for a while
@@ -929,6 +951,8 @@ async def keep_job() -> None:
     from app.willhaben.session import get_session
 
     n = get_client()
+    if not app_key()[0]:
+        return                                  # the app API is off without its key: the browser does it all
     try:
         await n.ensure_app_token()
         if not n.logged_in and n.pending is None and n.st.paused_until <= time.time():

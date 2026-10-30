@@ -38,7 +38,7 @@ class FakeWillhaben:
             body = json.loads(req.content)["applicationTokenRequest"]
             ts = req.headers["x-wh-date"]
             assert body["timestamp"] == ts
-            want = base64.b64encode(hmac.new(native.HMAC_KEY, f"{body['salt']};{ts};api@tailored-apps.com".encode(),
+            want = base64.b64encode(hmac.new(TEST_KEY.encode(), f"{body['salt']};{ts};api@tailored-apps.com".encode(),
                                              hashlib.sha1).digest()).decode()
             if body["signature"] != want:
                 return httpx.Response(403)
@@ -80,11 +80,15 @@ class FakeWillhaben:
         return httpx.Response(404)
 
 
+TEST_KEY = "not-the-apps-key"     # the real one is never part of the code (WILLHABEN_APP_KEY / Settings)
+
+
 @pytest.fixture
 def data(monkeypatch, tmp_path):
     from app.willhaben import access_log
 
     monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
+    monkeypatch.setattr(get_settings(), "willhaben_app_key", TEST_KEY)
     monkeypatch.setattr(native, "_typing_pause", _nosleep)
     yield tmp_path
     access_log.reset()                  # the fake requests counted here must not reach the access statistics tests
@@ -96,8 +100,8 @@ async def _nosleep(*_a, **_k):
 
 def test_signature_is_the_apps():
     # the app's own scheme: Base64(HMAC-SHA1(key, salt;timestamp;organization))
-    sig = native.sign("c2FsdA", "2026-10-30T18:00:00+0100")
-    want = hmac.new(b"REDACTED", b"c2FsdA;2026-10-30T18:00:00+0100;api@tailored-apps.com",
+    sig = native.sign("c2FsdA", "2026-10-30T18:00:00+0100", key=TEST_KEY)
+    want = hmac.new(TEST_KEY.encode(), b"c2FsdA;2026-10-30T18:00:00+0100;api@tailored-apps.com",
                     hashlib.sha1).digest()
     assert base64.b64decode(sig) == want
     assert native.timestamp()[-5] in "+-"
@@ -750,3 +754,22 @@ async def test_a_failed_anonymous_app_token_pauses_the_app_search(data, monkeypa
     assert anon.st.paused_until > 0
     anon._transport = httpx.MockTransport(FakeWillhaben())                 # back, but the pause holds
     assert await native.anon_route(url) is None and not anon.st.app_token
+
+
+def test_the_app_key_from_env_wins_over_the_setting_and_without_one_the_app_api_is_off(data, monkeypatch):
+    from app.db import set_setting
+
+    _routed_client(monkeypatch)
+    assert native.app_key() == (TEST_KEY, "env")
+    set_setting("willhaben_app_key", "from-the-gui")
+    try:
+        assert native.app_key() == (TEST_KEY, "env")                     # the environment wins
+        monkeypatch.setattr(get_settings(), "willhaben_app_key", "")
+        assert native.app_key() == ("from-the-gui", "settings")
+        set_setting("willhaben_app_key", "")
+        assert native.app_key() == ("", "")
+        assert native.active() is None and native.route("GET", "/webapi/iad/bap/1") is None   # off: the browser
+        with pytest.raises(native.NoAppKey):
+            native.sign("s", "t")
+    finally:
+        set_setting("willhaben_app_key", "")
