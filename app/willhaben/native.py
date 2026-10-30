@@ -32,7 +32,6 @@ import re
 import secrets
 import time
 import uuid
-from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from html import unescape
@@ -360,26 +359,20 @@ class NativeClient:
                                "scope": "openid", "code_challenge": challenge, "code_challenge_method": "S256",
                                "state": state, "ui_locales": "de"})
         url = f"{self._sso('auth')}?{q}"
-        got: asyncio.Future = asyncio.get_running_loop().create_future()
-
-        def seen(resp: Any) -> None:
-            loc = resp.headers.get("location") or ""
-            if loc.startswith(REDIRECT_URI) and not got.done():
-                got.set_result(loc)
-
-        page = await session.context.new_page()
-        page.on("response", seen)
-        try:
-            async with self.limiter:
-                with suppress(Exception):          # the redirect to willhaben-app:// ends the navigation with an error
-                    await session._goto(page, url, "login", wait_until="commit", timeout=int(timeout_s * 1000))
-                try:
-                    loc = await asyncio.wait_for(asyncio.shield(got), 3)
-                except TimeoutError:
-                    raise LoginRefused("the browser is not logged in at willhaben") from None
-        finally:
-            with suppress(Exception):
-                await page.close()
+        # the browser context's own request client: its cookies (the Keycloak session), the redirect not followed –
+        # a page would only see the navigation to willhaben-app:// aborted, without the redirect's Location
+        started = time.monotonic()
+        async with self.limiter:
+            with access_log.track("account", "login") as tr:
+                r = await session.context.request.get(url, max_redirects=0, timeout=timeout_s * 1000,
+                                                      headers={"accept": "text/html,application/xhtml+xml"})
+                tr.status = r.status
+        recorder.record_http("account", "login", "GET", url.split("?")[0], status=r.status, store_response=False,
+                             duration_ms=int((time.monotonic() - started) * 1000))
+        loc = r.headers.get("location") or ""
+        if not loc.startswith(REDIRECT_URI):
+            raise LoginRefused("the browser is not logged in at willhaben" if r.status == 200
+                               else f"no redirect (HTTP {r.status})")
         qs = parse_qs(urlsplit(loc).query)
         if qs.get("error"):
             raise LoginRefused(qs.get("error_description", qs["error"])[0])

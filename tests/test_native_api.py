@@ -148,36 +148,27 @@ def test_refusal_reasons():
 
 
 class _Resp:
-    def __init__(self, location):
-        self.headers = {"location": location}
-
-
-class _Page:
-    def __init__(self, fake, logged_in):
-        self.fake, self.logged_in, self.cb, self.closed = fake, logged_in, None, False
-
-    def on(self, event, cb):
-        self.cb = cb
-
-    async def close(self):
-        self.closed = True
+    def __init__(self, status, location=""):
+        self.status, self.headers = status, ({"location": location} if location else {})
 
 
 class _Session:
+    """The app's browser: its context's request client carries the Keycloak session's cookies."""
+
     def __init__(self, fake, logged_in=True):
+        self.fake, self.logged_in = fake, logged_in
         self.user = {"email": "me@example.org"}
-        self.page = _Page(fake, logged_in)
         self.context = self
+        self.request = self
+        self.redirects = None
 
-    async def new_page(self):
-        return self.page
-
-    async def _goto(self, page, url, kind, **kw):
+    async def get(self, url, max_redirects=None, **kw):
+        self.redirects = max_redirects
         q = parse_qs(urlsplit(url).query)
-        page.fake.challenge, page.fake.state = q["code_challenge"][0], q["state"][0]
-        if page.logged_in:          # Keycloak's SSO session: straight back to the app with a code
-            page.cb(_Resp(f"{native.REDIRECT_URI}?state={q['state'][0]}&code=CODE1"))
-            raise RuntimeError("net::ERR_ABORTED")
+        self.fake.challenge, self.fake.state = q["code_challenge"][0], q["state"][0]
+        if self.logged_in:          # Keycloak's SSO session: straight back to the app with a code
+            return _Resp(302, f"{native.REDIRECT_URI}?state={q['state'][0]}&code=CODE1")
+        return _Resp(200)           # the login form
 
 
 async def test_login_through_the_browser(data):
@@ -185,7 +176,7 @@ async def test_login_through_the_browser(data):
     n = native.NativeClient(transport=httpx.MockTransport(fake))
     s = _Session(fake)
     await n.login_via_browser(s)
-    assert n.logged_in and n.st.login_user == "me@example.org" and s.page.closed
+    assert n.logged_in and n.st.login_user == "me@example.org" and s.redirects == 0
     assert not any("login-actions" in str(c.url) for c in fake.calls)       # no password involved
 
 
