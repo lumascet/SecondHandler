@@ -1721,7 +1721,7 @@ def cached(ad_id: str, query: str | None = None, category_url: str | None = None
             == _key(ad_id, query, None, own_query)[1]:
         at = _ran_at(row.result)
         age = (utcnow() - at).total_seconds() if at else RESULT_TTL_S
-        if 0 <= age < RESULT_TTL_S:
+        if 0 <= age < RESULT_TTL_S and not double_counted(row.result.get("geizhals")):
             price = (row.result.get("ad") or {}).get("price")
             res = {**row.result, "claude": _claude_for(row.claude or row.result.get("claude"), price)}
             _put(_results, key, res, RESULT_TTL_S, at=time.monotonic() - age)
@@ -1734,7 +1734,16 @@ def stored_geizhals(ad_id: str) -> dict[str, Any] | None:
     with session() as db:
         row = db.get(DealCheck, str(ad_id))
     gh = ((row.result or {}).get("geizhals") if row else None) or {}
-    return gh if gh.get("by") == "claude" else None
+    if gh.get("by") != "claude" or double_counted(gh):
+        return None              # a sum kept from before its check (10-30) is found anew, not kept
+    return gh
+
+
+def double_counted(gh: dict[str, Any] | None) -> bool:
+    """A parts sum with a complete device in it (a system with its own RAM) and further parts: memory and storage
+    counted twice (parts_new_price refuses it; this catches sums stored before)."""
+    parts = (gh or {}).get("parts") or []
+    return len(parts) > 1 and any(_COMPLETE_RE.search(p.get("name") or "") for p in parts)
 
 
 GH_NONE_SETTING = "geizhals_claude_none"   # {ad ref: {reason, at}}: Claude searched Geizhals and found nothing

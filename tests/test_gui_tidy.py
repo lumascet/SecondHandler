@@ -106,3 +106,13 @@ async def test_a_complete_device_and_its_own_parts_are_not_summed(monkeypatch):
     r = await deals.parts_new_price(["Minisforum UM773 Lite Barebone", "Crucial 16GB DDR5 SO-DIMM"])
     assert r["price_from"] == 539.9                                    # a real barebone and its RAM still add up
     assert "Fertiggerät" in deals.PARTS_RULE
+
+
+def test_a_double_counted_sum_stored_before_is_not_kept():
+    from app.services import deals
+    bad = {"by": "claude", "price_from": 1361.14, "parts": [
+        {"name": "Mini-PC/Barebone Komplettsystem, AMD Ryzen 7 7735HS, 32GB RAM", "price_from": 959.0},
+        {"name": "Crucial SO-DIMM 16GB DDR5-4800", "price_from": 240.9}]}
+    assert deals.double_counted(bad)
+    assert not deals.double_counted({"parts": [{"name": "Minisforum UM773 Lite Barebone"}, {"name": "Crucial 16GB"}]})
+    assert not deals.double_counted({"name": "Captiva Mini PC, Ryzen AI 7 350, 32GB RAM"})   # one product: not a sum
