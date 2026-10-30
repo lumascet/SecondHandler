@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.i18n import t
+from app.willhaben import native
 from app.willhaben.account import AccountClient, OwnAdvert, _link_path
 from app.willhaben.session import BrowserSession, NotLoggedIn
 
@@ -103,7 +104,7 @@ async def _call(s: BrowserSession, method: str, path: str, body: Any = None, *, 
     not known (needs live verification), so a 2xx write counts as done whatever it returns: parsing the body
     must never turn a change willhaben already made into an error. A read (need_json) must return JSON."""
     r = await s.api(method, path, body)
-    if r.status in (401, 403) and await s.refresh_sso():   # same as BrowserSession.api_json
+    if r.status in (401, 403) and native.active() is None and await s.refresh_sso():   # as BrowserSession.api_json
         r = await s.api(method, path, body)
     if r.status in (401, 403):
         s.logged_in = False

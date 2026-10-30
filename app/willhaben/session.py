@@ -224,19 +224,18 @@ class BrowserSession:
         if not self.api_page.url.startswith(ORIGIN):
             await self._goto(self.api_page, PARK_URL, wait_until="domcontentloaded")
 
-    async def api(self, method: str, path: str, body: Any = None, accept: str = "application/json",
-                  native_ok: bool = True) -> ApiResponse:
+    async def api(self, method: str, path: str, body: Any = None, accept: str = "application/json") -> ApiResponse:
         """Run fetch() for an `/webapi/...` path (or a page, with accept=text/html) inside the logged-in browser.
 
         Requests the app API answers the same way go there instead once it is logged in (app/willhaben/native.py); when
-        it refuses, lacks the endpoint or (reads only) fails, the browser answers. `native_ok=False`: always the browser (its own login check).
+        it refuses, lacks the endpoint or (reads only) fails, the browser answers.
         """
         url = path if path.startswith("http") else ORIGIN + path
         payload = json.dumps(body) if body is not None else None
         if replay.enabled() and (rec := replay.find(method, url, payload)):    # WH_REPLAY=1
             replay.note(rec, access_log.classify(url))
             return ApiResponse(*replay.as_api_response(rec))
-        if native_ok and not replay.enabled() and (native_url := native.route(method, path, accept)):
+        if not replay.enabled() and (native_url := native.route(method, path, accept)):
             try:
                 nr = await native.get_client().request(method, native_url, native.app_body(path, body))
             except native.NativeError as e:
@@ -422,9 +421,9 @@ class BrowserSession:
 
     async def api_json(self, method: str, path: str, body: Any = None) -> Any:
         r = await self.api(method, path, body)
-        if r.status in (401, 403):
-            if await self.refresh_sso():
-                r = await self.api(method, path, body)
+        # a refused browser request may come back after a silent SSO re-login; the app API renews its own token
+        if r.status in (401, 403) and native.active() is None and await self.refresh_sso():
+            r = await self.api(method, path, body)
         if r.status in (401, 403):
             self.logged_in = False
             raise NotLoggedIn(f"{path}: HTTP {r.status}")
@@ -439,8 +438,9 @@ class BrowserSession:
 
     # ---------------------------------------------------------------- login state
     async def _me(self) -> dict[str, Any] | None:
-        """Profile of the logged-in user, or None. Anonymous requests get HTTP 204 with no body."""
-        r = await self.api("GET", ME_PATH, native_ok=False)    # the browser's own login, which the writes need
+        """Profile of the logged-in user, or None: through the app API when it is logged in (api() routes it), else
+        the browser's. Anonymous browser requests get HTTP 204 with no body."""
+        r = await self.api("GET", ME_PATH)
         if r.status != 200 or not r.text:
             return None
         try:
@@ -450,13 +450,15 @@ class BrowserSession:
         return parse_me(data)
 
     async def check_login(self) -> bool:
-        if not self.started:
+        """Logged in at willhaben: the app API's login when it is there, else the browser's."""
+        app = native.active() is not None
+        if not app and not self.started:
             self.logged_in = None
             return False
         data = await self._me()
-        # Web session gone but maybe the (longer-lived) SSO session is not: try a silent re-login,
-        # except when we already know we are logged out.
-        if data is None and self.logged_in is not False and await self.refresh_sso():
+        # browser only: web session gone but maybe the (longer-lived) SSO session is not – a silent re-login,
+        # except when we already know we are logged out
+        if data is None and not app and self.logged_in is not False and await self.refresh_sso():
             data = await self._me()
         self.last_check = utcnow()
         if data:

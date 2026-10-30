@@ -284,8 +284,7 @@ async def test_the_browser_session_uses_it_and_falls_back(data, monkeypatch):
     answers_plan = [401]
     assert (await s.api("GET", "/webapi/chat-api/v1/counter")).json() == {"unread": 1}
     assert len(browser) == 2
-    await s.api("GET", "/webapi/userprofile-service/userprofile/me", native_ok=False)   # the browser's own login check
-    assert len(answers) == 3 and len(browser) == 3
+    assert len(answers) == 3 and len(browser) == 2
 
 
 async def _none(*a, **k):
@@ -837,3 +836,27 @@ async def test_ad_details_come_from_the_app_api_as_the_web_page_has_them(data, m
     assert await pc.get_detail("333") is None
     with pytest.raises(Exception, match="no __NEXT_DATA__"):        # the app API failed: the web page answered
         await pc.get_detail("444")
+
+
+async def test_the_login_check_goes_through_the_app_api(data, monkeypatch):
+    from app.willhaben.session import BrowserSession
+
+    _routed_client(monkeypatch)
+    asked = []
+
+    async def request(method, url, body=None, **kw):
+        asked.append(url)
+        return native.NativeResponse(200, json.dumps({"userData": {"loginId": 42, "uuid": "u-1",
+                                                                    "emailAddress": "me@example.org"}}), url)
+
+    monkeypatch.setattr(native.get_client(), "request", request)
+    s = BrowserSession()                                       # the browser is not even running
+    sso = []
+
+    async def no_sso():
+        sso.append(1)
+        return False
+
+    monkeypatch.setattr(s, "refresh_sso", no_sso)
+    assert await s.check_login() is True
+    assert s.user["uuid"] == "u-1" and asked == ["https://api.willhaben.at/restapi/v2/user/42"] and not sso
