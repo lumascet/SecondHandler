@@ -19,6 +19,26 @@
   </div>
   <p class="text-[12.5px] text-muted">{{ _("You log in once in the app's browser window; the session stays in its profile and is renewed automatically. It is used for your chats, your ads and purchases: search agents, price checks and the product search stay anonymous.") }}</p>
   {% with cred_site = 'willhaben' %}{% include "_credentials.html" %}{% endwith %}
+  {# willhaben's app API (willhaben/native.py): logged in with the stored details, the browser's login as the fallback #}
+  {% set na = ss.native or {} %}
+  <div id="s-native" class="flex flex-col gap-2 border-t border-base-300 pt-2.5">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <div class="flex min-w-0 items-center gap-2 text-[13px]">
+        <span class="size-2 shrink-0 rounded-full {{ 'bg-success' if na.logged_in else 'bg-warning' if na.code_needed else 'bg-off' }}"></span>
+        <span>{{ _("App API") }}: {% if na.logged_in %}{{ _("logged in") }}{% if na.via == 'browser' %} · {{ _("through the browser's login") }}{% elif na.via == 'password' %} · {{ _("with the stored details") }}{% endif %}{% elif na.code_needed %}{{ _("waiting for the code from willhaben's e-mail") }}{% else %}{{ _("not logged in") }}{% endif %}</span>
+      </div>
+      <div class="flex flex-wrap gap-1.5">
+        {% if credentials_state('willhaben').has_password %}<form method="post" action="/settings/native/login"><button class="btn btn-sm{{ ' btn-primary' if not na.logged_in else '' }}">{{ _("Log in via API") }}</button></form>{% endif %}
+        {% if na.logged_in %}<form method="post" action="/settings/native/logout"><button class="btn btn-ghost btn-sm">{{ _("Log out of the API") }}</button></form>{% endif %}
+      </div>
+    </div>
+    {% if na.code_needed %}<form method="post" action="/settings/native/code" class="flex flex-wrap items-center gap-1.5">
+      <input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="{{ _('Code from the e-mail') }}" class="input input-sm w-40 bg-base-200">
+      <button class="btn btn-primary btn-sm">{{ _("Confirm") }}</button>
+    </form>{% endif %}
+    {% if na.error and not na.logged_in %}<p class="text-[12px] text-muted">{{ na.error }}{% if na.paused_until %} · {{ _("next automatic try {when}", when=na.paused_until|ago) }}{% endif %}</p>{% endif %}
+    <p class="text-[11.5px] text-muted">{{ _("Chats, your ads and their actions go through willhaben's app interface; the browser takes over when it is not logged in. A new device gets a code by e-mail once; after that the login is remembered.") }}</p>
+  </div>
   <a id="s-browser-window" href="/session" class="text-[13px] text-muted no-underline hover:underline">{{ _("Browser window and request recording") }} →</a>
 </section>
 <section class="flex flex-col gap-3.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">

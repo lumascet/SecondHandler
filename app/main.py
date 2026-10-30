@@ -3077,6 +3077,25 @@ async def credentials_login(site: str):
     return back(f"/settings/{site}?remote={remote}&msg={quote(msg, safe='')}")
 
 
+@app.post("/settings/native/{action}")
+async def native_login(action: str, code: str = Form("")):
+    """willhaben's app API (willhaben/native.py): log in with the stored details, enter the e-mail code willhaben
+    sent for it, or log out of it (the browser's login stays)."""
+    from app.services import credentials
+    from app.willhaben import native
+    if action == "login":
+        cred = credentials.get("willhaben")
+        msg = await native.login_now(cred["user"], cred["password"]) if cred else t("Store the login details first")
+    elif action == "code":
+        msg = await native.code_now(code)
+    elif action == "logout":
+        native.get_client().forget()
+        msg = t("Logged out of the app API")
+    else:
+        raise HTTPException(404)
+    return back(f"/settings/willhaben?msg={quote(msg, safe='')}#s-native")
+
+
 @app.post("/settings/account/{pid}/login")
 async def site_account_login(pid: str):
     """Kleinanzeigen, Vinted: their login page in the remote view (the overlay opens with it)."""

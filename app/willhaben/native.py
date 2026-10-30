@@ -44,6 +44,7 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 import httpx
 
 from app.config import get_settings
+from app.i18n import t
 from app.willhaben import access_log, recorder
 from app.willhaben.public import willhaben_limiter
 
@@ -64,6 +65,7 @@ CONFIG_ITEMS = ("root-links",)
 APP_TOKEN_MARGIN_S = 2 * 86400          # renewed two days before it runs out
 ACCESS_MARGIN_S = 60
 LOGIN_PAUSE_S = 24 * 3600               # after a refused login: no new attempt by itself for a day
+CODE_WAIT_S = 15 * 60                   # a login waits this long for the e-mail code
 TIMEOUT_S = 30
 
 # read once after the first login (GET only): what the account calls would need, to see the shapes. {uid}/{uuid}: the
@@ -84,7 +86,25 @@ class NativeError(RuntimeError):
 
 
 class LoginRefused(NativeError):
-    """Keycloak did not hand out a code: wrong password, a captcha or a code by e-mail (finish it in the app)."""
+    """Keycloak did not hand out a code: wrong password, a captcha, a code that did not fit."""
+
+
+class CodeNeeded(LoginRefused):
+    """willhaben sent a code by e-mail (a device it does not know yet): the login waits for submit_code()."""
+
+
+@dataclass
+class Pending:
+    """A password login stopped at the e-mail code form, until the code comes (in memory only)."""
+    action: str
+    fields: dict[str, str]
+    code_fields: list[str]
+    cookies: list[tuple[str, str, str, str]]
+    verifier: str
+    state: str
+    user: str
+    referer: str
+    until: float
 
 
 def timestamp() -> str:
@@ -143,6 +163,42 @@ def login_form(html: str) -> str | None:
     return unescape(m.group(1)) if m else None
 
 
+_ANY_FORM = re.compile(r"<form\b([^>]*)>(.*?)</form>", re.DOTALL | re.IGNORECASE)
+_INPUT = re.compile(r"<(?:input|button)\b[^>]*>", re.IGNORECASE)
+
+
+def _attr(tag: str, name: str) -> str | None:
+    m = re.search(rf'(?<![\w-]){name}\s*=\s*"([^"]*)"', tag, re.IGNORECASE)
+    return unescape(m.group(1)) if m else None
+
+
+def challenge_form(html: str) -> tuple[str, dict[str, str], list[str]] | None:
+    """A Keycloak form asking for a code: (action, fields to send as they are, the code field names), or None.
+    Hidden fields and named buttons go back unchanged, checkboxes ticked (e.g. "trust this device")."""
+    for attrs, inner in _ANY_FORM.findall(html):
+        action = _attr(attrs, "action")
+        if not action or "login-actions" not in action:
+            continue
+        fields: dict[str, str] = {}
+        codes: list[str] = []
+        for tag in _INPUT.findall(inner):
+            name = _attr(tag, "name")
+            if not name:
+                continue
+            kind = (_attr(tag, "type") or "text").lower()
+            if tag.lower().startswith("<button"):
+                fields.setdefault(name, _attr(tag, "value") or "")
+            elif kind == "hidden":
+                fields[name] = _attr(tag, "value") or ""
+            elif kind == "checkbox":
+                fields[name] = _attr(tag, "value") or "on"
+            elif kind in ("text", "number", "tel") and name not in ("username", "password", "email"):
+                codes.append(name)
+        if codes:
+            return action, fields, codes
+    return None
+
+
 def refusal(html: str) -> str:
     """Why the login page came back instead of the code (as willhaben words it), or what it asks for."""
     if re.search(r'id="g-recaptcha-sitekey-v2"[^>]*value="[^"]+"', html):
@@ -154,6 +210,19 @@ def refusal(html: str) -> str:
         if text:
             return text[:200]
     return "login page again"
+
+
+def token_user_id(access_token: str) -> str:
+    """willhaben's numeric login id from the access token's claims (unverified, only read), or ""."""
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(access_token.split(".")[1] + "=="))
+    except (IndexError, ValueError):
+        return ""
+    for key in ("loginId", "login_id", "user_id", "userId", "uid", "sub", "preferred_username"):
+        v = str(claims.get(key) or "")
+        if v.isdigit():
+            return v
+    return ""
 
 
 def fingerprint() -> str:
@@ -179,6 +248,8 @@ class State:
     visitor_id: str = ""
     fp: str = ""
     login_user: str = ""
+    login_via: str = ""              # "password" or "browser"
+    sso_cookies: list[dict[str, str]] = field(default_factory=list)   # Keycloak's, from the last password login
     user_id: str = ""                # willhaben's numeric login id: part of the user URLs
     logged_in_at: float = 0
     probed: str = ""                 # PROBE_VERSION that ran
@@ -230,6 +301,7 @@ class NativeClient:
             self.st.salt, self.st.visitor_id, self.st.fp = _b64url(os.urandom(12)), str(uuid.uuid4()), fingerprint()
         self._transport = transport
         self._lock = asyncio.Lock()
+        self.pending: Pending | None = None
         self.limiter = willhaben_limiter()      # same home IP as the browser and the anonymous visitor
 
     def _client(self, **kw: Any) -> httpx.AsyncClient:
@@ -245,7 +317,9 @@ class NativeClient:
 
     def status(self) -> dict[str, Any]:
         st = self.st
-        return {"logged_in": self.logged_in, "user": st.login_user or None, "links": len(st.links),
+        waiting = self.pending is not None and self.pending.until > time.time()
+        return {"logged_in": self.logged_in, "user": st.login_user or None, "links": len(st.links), "via": st.login_via,
+                "code_needed": waiting,
                 "user_links": len(st.user_links), "error": st.error or None,
                 "app_token_until": datetime.fromtimestamp(st.app_token_until).astimezone() if st.app_token_until else None,
                 "logged_in_at": datetime.fromtimestamp(st.logged_in_at).astimezone() if st.logged_in_at else None,
@@ -311,18 +385,18 @@ class NativeClient:
 
     # ------------------------------------------------------------ user login
     async def login(self, user: str, password: str) -> None:
-        """The app's Keycloak login, the form filled in with the stored password. LoginRefused when no code comes."""
+        """The app's Keycloak login with the stored password. Keycloak's cookies from an earlier login come along (a known
+        device: no code, often no password either). CodeNeeded when willhaben sends a code by e-mail first: the login
+        then waits for submit_code(); LoginRefused when no code comes for another reason."""
         await self.ensure_app_token()
+        self.pending = None
         verifier, challenge = pkce()
         state = _b64url(os.urandom(12))
         params = {"client_id": CLIENT_ID, "response_type": "code", "redirect_uri": REDIRECT_URI, "scope": "openid",
                   "code_challenge": challenge, "code_challenge_method": "S256", "state": state, "ui_locales": "de"}
         auth_url = self._sso("auth")
         host = urlsplit(auth_url).hostname or "sso.willhaben.at"
-        browser = {"user-agent": LOGIN_UA, "accept": "text/html,application/xhtml+xml",
-                   "accept-language": "de-AT,de;q=0.9", "x-requested-with": "at.willhaben"}
-        async with self._client(headers=browser, follow_redirects=False) as c:
-            c.cookies.set("wh-fp", self.st.fp, domain=host, path="/auth/realms/willhaben")
+        async with self._login_client(host) as c:
             async with self.limiter:
                 r = await c.get(auth_url, params=params)
             recorder.record_http("account", "login", "GET", auth_url, status=r.status_code, store_response=False)
@@ -336,24 +410,88 @@ class NativeClient:
                 async with self.limiter:
                     r = await c.post(urljoin(str(r.url), action), data=form,
                                      headers={"origin": f"https://{host}", "referer": str(r.url)})
-                # never the body: it holds the password
+                # never the request body: it holds the password
                 recorder.record_http("account", "login", "POST", str(r.url).split("?")[0], status=r.status_code,
                                      store_response=False)
-                for _ in range(5):                     # Keycloak may pass through its own pages first
-                    code = self._code(r)
-                    if code is not None or r.status_code not in (301, 302, 303) or not r.headers.get("location"):
-                        break
-                    async with self.limiter:
-                        r = await c.get(urljoin(str(r.url), r.headers["location"]))
+                r, code = await self._follow(c, r)
                 if code is None:
-                    raise LoginRefused(refusal(r.text))
-            if code[1] != state:
-                raise LoginRefused("state mismatch")
-            await self._token({"grant_type": "authorization_code", "code": code[0], "redirect_uri": REDIRECT_URI,
-                               "client_id": CLIENT_ID, "code_verifier": verifier}, c)
+                    self._challenge(r, c, verifier, state, user)          # raises CodeNeeded or LoginRefused
+            await self._finish(c, code, state, verifier, user)
+
+    def _login_client(self, host: str) -> httpx.AsyncClient:
+        c = self._client(headers={"user-agent": LOGIN_UA, "accept": "text/html,application/xhtml+xml",
+                                  "accept-language": "de-AT,de;q=0.9", "x-requested-with": "at.willhaben"},
+                         follow_redirects=False)
+        for ck in self.st.sso_cookies:
+            c.cookies.set(ck["name"], ck["value"], domain=ck.get("domain") or host, path=ck.get("path") or "/")
+        c.cookies.set("wh-fp", self.st.fp, domain=host, path="/auth/realms/willhaben")
+        return c
+
+    async def _follow(self, c: httpx.AsyncClient, r: httpx.Response) -> tuple[httpx.Response, tuple[str, str] | None]:
+        """Keycloak may pass through its own pages before the redirect to the app: follow them (at most 5)."""
+        for _ in range(5):
+            code = self._code(r)
+            if code is not None or r.status_code not in (301, 302, 303) or not r.headers.get("location"):
+                return r, code
+            async with self.limiter:
+                r = await c.get(urljoin(str(r.url), r.headers["location"]))
+        return r, self._code(r)
+
+    def _challenge(self, r: httpx.Response, c: httpx.AsyncClient, verifier: str, state: str, user: str) -> None:
+        """The page after the password: a form asking for the e-mail code -> kept for submit_code(), CodeNeeded."""
+        # the page is recorded (no password in it): the form's fields are what submit_code() fills in
+        recorder.record_http("account", "login", "GET", str(r.url).split("?")[0], status=r.status_code,
+                             resp_body=r.text, content_type="text/html")
+        form = challenge_form(r.text)
+        if form is None:
+            raise LoginRefused(refusal(r.text))
+        action, fields, code_fields = form
+        self.pending = Pending(action=urljoin(str(r.url), action), fields=fields, code_fields=code_fields,
+                               cookies=[(ck.name, ck.value, ck.domain, ck.path) for ck in c.cookies.jar],
+                               verifier=verifier, state=state, user=user, referer=str(r.url),
+                               until=time.time() + CODE_WAIT_S)
+        raise CodeNeeded(t("willhaben sent a code by e-mail – enter it in Settings → willhaben"))
+
+    async def submit_code(self, code: str) -> None:
+        """Finish a login waiting for willhaben's e-mail code."""
+        p = self.pending
+        if p is None or p.until < time.time():
+            self.pending = None
+            raise LoginRefused(t("No login is waiting for a code (any more) – start the login again"))
+        code = re.sub(r"\s+", "", code or "")
+        if not code:
+            raise LoginRefused(t("Empty code"))
+        form = dict(p.fields)
+        if len(p.code_fields) > 1 and len(code) == len(p.code_fields):     # one box per digit
+            form.update(zip(p.code_fields, code))
+        else:
+            form[p.code_fields[0]] = code
+        host = urlsplit(p.action).hostname or "sso.willhaben.at"
+        async with self._login_client(host) as c:
+            for name, value, domain, path in p.cookies:
+                c.cookies.set(name, value, domain=domain, path=path)
+            async with self.limiter:
+                r = await c.post(p.action, data=form, headers={"origin": f"https://{host}", "referer": p.referer})
+            recorder.record_http("account", "login", "POST", p.action.split("?")[0], status=r.status_code,
+                                 store_response=False)
+            r, got = await self._follow(c, r)
+            if got is None:
+                self._challenge(r, c, p.verifier, p.state, p.user)      # wrong code: the form again, still waiting
+            self.pending = None
+            await self._finish(c, got, p.state, p.verifier, p.user)
+
+    async def _finish(self, c: httpx.AsyncClient, code: tuple[str, str], state: str, verifier: str, user: str) -> None:
+        if code[1] != state:
+            raise LoginRefused("state mismatch")
+        await self._token({"grant_type": "authorization_code", "code": code[0], "redirect_uri": REDIRECT_URI,
+                           "client_id": CLIENT_ID, "code_verifier": verifier}, c)
+        # Keycloak's cookies (its session and whatever marks this device as known) for the next login
+        self.st.sso_cookies = [{"name": ck.name, "value": ck.value, "domain": ck.domain, "path": ck.path}
+                               for ck in c.cookies.jar if ck.name != "wh-fp"]
         self.st.login_user, self.st.logged_in_at, self.st.error, self.st.paused_until = user, time.time(), "", 0
+        self.st.login_via = "password"
         save_state(self.st)
-        log.info("willhaben app API: logged in")
+        log.info("willhaben app API: logged in with the stored password")
 
     async def login_via_browser(self, session: Any, timeout_s: float = 25) -> None:
         """The app's login URL opened in the app's browser: its Keycloak session (same realm as the web login) hands
@@ -389,6 +527,7 @@ class NativeClient:
                            "client_id": CLIENT_ID, "code_verifier": verifier})
         self.st.login_user = (session.user or {}).get("email") or "browser"
         self.st.user_id = str((session.user or {}).get("id") or self.st.user_id)
+        self.st.login_via = "browser"
         self.st.logged_in_at, self.st.error, self.st.paused_until = time.time(), "", 0
         save_state(self.st)
         log.info("willhaben app API: logged in through the browser's willhaben login")
@@ -609,34 +748,86 @@ def get_client() -> NativeClient:
     return _client
 
 
+async def login_now(user: str, password: str) -> str:
+    """Log in to the app API with these details now (the settings button): a fresh login even when one is there.
+    Returns what to tell the owner; a code by e-mail leaves the login waiting for submit_code()."""
+    n = get_client()
+    try:
+        await n.login(user, password)
+    except CodeNeeded as e:
+        return str(e)
+    except LoginRefused as e:
+        n.st.error = f"login refused: {e}"
+        save_state(n.st)
+        return t("willhaben refused the login: {reason}", reason=e)
+    await _after_login(n)
+    return t("Logged in to the app API")
+
+
+async def code_now(code: str) -> str:
+    n = get_client()
+    try:
+        await n.submit_code(code)
+    except CodeNeeded:
+        return t("The code did not fit – enter the code from the newest e-mail")
+    except LoginRefused as e:
+        return str(e)
+    await _after_login(n)
+    return t("Logged in to the app API")
+
+
+async def _after_login(n: NativeClient) -> None:
+    from app.willhaben.session import get_session
+
+    with_ids = _probe_ids(get_session())
+    if not n.st.user_id:
+        n.st.user_id = with_ids["uid"]
+    if not n.st.user_id:                     # the browser does not know it: the access token may
+        n.st.user_id = token_user_id(n.st.access_token)
+    save_state(n.st)
+    if n.st.user_id:
+        try:
+            await n.load_user_links()
+        except NativeError as e:
+            log.info("willhaben app API: user links not loaded: %s", e)
+
+
 async def keep_job() -> None:
-    """Scheduler: app token fresh; without a login yet, logged in through the browser's willhaben login (silent), else
-    with the stored password; the probe once after the first login. A refused password login pauses for a day (no retry
-    loop against Keycloak)."""
+    """Scheduler: app token fresh; without a login yet, logged in with the stored password (Keycloak's cookies from the
+    last login make the device known), or through the browser's willhaben login when no password is stored. A code by
+    e-mail is announced and waits for the owner; a refused or waiting login pauses the automatic tries for a day (no
+    e-mail per half hour, no retry loop against Keycloak)."""
     from app.services import credentials
+    from app.services.notify import notify
     from app.willhaben.session import get_session
 
     n = get_client()
     try:
         await n.ensure_app_token()
-        if not n.logged_in:
-            sess = get_session()
-            if sess.started and sess.logged_in and getattr(sess, "context", None) is not None:
+        if not n.logged_in and n.pending is None and n.st.paused_until <= time.time():
+            if cred := credentials.get("willhaben"):
                 try:
-                    await n.login_via_browser(sess)
+                    await n.login(cred["user"], cred["password"])
+                except CodeNeeded as e:
+                    n.st.error, n.st.paused_until = str(e), time.time() + LOGIN_PAUSE_S
+                    save_state(n.st)
+                    await notify("health", t("willhaben login: code needed"), str(e), url="/settings/willhaben")
+                    return
                 except LoginRefused as e:
-                    log.info("willhaben app API: no login through the browser (%s)", e)
+                    n.st.error, n.st.paused_until = f"login refused: {e}", time.time() + LOGIN_PAUSE_S
+                    save_state(n.st)
+                    log.warning("willhaben app API: login refused (%s), next try in a day", e)
+                    return
+                await _after_login(n)
+            else:
+                sess = get_session()
+                if sess.started and sess.logged_in and getattr(sess, "context", None) is not None:
+                    try:
+                        await n.login_via_browser(sess)
+                    except LoginRefused as e:
+                        log.info("willhaben app API: no login through the browser (%s)", e)
         if not n.logged_in:
-            cred = credentials.get("willhaben")
-            if not cred or n.st.paused_until > time.time():
-                return
-            try:
-                await n.login(cred["user"], cred["password"])
-            except LoginRefused as e:
-                n.st.error, n.st.paused_until = f"login refused: {e}", time.time() + LOGIN_PAUSE_S
-                save_state(n.st)
-                log.warning("willhaben app API: login refused (%s), next try in a day", e)
-                return
+            return
         await n.ensure_access()
         if not n.st.user_id and (uid := (get_session().user or {}).get("id")):
             n.st.user_id = str(uid)
@@ -649,7 +840,6 @@ async def keep_job() -> None:
         n.st.error = str(e)[:300]
         save_state(n.st)
         log.warning("willhaben app API: %s", e)
-
 
 def _probe_ids(sess: Any) -> dict[str, str]:
     """The ids the probe fills in: the account's (from the browser's login) and one own ad and one conversation."""

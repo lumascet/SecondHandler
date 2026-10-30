@@ -351,3 +351,69 @@ async def test_a_failed_write_is_not_repeated_in_the_browser(data, monkeypatch):
     with pytest.raises(native.NativeError):
         await s.api("PUT", "/webapi/myatz/bap/deactivate/1")
     assert not browser
+
+
+CODE_PAGE = ('<html><form id="kc-otp" action="https://sso.willhaben.at/auth/realms/willhaben/login-actions/'
+             'authenticate?session_code=xyz&amp;execution=otp" method="post">'
+             '<input type="hidden" name="tab_id" value="T1"><input type="checkbox" name="trustDevice">'
+             '<input type="text" name="emailCode" data-name="x" autocomplete="one-time-code">'
+             '<button type="submit" name="submitCode" value="ok">Weiter</button></form></html>')
+
+
+class CodeWillhaben(FakeWillhaben):
+    """A device willhaben does not know: the password is answered with an e-mail code form; once the code went through,
+    Keycloak's cookie marks the device and the next login needs neither password nor code."""
+
+    def __call__(self, req):
+        url = str(req.url)
+        cookies = req.headers.get("cookie", "")
+        if url.startswith(AUTH + "/auth") and "KEYCLOAK_IDENTITY=known" in cookies:
+            q = parse_qs(urlsplit(url).query)
+            self.challenge, self.state = q["code_challenge"][0], q["state"][0]
+            return httpx.Response(302, headers={"location": f"{native.REDIRECT_URI}?state={self.state}&code=CODE1"})
+        if "login-actions/authenticate" in url and "execution=otp" in url:
+            form = parse_qs(req.content.decode())
+            assert form["tab_id"] == ["T1"] and form["trustDevice"] == ["on"] and "AUTH_SESSION=1" in cookies
+            if form["emailCode"] != ["123456"]:
+                return httpx.Response(200, text=CODE_PAGE)
+            return httpx.Response(302, headers={
+                "location": f"{native.REDIRECT_URI}?state={self.state}&code=CODE1",
+                "set-cookie": "KEYCLOAK_IDENTITY=known; Path=/auth/realms/willhaben; Secure"})
+        if "login-actions/authenticate" in url:
+            self.calls.append(req)
+            return httpx.Response(200, text=CODE_PAGE, headers={"set-cookie": "AUTH_SESSION=1; Path=/auth/realms/willhaben"})
+        return super().__call__(req)
+
+
+async def test_login_waits_for_the_email_code_then_remembers_the_device(data):
+    fake = CodeWillhaben()
+    n = native.NativeClient(transport=httpx.MockTransport(fake))
+    with pytest.raises(native.CodeNeeded):
+        await n.login("me@example.org", "right")
+    assert n.pending and n.pending.code_fields == ["emailCode"] and n.status()["code_needed"]
+    with pytest.raises(native.CodeNeeded):              # a wrong code: the form again, the login keeps waiting
+        await n.submit_code("999999")
+    await n.submit_code(" 123 456 ")
+    assert n.logged_in and n.pending is None and n.st.login_via == "password"
+    assert any(c["name"] == "KEYCLOAK_IDENTITY" for c in n.st.sso_cookies)
+    n.forget()
+    again = native.NativeClient(transport=httpx.MockTransport(fake))   # restart: the device is known now
+    posts = len([c for c in fake.calls if "login-actions" in str(c.url)])
+    await again.login("me@example.org", "right")
+    assert again.logged_in and len([c for c in fake.calls if "login-actions" in str(c.url)]) == posts
+
+
+async def test_no_code_without_a_waiting_login(data):
+    n = native.NativeClient(transport=httpx.MockTransport(FakeWillhaben()))
+    with pytest.raises(native.LoginRefused, match="start the login again"):
+        await n.submit_code("123456")
+
+
+def test_code_form_and_token_id():
+    assert native.challenge_form(CODE_PAGE) == (
+        "https://sso.willhaben.at/auth/realms/willhaben/login-actions/authenticate?session_code=xyz&execution=otp",
+        {"tab_id": "T1", "trustDevice": "on", "submitCode": "ok"}, ["emailCode"])
+    assert native.challenge_form(LOGIN_PAGE.replace('<input name="username">', "")) is None   # password only: no code
+    body = base64.urlsafe_b64encode(json.dumps({"sub": "a-b", "loginId": 42}).encode()).decode().rstrip("=")
+    assert native.token_user_id(f"h.{body}.s") == "42"
+    assert native.token_user_id("garbage") == ""
