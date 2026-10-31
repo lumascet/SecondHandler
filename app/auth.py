@@ -2,7 +2,8 @@
 
 Active only when DASHBOARD_PASSWORD is set. Browsers get a cookie from /login; scripts, the MCP server and
 other API clients can keep sending HTTP Basic auth. Changing the password or user ends all sessions, because
-the cookie signature covers both. Opened from a Telegram button as a Mini App, the page logs in with Telegram's
+the cookie signature covers both. The AI agent's bearer token (valid_bearer) opens the JSON API (/api/…) only.
+Opened from a Telegram button as a Mini App, the page logs in with Telegram's
 signed launch data instead (telegram_user(), /login/telegram): only the linked chat's user, no password.
 """
 from __future__ import annotations
@@ -113,6 +114,18 @@ def valid_basic(header: str) -> bool:
     except ValueError:
         return False
     return check_password(user, pw)
+
+
+def valid_bearer(header: str) -> bool:
+    """`Authorization: Bearer <token>` with the AI agent's API token (Settings → AI agent, setting agent_token). No token
+    set: never valid. Compared in constant time. The caller lets it open the JSON API (/api/…) only."""
+    from app.db import get_setting
+    from app.services.agent_events import SETTING_TOKEN
+    scheme, _, sent = header.partition(" ")
+    expected = get_setting(SETTING_TOKEN).strip()
+    sent = sent.strip()
+    return scheme.lower() == "bearer" and bool(expected) and bool(sent) \
+        and secrets.compare_digest(sent.encode(), expected.encode())
 
 
 def locked_out(client: str, now: float | None = None) -> bool:

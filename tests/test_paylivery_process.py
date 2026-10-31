@@ -628,7 +628,7 @@ async def test_buy_waits_for_the_bank_approval_then_continues(browser, bank_step
     assert len(bank_steps.pushes) == 1
     push = bank_steps.pushes[0]
     assert push["kind"] == "paylivery" and push["url"].endswith("/chats/b1#paylivery")
-    assert push["data"] == {"conversation_id": "b1"}
+    assert push["data"] == {"stage": "bank_approval", "role": "buyer", "ad_id": "77", "conversation_id": "b1", "amount": 12.0}
     assert "Kinderbuch" in push["message"] and "12,00 €" in push["message"]
     st = _state("b1")
     assert st["stage"] == "paid" and any("bank" in h["text"].lower() for h in st["history"])

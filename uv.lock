@@ -1284,7 +1284,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
-    { name = "mcp", specifier = ">=1.2" },
+    { name = "mcp", specifier = ">=2.3" },
     { name = "patchright", specifier = "==1.63.0" },
     { name = "pillow", specifier = ">=11" },
     { name = "playwright", specifier = ">=1.48" },

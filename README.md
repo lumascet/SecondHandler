@@ -328,7 +328,10 @@ it as `.txt`/`.json` and share it yourself. Read it before sharing.
 
 The app fires events on the HA event bus: `willhaben_hit`, `willhaben_price_drop`, `willhaben_message`,
 `willhaben_auto_reply`, `willhaben_auto_reply_pending`, `willhaben_ad_expiring`, `willhaben_ad_expired`,
-`willhaben_ad_renewed`, `willhaben_meetup`, `willhaben_shipping`, `willhaben_health`, `willhaben_test`. The payload has
+`willhaben_ad_renewed`, `willhaben_meetup`, `willhaben_shipping`, `willhaben_purchase`, `willhaben_paylivery`,
+`willhaben_sale`, `willhaben_health`, `willhaben_test`. `willhaben_purchase` also fires, without a push, on every
+status change of a purchase order (`stage: status`) and `willhaben_sale` for every sale; an automation that should only
+react to the pushes filters on `trigger.event.data.stage`. The payload has
 `title`, `message`, `url` (the original link, often willhaben), `app_url` (the matching page in this dashboard, only
 when Settings → Web address is reachable from a phone, else empty) and `image`, plus `agent`, `ad_id`, `price` or
 `conversation_id` depending on the event. Hits also carry `platform` (`willhaben`, `kleinanzeigen`, …) and `ref`
@@ -358,10 +361,40 @@ actions:
 
 ## MCP (Claude Desktop / Claude Code)
 
-The MCP server is a thin client of the agent's JSON API and can run on your PC:
+### Remote: the app itself is the MCP server
+
+The running app serves its MCP server over HTTP at `/mcp` (Streamable HTTP). Nothing to install or run on your PC,
+no repo needed. Create the API token under Settings → AI agent, then:
 
 ```bash
-claude mcp add willhaben -e WH_AGENT_URL=http://<your-server>:8000 -e WH_AGENT_PASSWORD=... \
+claude mcp add --transport http secondhandler https://<your-host>/mcp --header "Authorization: Bearer <token>"
+```
+
+Other MCP clients that take a server URL and headers (Claude Desktop's connector config, Cursor, …):
+
+```json
+{
+  "mcpServers": {
+    "secondhandler": {
+      "type": "http",
+      "url": "https://<your-host>/mcp",
+      "headers": {"Authorization": "Bearer <token>"}
+    }
+  }
+}
+```
+
+`/mcp` is protected like the JSON API: with `DASHBOARD_PASSWORD` set it needs the bearer token (or HTTP Basic auth with the
+password), without one the home-network rule of the API applies. A wrong or missing token gets `401`. From outside the home
+network use HTTPS only (reverse proxy), the token is sent with every request; inside it `http://<server>:8000/mcp` works.
+
+### Local: stdio
+
+The same tools can also run as a local process on your PC, a thin client of the agent's JSON API. Log in with the API
+token from Settings → AI agent (`WH_AGENT_TOKEN`) or, as before, with the dashboard password (`WH_AGENT_PASSWORD`):
+
+```bash
+claude mcp add willhaben -e WH_AGENT_URL=http://<your-server>:8000 -e WH_AGENT_TOKEN=... \
   -- uv --directory <path-to-repo> run python -m app.mcp_server
 ```
 
@@ -373,7 +406,7 @@ Claude Desktop (`claude_desktop_config.json`):
     "willhaben": {
       "command": "uv",
       "args": ["--directory", "<path-to-repo>", "run", "python", "-m", "app.mcp_server"],
-      "env": {"WH_AGENT_URL": "http://<your-server>:8000", "WH_AGENT_PASSWORD": "..."}
+      "env": {"WH_AGENT_URL": "http://<your-server>:8000", "WH_AGENT_TOKEN": "..."}
     }
   }
 }
@@ -382,7 +415,17 @@ Claude Desktop (`claude_desktop_config.json`):
 Tools: `status`, `list_platforms`, `search_willhaben`, `search_listings` (any platform), `get_ad`, `list_search_agents`,
 `create_search_agent` (a link of any supported site, or a keyword on one platform), `list_hits`,
 `list_conversations`, `get_conversation`, `draft_reply`, `save_reply_draft`, `send_reply`, `list_my_ads`,
-`track_my_ad`.
+`track_my_ad`, `get_events` (every notification, structured), `list_purchases` / `get_purchase` (your purchase orders
+with category, prices and status; also purchases made directly in a buyer chat with PayLivery), `cancel_purchase`,
+`list_sales` (your own items sold), `get_settings` / `update_settings` (read and change the app's settings).
+
+## AI agent interface
+
+Without Home Assistant or Telegram an AI agent can follow everything the app notifies: pull the events from
+`GET /api/events?since=<id>`, follow them live with `GET /api/events/stream`, or let the app push them to a webhook
+(signed with HMAC, retried for 24 h). Purchases and sales can be queried with `GET /api/purchases` and `GET /api/sales`.
+Set the token, webhook and event kinds up under **Settings → AI agent**; the format is in
+[docs/agent-api.md](docs/agent-api.md).
 
 ## Status
 

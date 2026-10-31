@@ -13,6 +13,8 @@ Vinted: not yet (its checkout has to be recorded first); such hits are left alon
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
+
 from sqlmodel import col, select
 
 from app.db import Conversation, Hit, Purchase, SearchAgent, session, utcnow
@@ -132,7 +134,9 @@ async def schedule(agent: SearchAgent, h: Hit) -> int | None:
                  t("{price} incl. shipping and buyer protection · your maximum {max}", price=_eur(total),
                    max=_eur(agent.auto_buy_max)),
                  url=h.url, image=h.image_url, tag=f"wh-autobuy-{pid}",
-                 data={"purchase_id": pid, "auto_buy": True, "ad_id": h.ad_id, "price": h.price})
+                 data=purchase.event_data(purchase.get(pid) or row, "announced", auto_buy=True, price=h.price,
+                                          cancel_by=(utcnow() + timedelta(seconds=COUNTDOWN_S)).isoformat(),
+                                          cancel_url=f"{purchase._base()}/purchases/{pid}"))
     return pid
 
 
@@ -164,6 +168,7 @@ async def buy(pid: int) -> str:
     if not d.price:
         return await _stop(pid, t("The ad shows no price"))
     purchase._change(pid, lambda r: (setattr(r, "asking_price", d.price),
+                                     setattr(r, "category", purchase.category_text(getattr(d, "category_path", None)) or r.category),
                                      setattr(r, "shipping_cost", d.shipping_price if d.shipping_price is not None else r.shipping_cost),
                                      setattr(r, "shipping_source", "ad" if d.shipping_price is not None else r.shipping_source)))
     if why := await seller_doubt(d):
@@ -199,7 +204,7 @@ async def buy(pid: int) -> str:
     if row is not None and row.status == "paid":
         await notify("purchase", t("Bought: {title}", title=row.ad_title or row.ad_id),
                      t("{price} paid with PayLivery", price=_eur(total)), url=row.ad_url, tag=f"wh-autobuy-{pid}",
-                     data={"purchase_id": pid})
+                     data=purchase.event_data(row, "bought", total=round(total, 2)))
         return t("Bought")
     await purchase.pause(pid, t("Auto-buy did not finish: {result}", result=result[:300]), push=True)
     return t("Not bought")

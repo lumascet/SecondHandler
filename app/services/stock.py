@@ -14,7 +14,7 @@ import re
 
 from sqlmodel import Session, col, select
 
-from app.db import MyAd, Sale, current_ad, session
+from app.db import AdDraft, MyAd, Sale, current_ad, session
 from app.i18n import t
 
 
@@ -37,6 +37,22 @@ def ad_chain(ad_id: str) -> list[str]:
     """Every id of an ad renewed under new ids (MyAd.replaced_by, both directions): its old copies and the newest."""
     with session() as db:
         return _chain(db, ad_id)
+
+
+def category_of(db: Session, ad_id: str) -> str | None:
+    """The category of an own ad (any copy of its chain), from the ad draft it was published from: the category
+    chosen for willhaben, else Claude's hint. Ads not created here, or whose draft link was cleared, have none:
+    willhaben's ad list does not name the category, only a request to the ad itself would."""
+    drafts = db.exec(select(AdDraft).where(col(AdDraft.wh_ad_id).in_(_chain(db, ad_id))).order_by(col(AdDraft.id).desc()))
+    for d in drafts:
+        plan = d.wh_plan or {}
+        options = plan.get("options") or []
+        picked = options[plan["selected"]] if isinstance(plan.get("selected"), int) \
+            and 0 <= plan["selected"] < len(options) else None
+        labels = [p.get("label") for p in (picked or {}).get("path") or [] if p.get("label")]
+        if labels or d.category_hint:
+            return " > ".join(labels) if labels else d.category_hint
+    return None
 
 
 def active_sales(db: Session, ad_id: str) -> list[Sale]:

@@ -12,7 +12,7 @@ from sqlmodel import select
 from app.config import get_settings
 from app.i18n import t
 from app.db import SearchAgent, session, utcnow
-from app.services import adaptive_pace, chats, site_accounts, geizhals, health, human_pace, my_ads, quiet_hours, timeline, vpn_check
+from app.services import adaptive_pace, agent_events, chats, site_accounts, geizhals, health, human_pace, my_ads, quiet_hours, timeline, vpn_check
 from app.services.search_agents import (is_checking, locate_job, retention_job, run_agent, status_sweep_job,
                                          watch_saved_job)
 from app.willhaben import access_log
@@ -170,6 +170,8 @@ def start() -> None:
     scheduler.add_job(health.check, IntervalTrigger(seconds=health.CHECK_INTERVAL_S), id="health-check",
                       replace_existing=True, max_instances=1, coalesce=True,
                       next_run_time=datetime.now().astimezone() + timedelta(seconds=120))
+    scheduler.add_job(agent_events.deliver_due, IntervalTrigger(seconds=30), id="agent-webhook",
+                      replace_existing=True, max_instances=1, coalesce=True)   # AI agent webhook: retries
     scheduler.add_job(_park_idle_ui, IntervalTrigger(minutes=5), id="park-idle-ui",
                       replace_existing=True, max_instances=1, coalesce=True)   # idle CPU: see session.park_idle_ui
     scheduler.add_job(access_log.flush_job, IntervalTrigger(seconds=access_log.FLUSH_INTERVAL_S), id="access-log",

@@ -1,6 +1,7 @@
 """Home Assistant notifications: a bus event per hit/message plus optional notify service."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -9,6 +10,7 @@ import httpx
 
 from app.config import address_check, get_settings
 from app.db import log_event
+from app.services import agent_events
 
 log = logging.getLogger(__name__)
 
@@ -94,7 +96,12 @@ async def notify(kind: str, title: str, message: str, *, url: str | None = None,
     ids = {k: str(v) for k in ("ad_id", "conversation_id") if (v := d.get(k))}
     if d.get("ref"):
         ids["ad_id"] = str(d["ref"])          # other sites: "<platform>:<id>", so the inbox opens the right viewer
-    log_event(kind, f"{title}: {message}", url, quiet=not push, **ids)   # quiet: no inbox entry, no notice on a page
+    event_id = log_event(kind, f"{title}: {message}", url, quiet=not push, title=title, data=d or None,
+                         **ids)       # quiet: no inbox entry, no notice on a page
+    try:                              # the AI agent channel (webhook) needs neither Home Assistant nor Telegram
+        agent_events.dispatch(event_id, kind)
+    except Exception as e:  # noqa: BLE001 - never lets the agent channel break a notification
+        log.warning("agent event dispatch failed: %s", e)
     from app.services import telegram
     from app.services.ha_auth import ha_token, ha_url, notify_service
 
@@ -139,6 +146,27 @@ async def notify(kind: str, title: str, message: str, *, url: str | None = None,
     except httpx.HTTPError as e:
         log.warning("HA notify failed: %s", e)
         return False
+
+
+_later: set[asyncio.Task] = set()     # notify_later() tasks on their way (the loop keeps only weak references)
+
+
+def notify_later(kind: str, title: str, message: str, **kw: Any) -> None:
+    """notify() from code that must not wait for it or fail by it (a ledger write, a status change): a task on the
+    running loop, or right here outside one. Errors are logged, never raised."""
+    async def send() -> None:
+        try:
+            await notify(kind, title, message, **kw)
+        except Exception as e:  # noqa: BLE001 - what triggered it is done by now
+            log.warning("%s notification failed: %s", kind, e)
+
+    try:
+        task = asyncio.get_running_loop().create_task(send())
+    except RuntimeError:                  # no running loop (a thread, a script)
+        asyncio.run(send())
+        return
+    _later.add(task)
+    task.add_done_callback(_later.discard)
 
 
 async def clear_push(tag: str, telegram_buttons: bool = True) -> None:

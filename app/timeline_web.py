@@ -145,7 +145,8 @@ def _row_ctx(rows: list, f: timeline.Filters) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ every request: context ids + actions
-NOT_RECORDED = ("/session/input", "/lang", "/inbox/read-all", "/login", "/logout", "/bugreport", "/settings/timeline")
+NOT_RECORDED = ("/session/input", "/lang", "/inbox/read-all", "/login", "/logout", "/bugreport", "/settings/timeline",
+                "/mcp")    # /mcp: its tools call /api/ in process, recorded there with actor "mcp"
 _MINE = ("/myads", "/sold", "/api/myads")          # ad ids of these routes are my own ads
 _REPLY_DRAFTS = ("/drafts/", "/api/drafts/")      # draft ids of these routes are chat reply drafts
 

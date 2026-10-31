@@ -358,12 +358,15 @@ def finish(ad_id: str, kind: str, buyer: str | None, *, auto_off: bool = True, p
     more pieces are asked for than are left, and when an ad with a quantity is sold out (nothing left to sell or
     reserve)."""
     kind = kind_of(kind)
+    announce: dict[str, Any] | None = None
     with session() as db:
         row = current_ad(db, ad_id) or MyAd(ad_id=ad_id, heading=title_of(ad_id))
         left = None
+        replaced: list[Sale] = []
         if row.quantity is None:
             pieces = 1
-            _undo(db, stock.active_sales(db, row.ad_id))
+            replaced = stock.active_sales(db, row.ad_id)
+            _undo(db, replaced)
         else:
             available = max(row.quantity - sum(s.pieces for s in stock.active_sales(db, row.ad_id)), 0)
             if available == 0:
@@ -372,8 +375,10 @@ def finish(ad_id: str, kind: str, buyer: str | None, *, auto_off: bool = True, p
                 left = available
                 if not 1 <= pieces <= left:
                     raise ValueError(t("Pieces: a number from 1 to {max}", max=left))
+        sale = None
         if kind == "sold":
-            db.add(Sale(ad_id=row.ad_id, conversation_id=buyer or None, pieces=pieces, price=price, note=note))
+            sale = Sale(ad_id=row.ad_id, conversation_id=buyer or None, pieces=pieces, price=price, note=note)
+            db.add(sale)
         if left is not None and left > pieces:
             row.last_action = (t("{n} piece sold ({left} left)", n=pieces, left=left - pieces) if pieces == 1 else
                                t("{n} pieces sold ({left} left)", n=pieces, left=left - pieces))
@@ -391,7 +396,33 @@ def finish(ad_id: str, kind: str, buyer: str | None, *, auto_off: bool = True, p
         db.add(row)
         db.commit()
         db.refresh(row)
+        # the same sale entered again (a single item re-sold to the same buyer) is no new event
+        if sale is not None and not any(r.conversation_id == sale.conversation_id for r in replaced):
+            db.refresh(sale)
+            announce = _sale_event(db, row, sale, 0 if left is None else left - pieces)
+    if announce is not None:
+        _announce_sale(*announce)
     return row
+
+
+def _sale_event(db: Session, ad: MyAd, sale: Sale, pieces_left: int) -> tuple[str, str, dict[str, Any]]:
+    """Title, message and structured fields of the "sale" notification (docs/agent-api.md). Keys not known are left out."""
+    conv = db.get(Conversation, sale.conversation_id) if sale.conversation_id else None
+    title = ad.heading or ad.ad_id
+    message = " · ".join(p for p in (ad.last_action, f"{sale.price:g} €" if sale.price else "") if p)
+    data = {"sale_id": sale.id, "ad_id": ad.ad_id, "ad_title": ad.heading, "ad_url": ad.url, "pieces": sale.pieces,
+            "price": sale.price, "pieces_left": pieces_left, "conversation_id": sale.conversation_id,
+            "buyer": conv.partner_name if conv else None, "category": stock.category_of(db, ad.ad_id),
+            "via": "paylivery" if sale.note == PAYLIVERY_NOTE else "manual"}
+    return t("Sold: {title}", title=title), message, {k: v for k, v in data.items() if v is not None}
+
+
+def _announce_sale(title: str, message: str, data: dict[str, Any]) -> None:
+    """Tell the AI agent channel about a sale: it lands in the event log and the feed and pushes nothing to the phone
+    (push=False). The ledger is written by now, so a failure here never touches the sale."""
+    from app.services.notify import notify_later
+
+    notify_later("sale", title, message, url=data.get("ad_url"), data=data, push=False)
 
 
 def _undo(db: Session, sales: list[Sale]) -> None:

@@ -1,0 +1,66 @@
+{# Settings → AI agent (docs/agent-api.md): the API token and the webhook. Every button swaps its own card in place
+   (hx-post + hx-select of the card, no wrapper with a shared target); without htmx the routes redirect back here.
+   agent = agent_settings_routes.panel(): {token, url, secret, kinds, kind_labels, status, test, base, password}. #}
+{% import "_ui.html" as ui %}
+{% set tok = agent.token %}
+{% set st = agent.status %}
+<section id="agent-token-card" class="flex flex-col gap-3.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
+  <div class="flex items-center gap-2.5"><span class="size-2 shrink-0 rounded-full {{ 'bg-success' if tok else 'bg-off' }}"></span>
+    <div class="min-w-0"><div id="s-agent-token" class="font-semibold">{{ _("API token") }}</div><div class="text-[12.5px] text-muted">{{ _("Lets an AI agent (Claude Code, a script, n8n …) read events, purchases and sales and use the same tools as the dashboard. It opens the JSON API only, never the web pages.") if tok else _("No token yet – without one the API only answers with the dashboard password (or, without a password, inside your home network).") }}</div></div></div>
+  {% if not agent.password %}
+  <div role="alert" class="rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-[13px] text-warning">{{ _("No dashboard password is set: anyone who reaches this app – in your home network, or from the internet through a forwarded port – can use the whole API without a token, also to send messages or stop purchases. Set DASHBOARD_PASSWORD in the .env file; then the API answers only to the password or this token.") }}</div>
+  {% endif %}
+  {% if tok %}
+  <div class="flex items-center gap-2"><input type="text" readonly value="{{ tok }}" onclick="this.select()" aria-label="{{ _('API token') }}" class="input w-full min-w-0 flex-1 bg-base-200 font-mono text-[13px]">
+    <button type="button" class="btn" title="{{ _('Copy') }}" onclick="const i = this.previousElementSibling; i.select(); (navigator.clipboard ? navigator.clipboard.writeText(i.value) : Promise.reject()).catch(() => document.execCommand('copy')); this.textContent = this.dataset.done" data-done="{{ _('Copied') }}">{{ _("Copy") }}</button></div>
+  <div class="flex flex-wrap gap-2">
+    <button class="btn" hx-post="/settings/agent/token" hx-target="#agent-token-card" hx-select="#agent-token-card" hx-swap="outerHTML" hx-disabled-elt="this">{{ _("Create a new token") }}</button>
+    <button class="btn btn-ghost text-error hover:bg-bad-soft" hx-post="/settings/agent/token/remove" hx-target="#agent-token-card" hx-select="#agent-token-card" hx-swap="outerHTML" hx-disabled-elt="this">{{ _("Remove token") }}</button>
+  </div>
+  <small class="text-[12.5px] text-muted">{{ _("A new token replaces the old one at once: whatever uses it has to be given the new one.") }}</small>
+  {% else %}
+  <div><button class="btn btn-primary" hx-post="/settings/agent/token" hx-target="#agent-token-card" hx-select="#agent-token-card" hx-swap="outerHTML" hx-disabled-elt="this">{{ _("Create token") }}</button></div>
+  {% endif %}
+  <div id="s-agent-usage" class="flex flex-col gap-2 rounded-[10px] bg-base-200 px-3.5 py-3 text-[13px]">
+    <span class="font-semibold">{{ _("Use it") }}</span>
+    <span class="text-muted">{{ _("Any HTTP client:") }}</span>
+    <pre class="m-0 overflow-x-auto whitespace-pre font-mono text-[12.5px]">curl -H "Authorization: Bearer {{ tok or '<token>' }}" \
+  {{ agent.base }}/api/events</pre>
+    <span class="text-muted">{{ _("Claude Code with the app as MCP server (nothing to install):") }}</span>
+    <pre class="m-0 overflow-x-auto whitespace-pre font-mono text-[12.5px]">claude mcp add --transport http secondhandler {{ agent.base }}/mcp \
+  --header "Authorization: Bearer {{ tok or '<token>' }}"</pre>
+    <span class="text-muted">{{ _("Claude Code or Claude Desktop (MCP server on your PC, see the README):") }}</span>
+    <pre class="m-0 overflow-x-auto whitespace-pre font-mono text-[12.5px]">claude mcp add willhaben \
+  -e WH_AGENT_URL={{ agent.base }} -e WH_AGENT_TOKEN={{ tok or '<token>' }} \
+  -- uv --directory &lt;path-to-repo&gt; run python -m app.mcp_server</pre>
+    <span class="text-muted">{{ _("The events, the fields of every kind and the webhook signature are described in docs/agent-api.md.") }}</span>
+  </div>
+</section>
+
+{% set hx = 'hx-target="#agent-webhook-card" hx-select="#agent-webhook-card" hx-swap="outerHTML"' %}
+<form id="agent-webhook-card" method="post" action="/settings/agent/webhook" hx-post="/settings/agent/webhook" hx-target="#agent-webhook-card" hx-select="#agent-webhook-card" hx-swap="outerHTML" hx-disabled-elt="find button" class="flex flex-col gap-3.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
+  <div class="flex items-center gap-2.5"><span class="size-2 shrink-0 rounded-full {{ 'bg-error' if st.failed else 'bg-warning' if st.pending else 'bg-success' if agent.url else 'bg-off' }}"></span>
+    <div class="min-w-0"><div class="font-semibold">{{ _("Webhook") }}</div><div class="text-[12.5px] text-muted">{{ _("The app sends every new event of the chosen kinds to this address, signed, and tries again when it does not answer.") }}</div></div></div>
+  <label class="flex min-w-0 flex-col gap-1.5"><span id="s-agent-url" class="text-[12.5px] text-muted">URL</span><input name="url" type="url" value="{{ agent.url }}" placeholder="https://example.org/hooks/secondhandler" autocomplete="off" class="input w-full min-w-0 bg-base-200"></label>
+  <div id="s-agent-kinds" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Which events") }}</span>
+    <div class="flex flex-wrap gap-1.5">{% for k, label in agent.kind_labels.items() %}<label class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-base-300 bg-base-100 px-3 py-1 text-[13px] hover:border-primary has-[:checked]:border-primary has-[:checked]:bg-brand-soft has-[:checked]:text-primary"><input type="checkbox" name="kind" value="{{ k }}" {% if k in agent.kinds %}checked{% endif %} class="checkbox checkbox-primary checkbox-xs">{{ label }}</label>{% endfor %}</div></div>
+  <div class="flex min-w-0 flex-col gap-1.5"><span id="s-agent-secret" class="text-[12.5px] text-muted">{{ _("Signing secret") }}</span>
+    {% if agent.secret %}
+    <span class="flex items-center gap-2"><input type="text" readonly value="{{ agent.secret }}" onclick="this.select()" class="input w-full min-w-0 flex-1 bg-base-200 font-mono text-[13px]">
+      <button type="button" class="btn" title="{{ _('Copy') }}" onclick="const i = this.previousElementSibling; i.select(); (navigator.clipboard ? navigator.clipboard.writeText(i.value) : Promise.reject()).catch(() => document.execCommand('copy')); this.textContent = this.dataset.done" data-done="{{ _('Copied') }}">{{ _("Copy") }}</button>
+      <button class="btn btn-ghost" formaction="/settings/agent/webhook/secret" hx-post="/settings/agent/webhook/secret" {{ hx|safe }}>{{ _("New secret") }}</button></span>
+    <small class="text-[12.5px] text-muted">{{ _("Every request carries X-SecondHandler-Signature: sha256= and the HMAC-SHA256 of timestamp, a dot and the body with this secret. A new secret works at once, the receiver has to be given it.") }}</small>
+    {% else %}<small class="text-[12.5px] text-muted">{{ _("Created when you save the first URL.") }}</small>{% endif %}</div>
+  <div class="flex flex-wrap gap-2"><button class="btn btn-primary">{{ _("Save") }}</button>
+    {% if agent.url %}<button id="s-agent-test" class="btn" formaction="/settings/agent/webhook/test" hx-post="/settings/agent/webhook/test" {{ hx|safe }}>{{ _("Send test") }}</button>{% endif %}</div>
+  {% if agent.test %}
+  <div role="status" class="rounded-[10px] px-3.5 py-2.5 text-[13px] {{ 'bg-ok-soft text-success' if agent.test.ok else 'bg-bad-soft text-error' }}">{% if agent.test.ok %}{{ _("The test arrived (HTTP {status}).", status=agent.test.status or 200) }}{% else %}{{ _("The test failed: {error}", error=agent.test.error or '-') }}{% endif %}</div>
+  {% endif %}
+  <div id="s-agent-status" class="flex flex-col gap-1 text-[13px]">
+    {% if st.failed %}<div class="text-error">{{ _("{n} events were given up after 24 hours without an answer. They are still in the feed (/api/events).", n=st.failed) }}</div>{% endif %}
+    {% if st.pending %}<div class="text-warning">{{ _("{n} events are waiting to be delivered.", n=st.pending) }}</div>{% endif %}
+    {% if st.last_delivered_at %}<div class="text-muted">{{ _("Last delivery {t}", t=st.last_delivered_at|local('%d.%m.%Y %H:%M')) }}</div>
+    {% elif agent.url and not st.pending and not st.failed %}<div class="text-muted">{{ _("Nothing delivered yet.") }}</div>{% endif %}
+    {% if st.last_error %}<div class="break-words text-error">{{ _("Last error: {error}", error=st.last_error) }}</div>{% endif %}
+  </div>
+</form>

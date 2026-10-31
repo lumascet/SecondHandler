@@ -861,11 +861,19 @@ def _summary(s: Shipment) -> str:
     return "\n".join(lines)
 
 
+def event_data(s: Shipment) -> dict[str, Any]:
+    """The structured fields of a shipping notification (docs/agent-api.md): the parcel, its state, the ad and the chat,
+    the label price in euro (what the checkout charged, else the tariff) and the tracking number. Keys that are not
+    known are left out."""
+    data = {"shipment_id": s.id, "status": s.status, "ad_id": s.ad_id, "conversation_id": s.conversation_id,
+            "price": s.paid_price if s.paid_price is not None else s.price, "tracking": s.tracking}
+    return {k: v for k, v in data.items() if v is not None}
+
+
 async def _notify(s: Shipment, title: str, body: str, *, url: str | None = None, actions: list | None = None) -> None:
     from app.services.notify import notify
     await notify("shipping", title, body, url=url or f"{_base()}/chats/{s.conversation_id}#shipping",
-                 data={"conversation_id": s.conversation_id, "shipment_id": s.id}, actions=actions,
-                 tag=_ha().ship_tag(s.id))
+                 data=event_data(s), actions=actions, tag=_ha().ship_tag(s.id))
 
 
 async def _ask(s: Shipment) -> None:

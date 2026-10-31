@@ -1,6 +1,7 @@
 """SQLite persistence (SQLModel)."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
@@ -433,6 +434,7 @@ class Purchase(SQLModel, table=True):
     search_id: int | None = None           # ProductSearch the order came from
     agent_id: int | None = None            # the search agent whose auto-buy started it (app/services/auto_buy.py)
     query: str | None = None
+    category: str | None = None            # the ad's category path ("Elektronik > Audio > Kopfhörer"), at the start
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -546,6 +548,24 @@ class EventLog(SQLModel, table=True):
     ad_id: str | None = None
     conversation_id: str | None = None
     quiet: bool | None = None              # sent without a push (a hit the screening held back): not in the inbox
+    title: str | None = None               # the push's title alone (message holds "title: text")
+    # the notification's structured fields (notify(data=...)): ids, prices, stage; what the agent channel sends
+    # (app/services/agent_events.py, docs/agent-api.md)
+    data: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+
+
+class WebhookDelivery(SQLModel, table=True):
+    """One notification on its way to the AI agent's webhook (app/services/agent_events.py): retried with backoff
+    until the agent answers 2xx or the event is too old."""
+    id: int | None = Field(default=None, primary_key=True)
+    event_id: int = Field(index=True)                  # EventLog.id
+    attempts: int = 0
+    next_at: datetime = Field(default_factory=utcnow, index=True)
+    delivered_at: datetime | None = None
+    failed_at: datetime | None = None                  # given up
+    last_status: int | None = None                     # HTTP status of the last try, None = no answer
+    last_error: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class TimelineEvent(SQLModel, table=True):
@@ -718,12 +738,13 @@ def apply_public_url() -> str:
 
 
 def log_event(kind: str, message: str, url: str | None = None, *, ad_id: str | None = None,
-              conversation_id: str | None = None, quiet: bool = False) -> int | None:
+              conversation_id: str | None = None, quiet: bool = False, title: str | None = None,
+              data: dict[str, Any] | None = None) -> int | None:
     """Store a notification for the inbox and the timeline; returns its id. `quiet`: it went out without a push (the
     timeline keeps it, marked; the inbox, its badge and Home's activity leave it out)."""
     with session() as db:
         e = EventLog(kind=kind, message=message, url=url, ad_id=ad_id, conversation_id=conversation_id,
-                     quiet=quiet or None)
+                     quiet=quiet or None, title=title, data=json.loads(json.dumps(data, default=str)) if data else None)
         db.add(e)
         db.commit()
         event_id = e.id
@@ -742,6 +763,8 @@ DEFAULT_SETTINGS: dict[str, str] = {
         "- Du-Form, freundlich, kurz, keine Emojis."
     ),
     "auto_draft": "0",
+    # the AI agent channel (app/services/agent_events.py): notification kinds sent to its webhook
+    "agent_kinds": "purchase,sale,paylivery,shipping,message",
     "notify_messages": "1",
     "weekly_digest": "1",
     "chat_translate": "1",

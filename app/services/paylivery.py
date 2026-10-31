@@ -922,9 +922,17 @@ async def _push(conv: Conversation, state: dict[str, Any], msg: Message) -> None
     try:
         await notify("paylivery", t("PayLivery: {stage}", stage=stage_label(state.get("stage"))),
                      _push_body(state), url=f"{_base()}/chats/{conv.id}#paylivery",
-                     data={"conversation_id": conv.id})
+                     data=_event_data(conv, state.get("stage"), state.get("role"), state.get("offer") or state.get("amount")))
     except Exception as e:  # noqa: BLE001 - a failed push never breaks the sync
         log.warning("PayLivery push failed: %s", e)
+
+
+def _event_data(conv: Conversation, stage: str | None, role: str | None, amount: Any) -> dict[str, Any]:
+    """The structured fields of a PayLivery notification (docs/agent-api.md): the step, our side of the deal (seller /
+    buyer), the ad, the chat and the amount in euro. Keys that are not known are left out."""
+    data = {"stage": stage, "role": role or conv.role, "ad_id": conv.ad_id, "conversation_id": conv.id,
+            "amount": float(amount) if isinstance(amount, (int, float)) and not isinstance(amount, bool) else None}
+    return {k: v for k, v in data.items() if v is not None}
 
 
 def _push_body(state: dict[str, Any]) -> str:
@@ -1708,7 +1716,8 @@ async def _bank_push(conv: Conversation, amount: float | None) -> None:
     message = " · ".join(p for p in (ad, _money(amount), t("the purchase continues by itself afterwards")) if p)
     try:
         await notify("paylivery", t("Approve the payment in your bank app"), message,
-                     url=f"{_base()}/chats/{conv.id}#paylivery", data={"conversation_id": conv.id})
+                     url=f"{_base()}/chats/{conv.id}#paylivery",
+                     data=_event_data(conv, "bank_approval", conv.role, amount))
     except Exception as e:  # noqa: BLE001 - a failed push never stops the purchase
         log.warning("PayLivery bank push failed: %s", e)
 

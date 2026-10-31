@@ -212,9 +212,11 @@ async def _start_label(shipment_id: int) -> str | None:
         msg = await label_fill.start(shipment_id)
     except Exception as e:  # noqa: BLE001 - report every failure back to the phone
         await notify("shipping", t("Label form failed"), str(e)[:200],
-                     url=f"{get_settings().public_url.rstrip('/')}/chats/{s.conversation_id}#shipping")
+                     url=f"{get_settings().public_url.rstrip('/')}/chats/{s.conversation_id}#shipping",
+                     data=shipping.event_data(shipping.get(shipment_id) or s))
         return f"error: {e}"
-    await notify("shipping", t("Label form is ready – check and pay"), msg[:200], url=url, tag=ship_tag(shipment_id))
+    await notify("shipping", t("Label form is ready – check and pay"), msg[:200], url=url, tag=ship_tag(shipment_id),
+                 data=shipping.event_data(shipping.get(shipment_id) or s))
     return "label form"
 
 
@@ -243,7 +245,8 @@ async def _shipment_action(verb: str, shipment_id: int) -> str | None:
             await shipping.cancel_auto(shipment_id)
     except shipping.ShippingError as e:
         await notify("shipping", t("Not possible"), str(e)[:200],
-                     url=f"{get_settings().public_url.rstrip('/')}/chats/{s.conversation_id}#shipping")
+                     url=f"{get_settings().public_url.rstrip('/')}/chats/{s.conversation_id}#shipping",
+                     data=shipping.event_data(shipping.get(shipment_id) or s))
         return f"error: {e}"
     return verb.lower()
 

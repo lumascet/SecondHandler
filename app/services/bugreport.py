@@ -32,7 +32,7 @@ from app import __version__
 from app.config import get_settings
 from app.db import (
     DEFAULT_SETTINGS, AdBatch, AdDraft, Conversation, DealCheck, Draft, EventLog, Hit, LLMCall, Message, MyAd,
-    SearchAgent, Setting, Shipment, TimelineEvent, session, utcnow,
+    SearchAgent, Setting, Shipment, TimelineEvent, get_setting, session, utcnow,
 )
 from app.services import logbuffer
 
@@ -339,7 +339,8 @@ def known_secrets() -> list[str]:
     """Secret values from the environment and DATA_DIR (*-token, *-secret, *.json credential files)."""
     s = get_settings()
     out = [s.dashboard_password or "", s.debug_token or "", s.ha_token or "", s.claude_code_oauth_token or "", s.telegram_bot_token or "",
-           os.environ.get("VNC_PASSWORD", ""), os.environ.get("HA_TOKEN", ""), os.environ.get("ANTHROPIC_API_KEY", "")]
+           os.environ.get("VNC_PASSWORD", ""), os.environ.get("HA_TOKEN", ""), os.environ.get("ANTHROPIC_API_KEY", ""),
+           get_setting("agent_token"), get_setting("agent_webhook_secret")]     # the AI agent's (Settings → AI agent)
     d = s.data_dir
     try:
         files = [p for p in d.iterdir() if p.is_file()]

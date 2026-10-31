@@ -23,6 +23,7 @@ import difflib
 import logging
 import math
 import re
+from datetime import datetime, timezone
 from typing import Any, Coroutine
 
 from sqlmodel import col, select
@@ -511,12 +512,24 @@ def _change(pid: int, fn) -> Purchase | None:
         row = db.get(Purchase, pid)
         if row is None:
             return None
+        prev = row.status
         fn(row)
         row.updated_at = utcnow()
         db.add(row)
         db.commit()
         db.refresh(row)
-        return row
+    if row.status != prev:
+        _status_event(row, prev)
+    return row
+
+
+def _status_event(row: Purchase, prev: str) -> None:
+    """Every status change as a quiet event for the AI agent channel (stage "status", docs/agent-api.md): the feed
+    and the webhook see paid / shipped / done too, which push nothing to the phone."""
+    from app.services.notify import notify_later
+
+    notify_later("purchase", t("Purchase: {status}", status=status_label(row.status)), row.ad_title or row.ad_id,
+                 url=_chat_url(row), data=event_data(row, "status", **{"from": prev}), push=False)
 
 
 def _move(row: Purchase, status: str, text: str = "", note: Any = ...) -> None:
@@ -542,10 +555,39 @@ def _chat_url(row: Purchase) -> str:
     return f"{_base()}/chats/{row.conversation_id}#purchase" if row.conversation_id else f"{_base()}/purchases/{row.id}"
 
 
-async def _push(row: Purchase, title: str, message: str) -> None:
+# stage of a purchase event (docs/agent-api.md) by the order's status, where the push does not name one itself
+STAGE_OF_STATUS = {"pay_now": "pay_now", "done": "bought", "failed": "failed", "cancelled": "cancelled"}
+
+
+def category_text(path: Any) -> str | None:
+    """The site's category path as one readable string ("Elektronik > Audio"), None when unknown."""
+    text = " > ".join(str(c) for c in path if c) if isinstance(path, (list, tuple)) else str(path or "").strip()
+    return text or None
+
+
+def event_data(row: Purchase, stage: str | None = None, **extra: Any) -> dict[str, Any]:
+    """The structured fields of a purchase notification (docs/agent-api.md, data of kind "purchase"): the order, the
+    ad, the prices in euro (shipping, fee and total as the order's own sums, costs_of) and the stage. Keys that are not
+    known are left out. `extra` wins over the computed values."""
+    from app.services.auto_buy import BUY_CHAT_PREFIX     # lazy: auto_buy imports this module
+    item = row.agreed_price or row.asking_price
+    costs = costs_of(row, item) if item else {}
+    cid = row.conversation_id if not (row.conversation_id or "").startswith(BUY_CHAT_PREFIX) else None   # hidden placeholder chat
+    total = row.agreed_total if row.agreed_total is not None and row.agreed_price is not None else costs.get("total")
+    data: dict[str, Any] = {
+        "stage": stage or STAGE_OF_STATUS.get(row.status, "update"), "purchase_id": row.id, "status": row.status,
+        "conversation_id": cid, "ad_id": row.ad_id, "platform": "willhaben", "ad_title": row.ad_title,
+        "ad_url": row.ad_url, "category": row.category, "mode": row.mode, "asking_price": row.asking_price,
+        "max_price": row.max_price, "agreed_price": row.agreed_price, "shipping": costs.get("shipping"),
+        "fee": costs.get("fee"), "total": round(float(total), 2) if total is not None else None,
+        "agent_id": row.agent_id}
+    data.update(extra)
+    return {k: v for k, v in data.items() if v is not None}
+
+
+async def _push(row: Purchase, title: str, message: str, stage: str | None = None) -> None:
     try:
-        await notify("purchase", title, message, url=_chat_url(row),
-                     data={"purchase_id": row.id, "conversation_id": row.conversation_id})
+        await notify("purchase", title, message, url=_chat_url(row), data=event_data(row, stage))
     except Exception as e:  # noqa: BLE001 - a failed push never breaks the purchase
         log.warning("purchase push failed: %s", e)
 
@@ -702,7 +744,8 @@ async def _begin_inner(pid: int) -> None:
                                   setattr(r, "max_price", max_price), setattr(r, "market", market),
                                   setattr(r, "shipping_cost", ad_ship),
                                   setattr(r, "shipping_source", "ad" if ad_ship is not None else None),
-                                  setattr(r, "fee", rule.as_dict()), info and _line(r, info)))
+                                  setattr(r, "fee", rule.as_dict()), setattr(r, "category", category_text(detail.category_path)),
+                                  info and _line(r, info)))
     target = target_price(row)
     cost, src = shipping_of(row)
     refused: tuple[str, list[str]] | None = None
@@ -1200,11 +1243,119 @@ async def _tell_seller_paid(pid: int) -> None:
         _change(pid, lambda r: _line(r, failed))
 
 
+# ------------------------------------------------------------------ purchases made in a chat (no order)
+# A buyer chat of willhaben whose PayLivery state says the deal is on, without a Purchase row (the user bought on
+# willhaben directly): the AI agent interface lists it next to the orders (/api/purchases, source "chat") and gets a
+# quiet purchase event per stage. Without PayLivery (cash, bank transfer) there is no reliable "bought" signal.
+CHAT_DEAL_STAGES = ("offer_accepted", "paid", "released", "label_ready", "shipped", "delivered", "received")
+CHAT_AFTER_DEAL = ("problem", "cancelled")                   # count once a deal stage was reached before
+CHAT_OPEN_STAGES = ("offer_accepted", "paid", "released", "label_ready", "shipped", "problem")   # not yet delivered
+CHAT_EVENT_RECENT = paylivery.PUSH_RECENT                    # older stages (a first sync) are listed, not announced
+
+
+def chat_purchase_stage(state: dict[str, Any] | None) -> str | None:
+    """The PayLivery stage of a buyer chat that counts as a purchase made there, else None: the offer was accepted,
+    paid, released, label ready, shipped, delivered or confirmed (CHAT_DEAL_STAGES); a reported problem or a
+    cancellation only when such a stage was reached before (the history)."""
+    st = state or {}
+    if st.get("role") not in (None, "buyer"):
+        return None
+    stage = st.get("stage")
+    if stage in CHAT_DEAL_STAGES:
+        return stage
+    if stage in CHAT_AFTER_DEAL and any(h.get("stage") in CHAT_DEAL_STAGES for h in st.get("history") or []):
+        return stage
+    return None
+
+
+def orders_of_chats(db: Any) -> tuple[set[str], set[str]]:
+    """(conversation ids that have a Purchase row of any status, ad ids of open orders still on auto-buy's
+    placeholder chat: willhaben's real chat of such an ad is theirs, see _take_over_auto_buy)."""
+    from app.services.auto_buy import BUY_CHAT_PREFIX
+    rows = db.exec(select(Purchase.conversation_id, Purchase.ad_id, Purchase.status)).all()
+    chats = {cid for cid, _ad, _st in rows if cid}
+    ads = {ad for cid, ad, st in rows if ad and st in OPEN and (cid or "").startswith(BUY_CHAT_PREFIX)}
+    return chats, ads
+
+
+def chat_has_order(conv: Conversation, chats: set[str], ads: set[str]) -> bool:
+    return conv.id in chats or bool(conv.ad_id and conv.ad_id in ads)
+
+
+def _number(v: Any) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None
+
+
+def chat_facts(conv: Conversation, state: dict[str, Any] | None = None) -> dict[str, Any]:
+    """What is known about a purchase made in a chat, from the chat row alone (no network): the ad (title, link, first
+    picture, category path from the stored ad context) and the prices in euro. agreed_price is the accepted offer, else
+    the amount of the PayLivery notice; shipping is the PayLivery delivery price of the ad as stored in the ad context
+    (with shipping_source "ad"); fee is the buyer protection fee of that price by the category's rule; total is the sum
+    when the price and the shipping are known. Unknown values are None."""
+    st = state if state is not None else (conv.paylivery or {})
+    ctx = conv.ad_context or {}
+    category = category_text(ctx.get("category"))
+    price = _number(st.get("offer")) or _number(st.get("amount"))
+    shipping = _number(ctx.get("shipping_price"))
+    rule = fees.rule("willhaben", category.split(" > ") if category else None)
+    fee = round(rule.fee(price), 2) if rule and price else None
+    images = ctx.get("images") or []
+    return {
+        "ad_title": conv.ad_title or ctx.get("title"), "ad_url": ctx.get("url") or (
+            f"https://www.willhaben.at/iad/object?adId={conv.ad_id}" if conv.ad_id else None),
+        "image_url": images[0] if images else None, "category": category, "agreed_price": price,
+        "shipping": shipping, "shipping_source": "ad" if shipping is not None else None, "fee": fee,
+        "total": round(price + shipping + fee, 2) if price and shipping is not None and fee is not None else None}
+
+
+def _stage_before(state: dict[str, Any], stage: str) -> str | None:
+    """The stage the chat had before `stage` (newest history entry with another stage), None when unknown."""
+    return next((h["stage"] for h in reversed(state.get("history") or []) if h.get("stage") not in (None, stage)), None)
+
+
+def _stage_recent(state: dict[str, Any], stage: str) -> bool:
+    at = next((h.get("at") for h in reversed(state.get("history") or []) if h.get("stage") == stage), None)
+    try:
+        when = datetime.fromisoformat(at) if at else None
+    except ValueError:
+        when = None
+    return when is None or (when if when.tzinfo else when.replace(tzinfo=timezone.utc)) >= utcnow() - CHAT_EVENT_RECENT
+
+
+def _chat_purchase_event(conv: Conversation, stage: str, state: dict[str, Any]) -> None:
+    """A quiet purchase event (stage "status", source "chat") for a stage change of a buyer chat that has no order: the
+    agent sees purchases made on willhaben directly. Only a real, recent stage change of a willhaben buyer chat counts
+    (never a recheck's correction, never a chat with a Purchase row: its order sends the events)."""
+    from app.services.notify import notify_later
+
+    state = {**state, "role": state.get("role") or conv.role}
+    if (conv.platform or "willhaben") != "willhaben" or conv.role != "buyer" or state.get("corrected_from"):
+        return
+    if chat_purchase_stage(state) != stage or not _stage_recent(state, stage):
+        return
+    with session() as db:
+        chats, ads = orders_of_chats(db)
+    if chat_has_order(conv, chats, ads):
+        return
+    facts = chat_facts(conv, state)
+    data = {"stage": "status", "source": "chat", "status": stage, "from": _stage_before(state, stage),
+            "conversation_id": conv.id, "ad_id": conv.ad_id, "platform": "willhaben", "ad_title": facts["ad_title"],
+            "ad_url": facts["ad_url"], "category": facts["category"], "agreed_price": facts["agreed_price"],
+            "shipping": facts["shipping"], "total": facts["total"]}
+    notify_later("purchase", t("Purchase: {status}", status=paylivery.stage_label(stage)),
+                 facts["ad_title"] or conv.ad_id or "", url=f"{_base()}/chats/{conv.id}",
+                 data={k: v for k, v in data.items() if v is not None}, push=False)
+
+
 # ------------------------------------------------------------------ hooks: PayLivery (not registered here)
 async def on_paylivery_stage(conv: Conversation, stage: str, state: dict[str, Any]) -> None:
     """PayLivery stage of a buyer chat changed (registered by app/main.py)."""
     row = for_conversation(conv.id) or _take_over_auto_buy(conv)
     if row is None:
+        try:                                     # no order of ours: a purchase made on willhaben directly
+            _chat_purchase_event(conv, stage, state)
+        except Exception as e:  # noqa: BLE001 - the agent channel never breaks the stage hooks
+            log.warning("chat purchase event for %s failed: %s", conv.id, e)
         return
     if state.get("corrected_from"):              # a recheck lowered the stage
         row = _paylivery_corrected(row, stage)
@@ -1288,9 +1439,11 @@ async def on_paylivery_action(conv: Conversation, action: str, ok: bool, text: s
 def recover() -> None:
     """After a restart no purchase task is running any more: unfinished starts are marked failed, or paused when the
     opener may already have gone out (Resume then looks for its chat instead of writing again)."""
+    moved: list[tuple[Purchase, str]] = []
     with session() as db:
         for row in db.exec(select(Purchase).where(col(Purchase.status).in_(("new", "contacting")),
                                                   Purchase.conversation_id.is_(None))):
+            moved.append((row, row.status))
             if row.opener_text:
                 note = t("Interrupted by a restart while the opening message was sent – Resume looks for the chat; it does not write to the seller a second time.")  # noqa: E501
                 _move(row, "paused", note, note=note)
@@ -1299,6 +1452,9 @@ def recover() -> None:
             row.updated_at = utcnow()
             db.add(row)
         db.commit()
+        for row, prev in moved:
+            db.refresh(row)
+            _status_event(row, prev)
 
 
 # ------------------------------------------------------------------ texts

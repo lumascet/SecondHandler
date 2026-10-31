@@ -42,7 +42,7 @@ class Group:
 
 # the sections with a page of their own, in nav order (main.SETTINGS_SECTIONS); the other sites are added at runtime
 SECTION_IDS = ("platforms", "willhaben", "quiet", "prices", "geizhals", "purchase", "paylivery", "selling", "chats", "myads",
-               "calendar", "shipping", "printers", "claude", "rules", "ha", "telegram", "browser", "vpn", "backup",
+               "calendar", "shipping", "printers", "claude", "rules", "ha", "telegram", "agent", "browser", "vpn", "backup",
                "timeline", "web", "language")
 OVERVIEW = "overview"    # /settings: the overview, not a section of SECTION_IDS
 
@@ -205,6 +205,15 @@ def build(sites: Iterable[Any], t: Callable[..., str] = _t) -> list[Group]:
                         Item("s-tg-enabled", t("Send notifications to Telegram"), t("push")),
                         Item("s-tg-kinds", t("Which notifications"), t("hits, price drops, messages, kinds")),
                         Item("s-tg-commands", t("Open answer drafts"), t("/drafts, /auto, /status, commands, reply by swipe"))))
+    agent = Section("agent", t("AI agent"), t("An API token and a webhook for AI agents (Claude Code, scripts, n8n): events, purchases and sales as data."),
+                    (Item("s-agent-token", t("API token"), t("API, bearer, Authorization, create, new token, remove, key, MCP, password, security, open, internet")),
+                     Item("s-agent-usage", t("Use it"), t("curl, MCP, WH_AGENT_TOKEN, Claude Code, Claude Desktop, docs, agent-api")),
+                     Item("s-agent-url", "URL", t("webhook, address, endpoint, callback, n8n, HTTP")),
+                     Item("s-agent-kinds", t("Which events"), t("kinds, purchases, sales, messages, hits, notifications")),
+                     Item("s-agent-secret", t("Signing secret"), t("HMAC, signature, SHA-256, new secret, regenerate")),
+                     Item("s-agent-test", t("Send test"), t("test event, webhook test")),
+                     Item("s-agent-status", t("Delivery status"), t("retries, given up, pending, last delivery, last error, failed"))),
+                    t("The AI agent's API is open without a dashboard password, or its webhook gave up on events."))
     browser = Section("browser", t("Browser"), t("New hits and price drops as notifications of this browser while a tab of the app is open."),
                       (Item("s-browser-notify", t("Show new hits as notifications"), t("desktop notifications, permission, this computer")),
                        Item("s-browser-test", t("Send a test notification"))))
@@ -236,7 +245,7 @@ def build(sites: Iterable[Any], t: Callable[..., str] = _t) -> list[Group]:
             Group(t("Selling"), (selling, chats, myads, calendar)),
             Group(t("Shipping & pickup"), (shipping, printers)),
             Group(t("AI"), (claude, rules)),
-            Group(t("Notifications"), (ha, telegram, browser)),
+            Group(t("Notifications"), (ha, telegram, agent, browser)),
             Group(t("System"), (vpn, backup, timeline, web, language))]
 
 
