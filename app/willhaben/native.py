@@ -521,7 +521,7 @@ class NativeClient:
             raise LoginRefused(t("Empty code"))
         form = dict(p.fields)
         if len(p.code_fields) > 1 and len(code) == len(p.code_fields):     # one box per digit
-            form.update(zip(p.code_fields, code))
+            form.update(zip(p.code_fields, code, strict=False))
         else:
             form[p.code_fields[0]] = code
         host = urlsplit(p.action).hostname or "sso.willhaben.at"
