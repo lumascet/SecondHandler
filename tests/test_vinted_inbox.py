@@ -152,7 +152,7 @@ class _FakePage:
 
     async def evaluate(self, js, args):
         self.evaluated.append(args)
-        return 204
+        return {"status": 204, "text": ""}
 
     async def close(self):
         self.closed = True
@@ -172,7 +172,8 @@ async def test_catch_turns_translation_off_and_re_reads_the_original(monkeypatch
     out = await vinted_inbox._catch("https://www.vinted.at/inbox/01a1-uuid",
                                     "/messaging/main/conversations/01a1-uuid", untranslate_cid="01a1-uuid")
     assert out["localization"]["translated"] is False        # the original came through, not the German machine one
-    assert page.evaluated == [["01a1-uuid", False]]          # translation turned off exactly once
+    assert page.evaluated == [["PUT", "https://api.vinted.at/messaging/main/conversations/01a1-uuid/translation",
+                               {"translate": False}]]          # translation turned off exactly once, via the shared helper
     assert page.closed
 
 

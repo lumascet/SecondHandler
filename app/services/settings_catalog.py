@@ -62,8 +62,8 @@ def _site_items(t: Callable[..., str], p: Any) -> tuple[Item, ...]:
              Item("s-stats", t("Statistics"), t("requests in the last hour, blocked")),
              Item("s-vpn-site", t("Anonymous requests through the VPN"), t("VPN, WireGuard"))]
     if p.id == "kleinanzeigen":
-        items.insert(4, Item("s-auth", t("App credentials (user:password) – only when the bundled ones stop working"),
-                             t("API, 401, 403")))
+        items.insert(4, Item("s-auth", t("App credentials (user:password)"),
+                             t("API, 401, 403, KLEINANZEIGEN_API_AUTH, login")))
     if p.id == "facebook":
         items.insert(4, Item("s-fb-location", t("Location for keyword searches (product search): a Marketplace link from facebook.com"),
                              t("place, radius, Marketplace")))

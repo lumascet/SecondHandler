@@ -295,27 +295,17 @@ def log_shape(m: dict[str, Any]) -> None:
 # translation): the original foreign text then never reaches us (10-31, an Italian seller came as German only). We turn
 # it off per conversation, so the original comes through and the app's own translator shows original + translation, like
 # willhaben and Kleinanzeigen. The toggle (seen 2026-10-31): PUT api.vinted.at/messaging/main/conversations/<uuid>/
-# translation {"translate": false}; made from inside Vinted's own page so its CSRF token and anon id ride along.
-_JS_TRANSLATE = r"""async ([cid, translate]) => {
-  const html = document.documentElement.innerHTML;
-  const tok = (html.match(/\\?"CSRF_TOKEN\\?"\s*:\s*\\?"([^"\\]+)/) || [])[1];
-  const anon = (document.cookie.match(/(?:^|; )anon_id=([^;]+)/) || [])[1]
-            || (html.match(/\\?"anon_id\\?"\s*:\s*\\?"([0-9a-f-]{20,})/) || [])[1];
-  const headers = {'accept': 'application/json, text/plain, */*', 'content-type': 'application/json',
-                   'locale': document.documentElement.lang || 'de-AT'};
-  if (tok) headers['x-csrf-token'] = tok;
-  if (anon) headers['x-anon-id'] = decodeURIComponent(anon);
-  const r = await fetch('https://api.vinted.at/messaging/main/conversations/' + cid + '/translation',
-                        {method: 'PUT', headers, credentials: 'include', body: JSON.stringify({translate})});
-  return r.status;
-}"""
-
-
+# translation {"translate": false}; made from inside Vinted's own page (its CSRF token and anon id ride along), reusing
+# the one in-page fetch helper in vinted_listing so the token/anon-id extraction lives in a single place.
 async def set_translation(page: Any, cid: str, translate: bool) -> int:
     """Turn Vinted's own machine-translation of conversation `cid` on/off, from an open logged-in Vinted page. Returns
     the HTTP status, 0 on error (a nicety: the German body still shows if it fails)."""
+    from app.platforms import vinted_listing as vl
+
+    url = f"https://api.vinted.at/messaging/main/conversations/{cid}/translation"
     try:
-        return int(await page.evaluate(_JS_TRANSLATE, [cid, translate]))
+        res = await page.evaluate(vl._JS_CALL, ["PUT", url, {"translate": translate}])
+        return int((res or {}).get("status") or 0)
     except Exception as e:  # noqa: BLE001
         log.info("vinted translate toggle failed for %s: %s", cid, type(e).__name__)
         return 0
@@ -538,7 +528,7 @@ async def _catch(url: str, part: str, timeout_ms: int = 30000, extra: dict[str, 
         if extra is not None:
             if not seen:
                 await page.wait_for_timeout(2500)       # the order is asked right after the conversation
-            for r in seen[:1]:
+            for r in seen[-1:]:            # the newest: after an untranslate re-navigation the first body is gone
                 try:
                     extra["escrow"] = _parse(await r.text())
                 except Exception:  # noqa: BLE001 - closed meanwhile
