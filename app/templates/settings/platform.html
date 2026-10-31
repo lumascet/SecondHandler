@@ -1,6 +1,6 @@
 {# Settings → Platforms → <site>: one site other than willhaben (app/platforms). `site` from main._platform_row():
-   {p, enabled, status, per_hour (None: as willhaben's, wh_per_hour), min_gap_s, product_search, last_hour, auth,
-   auth_default}. willhaben has its own
+   {p, enabled, status, per_hour (None: as willhaben's, wh_per_hour), min_gap_s, product_search, last_hour,
+   auth_source ("env"|"settings"|""), auth_env (the .env value when it set it)}. willhaben has its own
    page (settings/willhaben.html: login, request budget, product search). #}
 {% import "_ui.html" as ui %}
 {% set p = site.p %}
@@ -34,10 +34,6 @@
     <label id="s-gap" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Minimum gap between requests (s)") }}</span><input name="gap" value="{{ site.own_gap }}" placeholder="{{ _('as all platforms: {n}', n='%g'|format(site.default_gap)) }}" inputmode="decimal" class="input w-full min-w-0 bg-base-200"></label>
     <label id="s-budget" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Request budget per hour (0 = none, empty = as all platforms)") }}</span><input name="budget" value="{{ site.per_hour if site.per_hour is not none else '' }}" placeholder="{{ _('as all platforms: {n}', n=site.wh_per_hour) }}" inputmode="numeric" class="input w-full min-w-0 bg-base-200"></label>
   </div>
-  {% if p.id == 'kleinanzeigen' %}
-  <label id="s-auth" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("App credentials (user:password) – only when the bundled ones stop working") }}</span><input name="auth" value="{{ site.auth or '' }}" placeholder="{{ _('bundled default in use') if site.auth_default else '' }}" autocomplete="off" class="input w-full min-w-0 bg-base-200"></label>
-  <small class="text-[12.5px] text-muted">{{ _("The search agents use the API of the Kleinanzeigen app. Its credentials are the app's own and public, but they can change; a 401/403 on an agent means they did.") }}</small>
-  {% endif %}
   {% if p.id == 'facebook' %}
   <label id="s-fb-location" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Location for keyword searches (product search): a Marketplace link from facebook.com") }}</span><input name="fb_location" type="url" value="{{ site.fb_location.link if site.fb_location else '' }}" placeholder="https://www.facebook.com/marketplace/vienna/search?query=sofa&radius=40" class="input w-full min-w-0 bg-base-200"></label>
   <small class="text-[12.5px] text-muted">{% if site.fb_location %}{{ _("Searching around {place}", place=site.fb_location.place) }}{% if site.fb_location.radius %} · {{ _("radius {n} km", n=site.fb_location.radius) }}{% endif %} · {% endif %}{{ _("Open Marketplace on facebook.com, set the location and radius, search for anything and paste the link; saving runs one test search. Search agents take the location from their own link.") }}</small>
@@ -48,4 +44,17 @@
     <span id="s-stats" class="text-[12.5px] text-muted">{{ _("Requests in the last hour: {n}", n=site.last_hour) }}{% if site.status.cooling_down_s %} · {{ _("paused for {s} s after a block", s=site.status.cooling_down_s|round|int) }}{% endif %} · <a class="link link-primary" href="/stats/requests?platform={{ p.id }}">{{ _("Statistics") }}</a></span>
   </div>
 </form>
+{% if p.id == 'kleinanzeigen' %}
+{# the Kleinanzeigen app credentials (app/platforms/kleinanzeigen.api_auth): KLEINANZEIGEN_API_AUTH in .env wins over
+   the field, which is then read-only. A separate form (not nested in the one above). #}
+<div id="s-auth" class="mt-3 flex min-w-0 flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
+  <span class="text-[12.5px] text-muted">{{ _("App credentials (user:password)") }} · {{ _("from .env") if site.auth_source == 'env' else _("stored") if site.auth_source == 'settings' else _("missing") }}</span>
+  <form method="post" action="/settings/platform/kleinanzeigen/auth" class="flex flex-wrap items-center gap-1.5" autocomplete="off">
+    {{ ui.env_input('auth', 'KLEINANZEIGEN_API_AUTH', site.auth_env or '', placeholder=_('stored – leave empty to keep') if site.auth_source == 'settings' else 'user:password', type='text', cls='w-64') }}
+    {% if site.auth_source != 'env' %}<button class="btn btn-sm" name="op" value="save">{{ _("Save") }}</button>{% endif %}
+    {% if site.auth_source == 'settings' %}<button class="btn btn-ghost btn-sm" name="op" value="forget">{{ _("Delete") }}</button>{% endif %}
+  </form>
+  <small class="text-[12.5px] text-muted">{{ _("The search agents use the API of the Kleinanzeigen app. Set the app's own credentials (public, user:password); none are built in, so the agents stay off until one is set. A 401/403 on an agent means they changed.") }}</small>
+</div>
+{% endif %}
 {% if vpn is defined %}{% with vpn_site = p.id %}{% include "_vpn_switch.html" %}{% endwith %}{% endif %}

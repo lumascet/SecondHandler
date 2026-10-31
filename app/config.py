@@ -52,7 +52,8 @@ class Settings(BaseSettings):
     platform_ebay_per_hour: int | None = None
     platform_facebook_min_gap_s: float = 8.0        # logged-out web pages; Facebook's terms forbid automated access
     platform_facebook_per_hour: int | None = 60     # own budget, below willhaben's
-    kleinanzeigen_api_auth: str = ""            # "user:pw" of the kleinanzeigen app API; empty = the bundled default
+    kleinanzeigen_api_auth: str = ""            # "user:pw" of the kleinanzeigen app API (the app's own public creds);
+    #                                             set here it wins over Settings → Platforms; none set: the agents are off
     willhaben_app_key: str = ""                 # signs the willhaben app API's token request (from willhaben's Android app);
     #                                             set here it wins over Settings → willhaben; none: the browser does it all
     # --- VPN for the anonymous requests (app/platforms/vpn.py): WireGuard configs are uploaded in Settings → VPN

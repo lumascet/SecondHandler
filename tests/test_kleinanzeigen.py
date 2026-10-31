@@ -35,7 +35,7 @@ class Queue:
 
 @pytest.fixture
 def client():
-    c = ka.KleinanzeigenClient(transport=KaTransport())
+    c = ka.KleinanzeigenClient(transport=KaTransport(), auth="android:test")
     c.limiter = RateLimiter(0, name="Kleinanzeigen")
     ka.set_client(c)
     yield c
@@ -127,15 +127,17 @@ async def test_search_sends_the_apps_headers_and_params(platform, client):
     assert "minPrice=100" in search and "maxPrice=2000" in search and "locationId=3331" in search
     assert "sortType=DATE_DESCENDING" in search and "adType=OFFERED" in search and "size=20" in search
     headers = client._transport.calls[1][1]
-    assert headers["Authorization"] == "Basic " + base64.b64encode(b"android:TaR60pEttY").decode()
+    assert headers["Authorization"] == "Basic " + base64.b64encode(b"android:test").decode()
     assert headers["X-EBAYK-APP"] == client.app_id and headers["X-ECG-USER-VERSION"] == ka.APP_VERSION
     await platform.search(spec)
     assert len([u for u in (u for u, _ in client._transport.calls) if "locations" in u]) == 1   # cached place
 
 
-async def test_credentials_setting_and_errors(platform):
+async def test_credentials_setting_and_errors(platform, monkeypatch):
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "kleinanzeigen_api_auth", "")      # no env for the setting tests
     set_setting("kleinanzeigen_api_auth", "me:secret")
-    assert ka.api_auth() == "me:secret"
+    assert ka.api_auth() == ("me:secret", "settings")
     c = ka.KleinanzeigenClient(transport=Queue([(401, b""), (429, b""), (500, b"")]))
     c.limiter = RateLimiter(0, name="Kleinanzeigen")
     assert c.headers["Authorization"] == "Basic " + base64.b64encode(b"me:secret").decode()
@@ -148,8 +150,16 @@ async def test_credentials_setting_and_errors(platform):
     c.limiter = RateLimiter(0, name="Kleinanzeigen")
     with pytest.raises(PlatformError, match="HTTP 500"):
         await c.search_ads({"q": "x"})
+    # KLEINANZEIGEN_API_AUTH in .env wins over the setting
+    monkeypatch.setattr(get_settings(), "kleinanzeigen_api_auth", "env:key")
+    assert ka.api_auth() == ("env:key", "env") and platform.status()["auth_source"] == "env"
+    monkeypatch.setattr(get_settings(), "kleinanzeigen_api_auth", "")
+    # none bundled: without env or setting the API is off and get_client says so
     set_setting("kleinanzeigen_api_auth", "")
-    assert ka.api_auth() == ka.DEFAULT_API_AUTH and platform.status()["auth_default"] is True
+    assert ka.api_auth() == ("", "") and platform.status()["auth_source"] == ""
+    ka.set_client(None)
+    with pytest.raises(PlatformError, match="credentials"):
+        ka.get_client()
 
 
 async def test_detail_404_and_agent_end_to_end(platform, client):

@@ -3614,9 +3614,10 @@ def _platform_row(p: Any) -> dict[str, Any]:
             "default_gap": default_gap if default_gap is not None else default_site_gap_s(p.id),
             "product_search": get_setting(f"platform_{p.id}_product_search") != "0",
             "last_hour": access_stats.last_hour(platform=p.id),
-            "auth": get_setting(f"{p.id}_api_auth") if p.id == "kleinanzeigen" else None,
-            "fb_location": _fb_location() if p.id == "facebook" else None,
-            "auth_default": st.get("auth_default")}
+            "auth_source": st.get("auth_source"),
+            "auth_env": (get_settings().kleinanzeigen_api_auth.strip() if p.id == "kleinanzeigen"
+                         and st.get("auth_source") == "env" else ""),
+            "fb_location": _fb_location() if p.id == "facebook" else None}
 
 
 def _fb_location() -> dict[str, Any] | None:
@@ -3641,12 +3642,6 @@ async def settings_platform(request: Request, pid: str):
     set_setting(f"platform_{p.id}_min_gap_s", gap if re.fullmatch(r"\d+(\.\d+)?", gap) else "")
     set_setting(f"platform_{p.id}_per_hour", budget if budget.isdigit() else "-")     # empty: all platforms' default
     p.limiter.min_gap_s, p.limiter.per_hour = platform_min_gap_s(p.id), platform_per_hour(p.id)
-    if p.id == "kleinanzeigen":
-        from app.platforms import kleinanzeigen as ka
-        auth = str(form.get("auth") or "").strip()
-        if auth != get_setting("kleinanzeigen_api_auth"):
-            set_setting("kleinanzeigen_api_auth", auth if re.fullmatch(r"[^:\s]+:[^\s]+", auth) else "")
-            ka.set_client(None)           # the next request builds a client with the new credentials
     if p.id == "facebook":
         from app.platforms import facebook as fb
         link = str(form.get("fb_location") or "").strip()
@@ -3658,6 +3653,29 @@ async def settings_platform(request: Request, pid: str):
             except (InvalidSearchUrl, PlatformError) as e:
                 return back(f"/settings/{p.id}?msg={quote(str(e), safe='')}")
     return back(f"/settings/{p.id}?msg={quote(t('Changes saved'), safe='')}")
+
+
+@app.post("/settings/platform/kleinanzeigen/auth")
+async def kleinanzeigen_auth(auth: str = Form(""), op: str = Form("save")):
+    """The Kleinanzeigen app credentials (user:password): KLEINANZEIGEN_API_AUTH in .env wins over this field, which is
+    then read-only. None set: the app API is off and the agents say so."""
+    from app.platforms import kleinanzeigen as ka
+    auth = auth.strip()
+    if ka.api_auth()[1] == "env":
+        msg = t("The credentials come from KLEINANZEIGEN_API_AUTH in .env – change them there")
+    elif op == "forget":
+        set_setting("kleinanzeigen_api_auth", "")
+        ka.set_client(None)
+        msg = t("Credentials deleted – the Kleinanzeigen agents are off until new ones are set")
+    elif not auth:
+        msg = t("Credentials unchanged")
+    elif re.fullmatch(r"[^:\s]+:[^\s]+", auth):
+        set_setting("kleinanzeigen_api_auth", auth)
+        ka.set_client(None)           # the next request builds a client with the new credentials
+        msg = t("Credentials saved")
+    else:
+        msg = t("Use the form user:password")
+    return back(f"/settings/kleinanzeigen?msg={quote(msg, safe='')}#s-auth")
 
 
 @app.post("/settings/platform/{pid}/budget")

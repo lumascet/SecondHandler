@@ -37,7 +37,6 @@ log = logging.getLogger(__name__)
 API = "https://api.kleinanzeigen.de/api"
 WEB = "https://www.kleinanzeigen.de"
 APP_VERSION = "2026.25.0"
-DEFAULT_API_AUTH = "android:TaR60pEttY"      # the Android app's distribution credentials (public, may rotate)
 ADS_NS = "{http://www.ebayclassifiedsgroup.com/schema/ad/v1}ads"
 AD_NS = "{http://www.ebayclassifiedsgroup.com/schema/ad/v1}ad"
 LOCATIONS_NS = "{http://www.ebayclassifiedsgroup.com/schema/location/v1}locations"
@@ -202,14 +201,18 @@ def parse_locations(data: dict[str, Any]) -> list[tuple[int, str]]:
 
 
 # ------------------------------------------------------------------ the client
-def api_auth() -> str:
-    """"user:pw" for the API: Settings → Platforms, else KLEINANZEIGEN_API_AUTH, else the bundled default."""
+def api_auth() -> tuple[str, str]:
+    """("user:pw", where it comes from: "env" | "settings" | "") for the API. KLEINANZEIGEN_API_AUTH in .env wins
+    over Settings → Platforms. The credentials are the Kleinanzeigen app's own (public, distribution values, not
+    personal secrets); none are bundled, so one must be set or the agents cannot run."""
+    if env := get_settings().kleinanzeigen_api_auth.strip():
+        return env, "env"
     try:
         from app.db import get_setting
-        stored = get_setting("kleinanzeigen_api_auth").strip()
+        stored = (get_setting("kleinanzeigen_api_auth") or "").strip()
     except Exception:  # noqa: BLE001 - no database yet
         stored = ""
-    return stored or get_settings().kleinanzeigen_api_auth.strip() or DEFAULT_API_AUTH
+    return (stored, "settings") if stored else ("", "")
 
 
 def classify(url: str) -> str:
@@ -240,7 +243,7 @@ def kleinanzeigen_limiter() -> RateLimiter:
 class KleinanzeigenClient(HttpPlatformClient):
     def __init__(self, transport: Transport | None = None, auth: str | None = None) -> None:
         self.app_id = f"{uuid.uuid4().hex}{int(time.time() * 1000)}"     # the app's install id, once per client
-        token = base64.b64encode((auth or api_auth()).encode()).decode()
+        token = base64.b64encode((auth or api_auth()[0]).encode()).decode()
         headers = {"Authorization": f"Basic {token}", "X-EBAYK-APP": self.app_id,
                    "X-ECG-USER-AGENT": f"ebayk-android-app-{APP_VERSION}", "X-ECG-USER-VERSION": APP_VERSION,
                    "User-Agent": f"Kleinanzeigen/{APP_VERSION} (Android 13; Pixel 7)",
@@ -307,6 +310,9 @@ _client: KleinanzeigenClient | None = None
 def get_client() -> KleinanzeigenClient:
     global _client
     if _client is None:
+        if not api_auth()[0]:
+            raise PlatformError(t("No Kleinanzeigen app credentials – set KLEINANZEIGEN_API_AUTH in .env or enter "
+                                  "them in Settings → Platforms"))
         _client = KleinanzeigenClient()
     return _client
 
@@ -479,7 +485,7 @@ class KleinanzeigenPlatform(Platform):
             _client = None
 
     def status(self) -> dict[str, Any]:
-        return {**super().status(), "auth_default": api_auth() == DEFAULT_API_AUTH}
+        return {**super().status(), "auth_source": api_auth()[1]}
 
 
 __all__ = ["KleinanzeigenClient", "KleinanzeigenPlatform", "get_client", "set_client", "parse_ads", "parse_ad",

@@ -237,15 +237,22 @@ def test_settings_platforms_page_and_save(client):
     page = client.get("/settings/kleinanzeigen").text
     assert 'action="/settings/platform/kleinanzeigen"' in page and 'name="enabled"' in page and 'name="auth"' in page
     assert 'name="has_product_search"' not in page                     # willhaben's form is on its own page
-    r = client.post("/settings/platform/kleinanzeigen", data={"enabled": "on", "gap": "4,5", "budget": "90", "auth": "u:p"},
+    assert 'action="/settings/platform/kleinanzeigen/auth"' in page               # credentials on their own form
+    r = client.post("/settings/platform/kleinanzeigen", data={"enabled": "on", "gap": "4,5", "budget": "90"},
                     follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].startswith("/settings/kleinanzeigen?msg=")
     assert get_setting("platform_kleinanzeigen_enabled") == "1" and get_setting("platform_kleinanzeigen_per_hour") == "90"
-    assert get_setting("platform_kleinanzeigen_min_gap_s") == "4.5" and get_setting("kleinanzeigen_api_auth") == "u:p"
+    assert get_setting("platform_kleinanzeigen_min_gap_s") == "4.5"
     assert ka.kleinanzeigen_limiter().per_hour == 90 and ka.kleinanzeigen_limiter().min_gap_s == 4.5
     assert get_setting("platform_kleinanzeigen_product_search") == "0"
-    client.post("/settings/platform/kleinanzeigen", data={"auth": "not valid"}, follow_redirects=False)
-    assert get_setting("kleinanzeigen_api_auth") == "" and get_setting("platform_kleinanzeigen_enabled") == "0"
+    client.post("/settings/platform/kleinanzeigen/auth", data={"auth": "u:p", "op": "save"}, follow_redirects=False)
+    assert get_setting("kleinanzeigen_api_auth") == "u:p"
+    client.post("/settings/platform/kleinanzeigen/auth", data={"auth": "not valid", "op": "save"}, follow_redirects=False)
+    assert get_setting("kleinanzeigen_api_auth") == "u:p"                          # a bad format changes nothing
+    client.post("/settings/platform/kleinanzeigen/auth", data={"op": "forget"}, follow_redirects=False)
+    assert get_setting("kleinanzeigen_api_auth") == ""                             # deleted
+    client.post("/settings/platform/kleinanzeigen", data={}, follow_redirects=False)
+    assert get_setting("platform_kleinanzeigen_enabled") == "0"
     assert ">off</small>" in client.get("/settings/kleinanzeigen").text          # the nav marks a switched-off site
     ka.kleinanzeigen_limiter().min_gap_s = 0
     assert client.post("/settings/platform/willhaben", data={}).status_code == 404     # willhaben has its own form
