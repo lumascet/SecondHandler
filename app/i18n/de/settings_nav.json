@@ -43,7 +43,7 @@
   "rate limit, requests": "Limit, Anfragen, Budget",
   "requests in the last hour, blocked": "Anfragen in der letzten Stunde, gesperrt, Block",
   "VPN, WireGuard": "VPN, WireGuard",
-  "API, 401, 403": "API, 401, 403, Zugangsdaten",
+  "API, 401, 403, KLEINANZEIGEN_API_AUTH, login": "API, 401, 403, KLEINANZEIGEN_API_AUTH, Login, Zugangsdaten",
   "place, radius, Marketplace": "Ort, Umkreis, Radius, Marketplace",
   "login, log in, logged in, browser session": "Login, einloggen, eingeloggt, Browser-Sitzung, Anmeldung, Konto",
   "remote view, session, recorder, API recording": "Fernsicht, Sitzung, Rekorder, API-Aufzeichnung, Mitschnitt",
