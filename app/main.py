@@ -3179,7 +3179,7 @@ async def site_account_check(pid: str):
 async def session_check(next: str = Form("/session")):
     """willhaben's login, and that of the other sites with an account (switched on): each in a hidden tab."""
     sess = get_session()
-    ok = await sess.check_login() if sess.started else False
+    ok = await sess.check_login()          # the app interface's login (no browser needed); else the browser's
     parts = [f"willhaben: {t('logged in') if ok else t('not logged in')}"]
     if sess.started:
         for site in site_accounts.SITES.values():

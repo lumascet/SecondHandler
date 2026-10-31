@@ -245,5 +245,16 @@
  "App key deleted – the browser does everything": "App-Schlüssel gelöscht – der Browser erledigt alles",
  "App key saved": "App-Schlüssel gespeichert",
  "App key unchanged": "App-Schlüssel unverändert",
- "Set by {var} in .env – it overrides this field. Change or remove it there.": "Gesetzt durch {var} in der .env – hat Vorrang vor diesem Feld. Ändere oder entferne es dort."
+ "Set by {var} in .env – it overrides this field. Change or remove it there.": "Gesetzt durch {var} in der .env – hat Vorrang vor diesem Feld. Ändere oder entferne es dort.",
+ "Kept on this server only (data folder, readable by the app alone) and in backups.": "Nur auf diesem Server gespeichert (Datenordner, nur für die App lesbar) und in Backups.",
+ "no app key": "kein App-Schlüssel",
+ "Enter your willhaben login details below, then log in.": "Trag unten deine willhaben-Zugangsdaten ein, dann melde dich an.",
+ "SecondHandler talks to willhaben through its app interface: your chats, your ads and their actions. Search agents, price checks and the product search stay anonymous. A new device gets a code by SMS or e-mail once.": "SecondHandler spricht mit willhaben über dessen App-Schnittstelle: deine Chats, deine Anzeigen und ihre Aktionen. Suchagenten, Preisprüfung und Produktsuche bleiben anonym. Ein neues Gerät bekommt einmal einen Code per SMS oder E-Mail.",
+ "from .env": "aus der .env",
+ "stored": "gespeichert",
+ "missing": "fehlt",
+ "Diagnostics": "Diagnose",
+ "Browser for PayLivery": "Browser für PayLivery",
+ "PayLivery (the buyer fee, buying and selling steps) still runs in the app's browser, which needs a willhaben login of its own. Log in there once; it stays in the browser's profile.": "PayLivery (Käufergebühr, Kauf- und Verkaufsschritte) läuft noch im Browser der App, der dafür eine eigene willhaben-Anmeldung braucht. Melde dich dort einmal an; sie bleibt im Profil des Browsers.",
+ "Log in in the browser": "Im Browser anmelden"
 }
