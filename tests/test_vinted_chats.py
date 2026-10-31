@@ -105,7 +105,7 @@ async def test_sync_reads_inbox_then_changed_conversations(monkeypatch):
     sess = Sess()
     monkeypatch.setattr("app.willhaben.session.get_session", lambda: sess)
 
-    async def catch(url, part, timeout_ms=0, extra=None):
+    async def catch(url, part, timeout_ms=0, extra=None, untranslate_cid=None):
         sess.opened.append(url)
         return json.loads(json.dumps(INBOX if url.endswith("/inbox") else CONV))
     monkeypatch.setattr(vinted_inbox, "_catch", catch)
@@ -158,7 +158,7 @@ async def test_a_new_message_from_the_other_side_is_pushed(monkeypatch):
         started = True
     monkeypatch.setattr("app.willhaben.session.get_session", lambda: Sess())
 
-    async def catch(url, part, timeout_ms=0, extra=None):
+    async def catch(url, part, timeout_ms=0, extra=None, untranslate_cid=None):
         return json.loads(json.dumps(state["inbox"] if url.endswith("/inbox") else CONV))
     monkeypatch.setattr(vinted_inbox, "_catch", catch)
     await vinted_inbox.sync(force=True)
@@ -431,7 +431,7 @@ async def test_a_message_the_live_event_brings_is_pushed_once(monkeypatch):
     monkeypatch.setattr("app.willhaben.session.get_session", lambda: Sess())
     conv = copy.deepcopy(CONV)
 
-    async def catch(url, part, timeout_ms=0, extra=None):
+    async def catch(url, part, timeout_ms=0, extra=None, untranslate_cid=None):
         return copy.deepcopy(INBOX if url.endswith("/inbox") else conv)
     monkeypatch.setattr(vinted_inbox, "_catch", catch)
 
@@ -485,7 +485,7 @@ async def test_an_orders_shipping_update_is_read_and_pushed(monkeypatch):
     conv = copy.deepcopy(CONV)
     asked = {"conv": 0, "fail": 0}
 
-    async def catch(url, part, timeout_ms=0, extra=None):
+    async def catch(url, part, timeout_ms=0, extra=None, untranslate_cid=None):
         if url.endswith("/inbox"):
             return copy.deepcopy(INBOX)
         asked["conv"] += 1

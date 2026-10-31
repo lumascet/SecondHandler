@@ -291,6 +291,41 @@ def log_shape(m: dict[str, Any]) -> None:
         log.info("vinted message fields: %s", shape)
 
 
+# Vinted's new messaging service translates a whole conversation for the account's language (its own machine
+# translation): the original foreign text then never reaches us (10-31, an Italian seller came as German only). We turn
+# it off per conversation, so the original comes through and the app's own translator shows original + translation, like
+# willhaben and Kleinanzeigen. The toggle (seen 2026-10-31): PUT api.vinted.at/messaging/main/conversations/<uuid>/
+# translation {"translate": false}; made from inside Vinted's own page so its CSRF token and anon id ride along.
+_JS_TRANSLATE = r"""async ([cid, translate]) => {
+  const html = document.documentElement.innerHTML;
+  const tok = (html.match(/\\?"CSRF_TOKEN\\?"\s*:\s*\\?"([^"\\]+)/) || [])[1];
+  const anon = (document.cookie.match(/(?:^|; )anon_id=([^;]+)/) || [])[1]
+            || (html.match(/\\?"anon_id\\?"\s*:\s*\\?"([0-9a-f-]{20,})/) || [])[1];
+  const headers = {'accept': 'application/json, text/plain, */*', 'content-type': 'application/json',
+                   'locale': document.documentElement.lang || 'de-AT'};
+  if (tok) headers['x-csrf-token'] = tok;
+  if (anon) headers['x-anon-id'] = decodeURIComponent(anon);
+  const r = await fetch('https://api.vinted.at/messaging/main/conversations/' + cid + '/translation',
+                        {method: 'PUT', headers, credentials: 'include', body: JSON.stringify({translate})});
+  return r.status;
+}"""
+
+
+async def set_translation(page: Any, cid: str, translate: bool) -> int:
+    """Turn Vinted's own machine-translation of conversation `cid` on/off, from an open logged-in Vinted page. Returns
+    the HTTP status, 0 on error (a nicety: the German body still shows if it fails)."""
+    try:
+        return int(await page.evaluate(_JS_TRANSLATE, [cid, translate]))
+    except Exception as e:  # noqa: BLE001
+        log.info("vinted translate toggle failed for %s: %s", cid, type(e).__name__)
+        return 0
+
+
+def is_translated(data: dict[str, Any]) -> bool:
+    """Vinted machine-translated this conversation (so the bodies are German, not the original)."""
+    return bool((data.get("localization") or {}).get("translated"))
+
+
 def message_key(m: dict[str, Any]) -> str:
     """A stable id of one Vinted message: Vinted gives its order events a new id on every load (seen 2026-10-21:
     the same "Gekauft!" twice), so an event is keyed by its kind, title and time; a written message by its number
@@ -462,10 +497,13 @@ def _merge_event(db: Any, cid: str, key: str, text: str, at: Any, current: set[s
 _ESCROW = re.compile(r"/escrow-orders/api/v2/escrow-orders/\d+(?:\?|$)")
 
 
-async def _catch(url: str, part: str, timeout_ms: int = 30000, extra: dict[str, Any] | None = None) -> dict[str, Any] | None:
+async def _catch(url: str, part: str, timeout_ms: int = 30000, extra: dict[str, Any] | None = None,
+                 untranslate_cid: str | None = None) -> dict[str, Any] | None:
     """Open `url` (a page of Vinted's web app) in a short-lived tab and return the JSON answer of its own call whose
     address contains `part` – waiting for that answer, not for the page's text. None when it did not come.
-    `extra`: gets the page's order call too ("escrow": escrow_order with current_user_side), when it makes one."""
+    `extra`: gets the page's order call too ("escrow": escrow_order with current_user_side), when it makes one.
+    `untranslate_cid`: if that conversation came machine-translated, turn Vinted's translation off and read it afresh,
+    so the original foreign text comes through (the app translates it itself)."""
     from app.willhaben.session import get_session
 
     sess = get_session()
@@ -485,6 +523,18 @@ async def _catch(url: str, part: str, timeout_ms: int = 30000, extra: dict[str, 
                                         timeout=timeout_ms) as got:
             await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         body = _parse(await (await got.value).text())
+        if untranslate_cid and isinstance(body, dict) and is_translated(body):
+            if await set_translation(page, untranslate_cid, False) in (200, 201, 204):
+                try:
+                    async with page.expect_response(lambda r: part in r.url and r.request.method == "GET"
+                                                    and r.status == 200, timeout=timeout_ms) as got2:
+                        await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    fresh = _parse(await (await got2.value).text())
+                    if isinstance(fresh, dict) and not is_translated(fresh):
+                        body = fresh
+                        log.info("vinted: turned machine-translation off for %s, read the original", untranslate_cid)
+                except Exception as e:  # noqa: BLE001 - keep the translated body if the re-read fails
+                    log.info("vinted: re-read after untranslate failed for %s (%s)", untranslate_cid, type(e).__name__)
         if extra is not None:
             if not seen:
                 await page.wait_for_timeout(2500)       # the order is asked right after the conversation
@@ -533,10 +583,10 @@ async def _load(cid: str, push: bool = True) -> int:
     order event (shipped, delivered …) pushed, each once. How many messages it holds."""
     extra: dict[str, Any] = {}
     before_in, before_ev = _newest_in(cid), _newest_event(cid)
-    conv = await _catch(f"{ORIGIN}/inbox/{cid}", f"/messaging/main/conversations/{cid}", extra=extra)
+    conv = await _catch(f"{ORIGIN}/inbox/{cid}", f"/messaging/main/conversations/{cid}", extra=extra, untranslate_cid=cid)
     if conv is None:
         await asyncio.sleep(LOAD_RETRY_S)
-        conv = await _catch(f"{ORIGIN}/inbox/{cid}", f"/messaging/main/conversations/{cid}", extra=extra)
+        conv = await _catch(f"{ORIGIN}/inbox/{cid}", f"/messaging/main/conversations/{cid}", extra=extra, untranslate_cid=cid)
     if conv is None:
         return 0
     n = apply_conversation(cid, conv, extra.get("escrow"))

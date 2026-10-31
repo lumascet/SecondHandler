@@ -94,3 +94,99 @@ def test_the_session_page_names_each_sites_login():
     page = templates.env.get_template("_session_panel.html").render(session_status=status, captures=[],
                                                                     settings=get_settings())
     assert 'data-site-login="Vinted"' in page and "Vinted: not logged in" in page and "willhaben: logged in" in page
+
+
+# --- Vinted machine-translation turned off, so the original foreign text reaches us (the app translates it itself) ---
+
+def test_is_translated_reads_the_localization_flag():
+    assert vinted_inbox.is_translated({"localization": {"translated": True}}) is True
+    assert vinted_inbox.is_translated({"localization": {"translated": False}}) is False
+    assert vinted_inbox.is_translated({}) is False
+
+
+class _Resp:
+    def __init__(self, text):
+        self._t = text
+
+    async def text(self):
+        return self._t
+
+
+class _Got:
+    def __init__(self, resp):
+        self._resp = resp
+
+    @property
+    def value(self):
+        async def _v():
+            return self._resp
+        return _v()
+
+
+class _Expect:
+    def __init__(self, page):
+        self.page = page
+
+    async def __aenter__(self):
+        return _Got(_Resp(self.page._bodies.pop(0)))
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _FakePage:
+    def __init__(self, bodies):
+        self._bodies = bodies
+        self.url = "https://www.vinted.at/inbox/01a1-uuid"
+        self.evaluated = []
+        self.closed = False
+
+    def on(self, *a, **k):
+        pass
+
+    def expect_response(self, pred, timeout=0):
+        return _Expect(self)
+
+    async def goto(self, url, **k):
+        self.url = url
+
+    async def evaluate(self, js, args):
+        self.evaluated.append(args)
+        return 204
+
+    async def close(self):
+        self.closed = True
+
+
+async def test_catch_turns_translation_off_and_re_reads_the_original(monkeypatch):
+    translated = json.dumps({"id": "01a1-uuid", "localization": {"translated": True}, "messages": []})
+    original = json.dumps({"id": "01a1-uuid", "localization": {"translated": False}, "messages": []})
+    page = _FakePage([translated, original])
+
+    class Ctx:
+        async def new_page(self):
+            return page
+
+    sess = SimpleNamespace(context=Ctx(), ui_page=None, _creating_internal=False, _require=lambda: None)
+    monkeypatch.setattr("app.willhaben.session.get_session", lambda: sess)
+    out = await vinted_inbox._catch("https://www.vinted.at/inbox/01a1-uuid",
+                                    "/messaging/main/conversations/01a1-uuid", untranslate_cid="01a1-uuid")
+    assert out["localization"]["translated"] is False        # the original came through, not the German machine one
+    assert page.evaluated == [["01a1-uuid", False]]          # translation turned off exactly once
+    assert page.closed
+
+
+async def test_catch_leaves_an_untranslated_conversation_alone(monkeypatch):
+    original = json.dumps({"id": "01a1-uuid", "localization": {"translated": False}, "messages": []})
+    page = _FakePage([original])
+
+    class Ctx:
+        async def new_page(self):
+            return page
+
+    sess = SimpleNamespace(context=Ctx(), ui_page=None, _creating_internal=False, _require=lambda: None)
+    monkeypatch.setattr("app.willhaben.session.get_session", lambda: sess)
+    out = await vinted_inbox._catch("https://www.vinted.at/inbox/01a1-uuid",
+                                    "/messaging/main/conversations/01a1-uuid", untranslate_cid="01a1-uuid")
+    assert out["localization"]["translated"] is False
+    assert page.evaluated == []                              # nothing toggled: it was already the original
