@@ -1,0 +1,47 @@
+{# The pace card of a platform settings page, the same for every platform: the request budget per hour and the minimum
+   gap, use in the product search, and a link to the request statistics. Sites also carry their on/off switch and the
+   host/capability pills; willhaben also shows how much of this hour's budget is used. Needs `section`; for a site `p`,
+   `site`; for willhaben the wh_* globals and `values`. #}
+{% import "_ui.html" as ui %}
+{% if section == 'willhaben' %}
+{% set used = wh_used() %}{% set budget = wh_budget() %}{% set own = wh_own_limits() %}
+{% set pct = ([100, (used * 100 / budget)|round|int]|min) if budget else 0 %}
+<section class="flex flex-col gap-3.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
+  <form method="post" action="/settings/willhaben" class="flex flex-col gap-3.5">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <label id="s-gap" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Minimum gap between requests (s)") }}</span>
+        <input name="gap" value="{{ own.gap }}" placeholder="{{ _('as all platforms: {n}', n='%g'|format(own.default_gap)) }}" inputmode="decimal" class="input w-full min-w-0 bg-base-200"></label>
+      <label id="s-budget" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Request budget per hour (0 = none, empty = as all platforms)") }}</span>
+        <input name="budget" value="{{ own.budget if own.budget is not none else '' }}" placeholder="{{ _('as all platforms: {n}', n=own.default_budget) }}" inputmode="numeric" class="input w-full min-w-0 bg-base-200"></label>
+    </div>
+    <div class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Used this hour") }}</span>
+      <div class="flex min-w-0 items-center gap-3"><span class="shrink-0 tabular-nums">{{ used }} / {{ budget }}</span>{{ ui.bar(pct, 'ok', 'h-1.5 min-w-0 flex-1') }}</div></div>
+    <input type="hidden" name="has_product_search" value="1">
+    <label id="s-product-search" class="flex cursor-pointer items-center justify-between gap-3 border-t border-base-300 pt-3.5"><span class="min-w-0 font-medium">{{ _("Use for the product search") }}</span><input type="checkbox" class="toggle toggle-primary" name="product_search" {% if values.platform_willhaben_product_search != '0' %}checked{% endif %}></label>
+    <div class="flex flex-wrap items-center gap-2.5"><button class="btn btn-primary">{{ _("Save") }}</button><small class="text-[12.5px] text-muted">{{ _("When the budget is used up, agents wait until the next hour. Product search and price checks count too.") }} {{ _("0 = no budget.") }}</small></div>
+  </form>
+  <div id="s-stats" class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 pt-3.5"><span class="font-medium">{{ _("Requests to willhaben") }}</span><a href="/stats/requests?platform=willhaben" class="btn btn-sm">{{ _("Full statistics") }} →</a></div>
+</section>
+{% else %}
+<form method="post" action="/settings/platform/{{ p.id }}" class="flex flex-col gap-3.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div class="min-w-0"><span class="text-muted">{{ p.host }} · {{ p.home_country }}</span>
+      <div class="mt-1.5 flex flex-wrap gap-1.5">{{ ui.pill(_("direct requests") if p.access == 'http' else _("uses the app's browser"), '', false) }}{% if p.can('filters') %}{{ ui.pill(_("own filters"), '', false) }}{% endif %}{% if p.can('keyword_search') %}{{ ui.pill(_("keyword search"), '', false) }}{% endif %}{% if p.can('detail') %}{{ ui.pill(_("ad details"), '', false) }}{% endif %}</div></div>
+    <label id="s-enabled" class="flex cursor-pointer items-center gap-2"><span class="font-medium">{{ _("Enabled") }}</span><input type="checkbox" class="toggle toggle-primary" name="enabled" {% if site.enabled %}checked{% endif %}></label>
+  </div>
+  {% if p.about() %}<p class="text-[12.5px] text-muted">{{ p.about() }}</p>{% endif %}
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <label id="s-gap" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Minimum gap between requests (s)") }}</span><input name="gap" value="{{ site.own_gap }}" placeholder="{{ _('as all platforms: {n}', n='%g'|format(site.default_gap)) }}" inputmode="decimal" class="input w-full min-w-0 bg-base-200"></label>
+    <label id="s-budget" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Request budget per hour (0 = none, empty = as all platforms)") }}</span><input name="budget" value="{{ site.per_hour if site.per_hour is not none else '' }}" placeholder="{{ _('as all platforms: {n}', n=site.wh_per_hour) }}" inputmode="numeric" class="input w-full min-w-0 bg-base-200"></label>
+  </div>
+  {% if p.id == 'facebook' %}
+  <label id="s-fb-location" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Location for keyword searches (product search): a Marketplace link from facebook.com") }}</span><input name="fb_location" type="url" value="{{ site.fb_location.link if site.fb_location else '' }}" placeholder="https://www.facebook.com/marketplace/vienna/search?query=sofa&radius=40" class="input w-full min-w-0 bg-base-200"></label>
+  <small class="text-[12.5px] text-muted">{% if site.fb_location %}{{ _("Searching around {place}", place=site.fb_location.place) }}{% if site.fb_location.radius %} · {{ _("radius {n} km", n=site.fb_location.radius) }}{% endif %} · {% endif %}{{ _("Open Marketplace on facebook.com, set the location and radius, search for anything and paste the link; saving runs one test search. Search agents take the location from their own link.") }}</small>
+  {% endif %}
+  <label id="s-product-search" class="flex cursor-pointer items-center justify-between gap-3 border-t border-base-300 pt-3.5"><span class="min-w-0 font-medium">{{ _("Use for the product search") }}</span><input type="checkbox" class="toggle toggle-primary" name="product_search" {% if site.product_search %}checked{% endif %}></label>
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <button class="btn btn-primary">{{ _("Save") }}</button>
+    <span id="s-stats" class="text-[12.5px] text-muted">{{ _("Requests in the last hour: {n}", n=site.last_hour) }}{% if site.status.cooling_down_s %} · {{ _("paused for {s} s after a block", s=site.status.cooling_down_s|round|int) }}{% endif %} · <a class="link link-primary" href="/stats/requests?platform={{ p.id }}">{{ _("Statistics") }}</a></span>
+  </div>
+</form>
+{% endif %}

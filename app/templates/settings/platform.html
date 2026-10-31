@@ -1,60 +1,11 @@
-{# Settings → Platforms → <site>: one site other than willhaben (app/platforms). `site` from main._platform_row():
-   {p, enabled, status, per_hour (None: as willhaben's, wh_per_hour), min_gap_s, product_search, last_hour,
-   auth_source ("env"|"settings"|""), auth_env (the .env value when it set it)}. willhaben has its own
-   page (settings/willhaben.html: login, request budget, product search). #}
-{% import "_ui.html" as ui %}
+{# Settings → Platforms → <site>: one site other than willhaben (app/platforms). `site` from main._platform_row();
+   `account`/`account_site` when the site logs in through the browser (Kleinanzeigen, Vinted). Same layout as willhaben
+   (settings/willhaben.html): the primary login card, the pace card, a folded Advanced box, then the VPN switch — all
+   shared partials that branch on the platform. #}
 {% set p = site.p %}
-{% if account_site is defined %}
-{# the site's account in the app's browser: for its messages only; searches stay anonymous (app/services/site_accounts.py) #}
-<section id="s-account" class="mb-4 flex flex-col gap-2.5 rounded-box border border-base-300 bg-base-100 px-5 py-4" data-site-account="{{ p.id }}">
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <div class="flex min-w-0 items-center gap-2.5">
-      <span class="size-2 shrink-0 rounded-full {{ 'bg-success' if account.logged_in else 'bg-off' if account.logged_in is none else 'bg-error' }}"></span>
-      <div class="min-w-0"><div class="font-semibold">{{ _("{site} account", site=account_site.name) }}: {{ _("logged in") if account.logged_in else _("not checked yet") if account.logged_in is none else _("not logged in") }}</div>
-        <div class="text-[12.5px] text-muted">{% if account.checked_at %}{{ _("checked {ago}", ago=account.checked_at|ago) }}{% endif %}{% if account.error %} · {{ account.error }}{% endif %}</div></div>
-    </div>
-    <div class="flex flex-wrap gap-2">
-      <form method="post" action="/settings/account/{{ p.id }}/login"><button class="btn btn-sm{{ ' btn-primary' if not account.logged_in else '' }}">{{ _("Log in") }}</button></form>
-      <form method="post" action="/settings/account/{{ p.id }}/check"><button class="btn btn-sm">{{ _("Check login") }}</button></form>
-      {% if p.id == 'vinted' %}<form method="post" action="/session/forget/vinted" onsubmit="return confirm({{ _('Delete all Vinted cookies of this browser? Vinted is logged out here and starts afresh.')|tojson|forceescape }})"><input type="hidden" name="next" value="/settings/vinted"><button class="btn btn-ghost btn-sm" title="{{ _('After “Deine Sitzung wurde blockiert”: the bot protection marked this browser') }}">{{ _("Reset Vinted") }}</button></form>{% endif %}
-    </div>
-  </div>
-  <p class="text-[12.5px] text-muted">{{ _("You log in once in the app's browser window; the session stays in its profile like willhaben's. It is used for your messages on {site} only: search agents, price checks and the product search stay anonymous.", site=account_site.name) }}</p>
-  {% if p.id == 'vinted' %}{% with cred_site = 'vinted' %}{% include "_credentials.html" %}{% endwith %}{% endif %}
-</section>
-{% endif %}
-<form method="post" action="/settings/platform/{{ p.id }}" class="flex flex-col gap-3.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <div class="min-w-0"><span class="text-muted">{{ p.host }} · {{ p.home_country }}</span>
-      <div class="mt-1.5 flex flex-wrap gap-1.5">{{ ui.pill(_("direct requests") if p.access == 'http' else _("uses the app's browser"), '', false) }}{% if p.can('filters') %}{{ ui.pill(_("own filters"), '', false) }}{% endif %}{% if p.can('keyword_search') %}{{ ui.pill(_("keyword search"), '', false) }}{% endif %}{% if p.can('detail') %}{{ ui.pill(_("ad details"), '', false) }}{% endif %}</div></div>
-    <label id="s-enabled" class="flex cursor-pointer items-center gap-2"><span class="font-medium">{{ _("Enabled") }}</span><input type="checkbox" class="toggle toggle-primary" name="enabled" {% if site.enabled %}checked{% endif %}></label>
-  </div>
-  {% if p.about() %}<p class="text-[12.5px] text-muted">{{ p.about() }}</p>{% endif %}
-  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-    <label id="s-gap" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Minimum gap between requests (s)") }}</span><input name="gap" value="{{ site.own_gap }}" placeholder="{{ _('as all platforms: {n}', n='%g'|format(site.default_gap)) }}" inputmode="decimal" class="input w-full min-w-0 bg-base-200"></label>
-    <label id="s-budget" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Request budget per hour (0 = none, empty = as all platforms)") }}</span><input name="budget" value="{{ site.per_hour if site.per_hour is not none else '' }}" placeholder="{{ _('as all platforms: {n}', n=site.wh_per_hour) }}" inputmode="numeric" class="input w-full min-w-0 bg-base-200"></label>
-  </div>
-  {% if p.id == 'facebook' %}
-  <label id="s-fb-location" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Location for keyword searches (product search): a Marketplace link from facebook.com") }}</span><input name="fb_location" type="url" value="{{ site.fb_location.link if site.fb_location else '' }}" placeholder="https://www.facebook.com/marketplace/vienna/search?query=sofa&radius=40" class="input w-full min-w-0 bg-base-200"></label>
-  <small class="text-[12.5px] text-muted">{% if site.fb_location %}{{ _("Searching around {place}", place=site.fb_location.place) }}{% if site.fb_location.radius %} · {{ _("radius {n} km", n=site.fb_location.radius) }}{% endif %} · {% endif %}{{ _("Open Marketplace on facebook.com, set the location and radius, search for anything and paste the link; saving runs one test search. Search agents take the location from their own link.") }}</small>
-  {% endif %}
-  <label id="s-product-search" class="flex cursor-pointer items-center justify-between gap-3 border-t border-base-300 pt-3.5"><span class="min-w-0 font-medium">{{ _("Use for the product search") }}</span><input type="checkbox" class="toggle toggle-primary" name="product_search" {% if site.product_search %}checked{% endif %}></label>
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <button class="btn btn-primary">{{ _("Save") }}</button>
-    <span id="s-stats" class="text-[12.5px] text-muted">{{ _("Requests in the last hour: {n}", n=site.last_hour) }}{% if site.status.cooling_down_s %} · {{ _("paused for {s} s after a block", s=site.status.cooling_down_s|round|int) }}{% endif %} · <a class="link link-primary" href="/stats/requests?platform={{ p.id }}">{{ _("Statistics") }}</a></span>
-  </div>
-</form>
-{% if p.id == 'kleinanzeigen' %}
-{# the Kleinanzeigen app credentials (app/platforms/kleinanzeigen.api_auth): KLEINANZEIGEN_API_AUTH in .env wins over
-   the field, which is then read-only. A separate form (not nested in the one above). #}
-<div id="s-auth" class="mt-3 flex min-w-0 flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
-  <span class="text-[12.5px] text-muted">{{ _("App credentials (user:password)") }} · {{ _("from .env") if site.auth_source == 'env' else _("stored") if site.auth_source == 'settings' else _("missing") }}</span>
-  <form method="post" action="/settings/platform/kleinanzeigen/auth" class="flex flex-wrap items-center gap-1.5" autocomplete="off">
-    {{ ui.env_input('auth', 'KLEINANZEIGEN_API_AUTH', site.auth_env or '', placeholder=_('stored – leave empty to keep') if site.auth_source == 'settings' else 'user:password', type='text', cls='w-64') }}
-    {% if site.auth_source != 'env' %}<button class="btn btn-sm" name="op" value="save">{{ _("Save") }}</button>{% endif %}
-    {% if site.auth_source == 'settings' %}<button class="btn btn-ghost btn-sm" name="op" value="forget">{{ _("Delete") }}</button>{% endif %}
-  </form>
-  <small class="text-[12.5px] text-muted">{{ _("The search agents use the API of the Kleinanzeigen app. Set the app's own credentials (public, user:password); none are built in, so the agents stay off until one is set. A 401/403 on an agent means they changed.") }}</small>
+<div class="flex flex-col gap-4">
+  {% if account_site is defined %}{% include "settings/_account.html" %}{% endif %}
+  {% include "settings/_pace.html" %}
+  {% include "settings/_advanced.html" %}
+  {% if vpn is defined %}{% with vpn_site = p.id %}{% include "_vpn_switch.html" %}{% endwith %}{% endif %}
 </div>
-{% endif %}
-{% if vpn is defined %}{% with vpn_site = p.id %}{% include "_vpn_switch.html" %}{% endwith %}{% endif %}

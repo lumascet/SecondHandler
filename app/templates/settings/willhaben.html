@@ -1,79 +1,9 @@
-{# Settings → Platforms → willhaben: the account (app interface), the hourly request budget (REQUESTS_PER_HOUR from .env
-   until it is changed here) and whether the product search uses willhaben. The other sites: settings/platform.html. #}
-{% import "_ui.html" as ui %}
-{# the account: willhaben's app interface (willhaben/native.py) with the stored details; one status, the rest folded.
-   The browser keeps a willhaben login of its own only for PayLivery (fee window, buying and selling steps). #}
-{% set ss = session_status %}{% set na = ss.native or {} %}{% set cr = credentials_state('willhaben') %}
-{% set who = (ss.user.nickname or ss.user.email) if ss.user else na.user %}
-<section id="s-account" class="flex flex-col gap-3 rounded-box border border-base-300 bg-base-100 px-5 py-4" data-site-account="willhaben">
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <div class="flex min-w-0 items-center gap-2.5">
-      <span class="size-2 shrink-0 rounded-full {{ 'bg-success' if na.logged_in else 'bg-warning' if na.code_needed or not na.key else 'bg-error' }}"></span>
-      <div class="min-w-0"><div class="font-semibold">{{ _("{site} account", site="willhaben") }}: {% if not na.key %}{{ _("no app key") }}{% elif na.logged_in %}{{ _("logged in") }}{% if who %} {{ _("as") }} {{ who }}{% endif %}{% elif na.code_needed %}{{ _("waiting for the code willhaben sent") }}{% else %}{{ _("not logged in") }}{% endif %}</div>
-        <div class="text-[12.5px] text-muted">{% if ss.last_check %}{{ _("checked {ago}", ago=ss.last_check|ago) }}{% endif %}{% if na.error and not na.logged_in %} · {{ na.error }}{% if na.paused_until %} · {{ _("next automatic try {when}", when=na.paused_until|ago) }}{% endif %}{% endif %}</div></div>
-    </div>
-    <div class="flex flex-wrap gap-2">
-      {% if not na.logged_in and na.key and cr.has_password %}<form method="post" action="/settings/native/login"><button class="btn btn-sm btn-primary">{{ _("Log in") }}</button></form>{% endif %}
-      {% if na.logged_in %}<form method="post" action="/session/check"><input type="hidden" name="next" value="/settings/willhaben"><button class="btn btn-sm">{{ _("Check login") }}</button></form>
-      <form method="post" action="/settings/native/logout"><button class="btn btn-ghost btn-sm">{{ _("Log out") }}</button></form>{% endif %}
-    </div>
-  </div>
-  {% if na.code_needed %}<form method="post" action="/settings/native/code" class="flex flex-wrap items-center gap-1.5">
-    <input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="{{ _('Code from willhaben') }}" class="input input-sm w-40 bg-base-200">
-    <button class="btn btn-primary btn-sm">{{ _("Confirm") }}</button>
-  </form>{% endif %}
-  {% if not na.key %}{{ ui.msg(_("No app key yet: the app interface stays off and the browser does everything. Enter the key of willhaben's Android app below, or set WILLHABEN_APP_KEY in .env."), 'warn') }}
-  {% elif not cr.has_password and not na.logged_in %}{{ ui.msg(_("Enter your willhaben login details below, then log in."), 'warn') }}{% endif %}
-  <p class="text-[12.5px] text-muted">{{ _("SecondHandler talks to willhaben through its app interface: your chats, your ads and their actions. Search agents, price checks and the product search stay anonymous. A new device gets a code by SMS or e-mail once.") }}</p>
-
-  {% with cred_site = 'willhaben', cred_auto = false %}{% include "_credentials.html" %}{% endwith %}
-
-  {# the key that signs the app token request (native.app_key): WILLHABEN_APP_KEY in .env wins over the field #}
-  <details id="s-native" class="border-t border-base-300 pt-2.5" {% if not na.key %}open{% endif %}>
-    <summary class="cursor-pointer text-[13px] text-muted">{{ _("App key") }} · {{ _("from .env") if na.key == 'env' else _("stored") if na.key == 'settings' else _("missing") }}</summary>
-    <form method="post" action="/settings/native/key" class="mt-2.5 flex flex-wrap items-center gap-1.5" autocomplete="off">
-      {{ ui.env_input('key', 'WILLHABEN_APP_KEY', na.key_env or '', placeholder=_('stored – leave empty to keep') if na.key == 'settings' else _('App key'), cls='w-64') }}
-      {% if na.key != 'env' %}<button class="btn btn-sm" name="op" value="save">{{ _("Save key") }}</button>{% endif %}
-      {% if na.key == 'settings' %}<button class="btn btn-ghost btn-sm" name="op" value="forget">{{ _("Delete key") }}</button>{% endif %}
-    </form>
-  </details>
-
-  <details id="s-diagnostics" class="border-t border-base-300 pt-2.5">
-    <summary class="cursor-pointer text-[13px] text-muted">{{ _("Diagnostics") }}{% if na.selftest %} · {{ _("Last read test {ago}", ago=na.selftest_at|ago) }}: {{ na.selftest|selectattr('ok')|list|length }}/{{ na.selftest|length }}{% endif %}</summary>
-    <div class="mt-2.5 flex flex-col gap-2">
-      {% if na.logged_in %}<form method="post" action="/settings/native/selftest"><button class="btn btn-sm">{{ _("Test reads") }}</button></form>{% endif %}
-      {% if na.selftest %}<ul class="flex flex-col gap-0.5 text-[12px]">{% for r in na.selftest %}<li><span class="{{ 'text-success' if r.ok else 'text-error' }}">{{ '✓' if r.ok else '✗' }}</span> {{ r.name }} · {{ r.via }} · <span class="text-muted">{{ r.summary or r.error }}</span></li>{% endfor %}</ul>{% endif %}
-      <a id="s-browser-window" href="/session" class="text-[13px] text-muted no-underline hover:underline">{{ _("Browser window and request recording") }} →</a>
-    </div>
-  </details>
-
-  {# PayLivery still runs in the browser (fee window, buying and selling steps): its own willhaben login there #}
-  <details id="s-paylivery-browser" class="border-t border-base-300 pt-2.5">
-    <summary class="cursor-pointer text-[13px] text-muted">{{ _("Browser for PayLivery") }}</summary>
-    <div class="mt-2.5 flex flex-col gap-2">
-      <p class="text-[12.5px] text-muted">{{ _("PayLivery (the buyer fee, buying and selling steps) still runs in the app's browser, which needs a willhaben login of its own. Log in there once; it stays in the browser's profile.") }}</p>
-      {% if not ss.started %}<form method="post" action="/session/start"><input type="hidden" name="next" value="/settings/willhaben"><button class="btn btn-sm">{{ _("Start browser") }}</button></form>
-      {% else %}<form method="post" action="/session/login"><input type="hidden" name="next" value="/settings/willhaben?remote=1"><button class="btn btn-sm self-start">{{ _("Log in in the browser") }}</button></form>{% endif %}
-    </div>
-  </details>
-</section>
-<section class="flex flex-col gap-3.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
-  {% set lim = wh_limiter() %}{% set used = wh_used() %}{% set budget = wh_budget() %}
-  {% set pct = ([100, (used * 100 / budget)|round|int]|min) if budget else 0 %}
-  {% set own = wh_own_limits() %}
-  <form method="post" action="/settings/willhaben" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-    {# its own values, as every site has; empty: Settings → All platforms #}
-    <label id="s-budget" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Request budget per hour (0 = none, empty = as all platforms)") }}</span>
-      <input name="budget" value="{{ own.budget if own.budget is not none else '' }}" placeholder="{{ _('as all platforms: {n}', n=own.default_budget) }}" inputmode="numeric" class="input w-full min-w-0 bg-base-200"></label>
-    <label id="s-gap" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Minimum gap between requests (s)") }}</span>
-      <input name="gap" value="{{ own.gap }}" placeholder="{{ _('as all platforms: {n}', n='%g'|format(own.default_gap)) }}" inputmode="decimal" class="input w-full min-w-0 bg-base-200"></label>
-    <div class="flex min-w-0 flex-col gap-1.5 sm:col-span-2"><span class="text-[12.5px] text-muted">{{ _("Used this hour") }}</span>
-      <div class="flex min-w-0 items-center gap-3 py-2"><span class="shrink-0 tabular-nums">{{ used }} / {{ budget }}</span>{{ ui.bar(pct, 'ok', 'h-1.5 min-w-0 flex-1') }}</div></div>
-    <input type="hidden" name="has_product_search" value="1">
-    <label id="s-product-search" class="flex cursor-pointer items-center justify-between gap-3 sm:col-span-2"><span class="min-w-0 font-medium">{{ _("Use for the product search") }}</span><input type="checkbox" class="toggle toggle-primary" name="product_search" {% if values.platform_willhaben_product_search != '0' %}checked{% endif %}></label>
-    <div class="flex flex-wrap items-center gap-2.5 sm:col-span-2"><button class="btn btn-primary">{{ _("Save") }}</button><small class="text-[12.5px] text-muted">{{ _("When the budget is used up, agents wait until the next hour. Product search and price checks count too.") }} {{ _("0 = no budget.") }}</small></div>
-  </form>
-  <div id="s-stats" class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 pt-3.5"><span class="font-medium">{{ _("Requests to willhaben") }}</span><a href="/stats/requests?platform=willhaben" class="btn btn-sm">{{ _("Full statistics") }} →</a></div>
-  {# optional inline preview: include the chart section of stats_willhaben.html via a macro, or embed <iframe src="/stats/willhaben?embed=1"> #}
-</section>
-{% if vpn is defined %}{% with vpn_site = 'willhaben' %}{% include "_vpn_switch.html" %}{% endwith %}{% endif %}
+{# Settings → willhaben. Same layout as every other platform (settings/platform.html): the primary login card, the pace
+   card (budget, gap, product search, stats), a folded Advanced box (app key, diagnostics, the browser login PayLivery
+   needs), then the VPN switch. The shared partials branch on `section == 'willhaben'`. #}
+<div class="flex flex-col gap-4">
+  {% include "settings/_account.html" %}
+  {% include "settings/_pace.html" %}
+  {% include "settings/_advanced.html" %}
+  {% if vpn is defined %}{% with vpn_site = 'willhaben' %}{% include "_vpn_switch.html" %}{% endwith %}{% endif %}
+</div>

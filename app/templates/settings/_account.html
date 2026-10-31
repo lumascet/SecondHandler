@@ -1,0 +1,50 @@
+{# The one primary login card of a platform settings page (same for every platform). willhaben logs in through its app
+   interface (willhaben/native.py); the other sites log in through the app's browser (services/site_accounts.py). The
+   secondary logins (willhaben's browser login for PayLivery, each site's extra credentials) live folded in
+   settings/_advanced.html, so only one login shows here. Needs: `section`; for willhaben `session_status`; for a site
+   `p`, `account`, `account_site`. #}
+{% import "_ui.html" as ui %}
+{% if section == 'willhaben' %}
+{% set ss = session_status %}{% set na = ss.native or {} %}{% set cr = credentials_state('willhaben') %}
+{% set who = (ss.user.nickname or ss.user.email) if ss.user else na.user %}
+<section id="s-account" class="flex flex-col gap-3 rounded-box border border-base-300 bg-base-100 px-5 py-4" data-site-account="willhaben">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div class="flex min-w-0 items-center gap-2.5">
+      <span class="size-2 shrink-0 rounded-full {{ 'bg-success' if na.logged_in else 'bg-warning' if na.code_needed or not na.key else 'bg-error' }}"></span>
+      <div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="font-semibold">{{ _("{site} account", site="willhaben") }}</span>{{ ui.pill(_("via the app interface"), '', false) }}</div>
+        <div class="text-[12.5px] text-muted">{% if not na.key %}{{ _("no app key") }}{% elif na.logged_in %}{{ _("logged in") }}{% if who %} {{ _("as") }} {{ who }}{% endif %}{% elif na.code_needed %}{{ _("waiting for the code willhaben sent") }}{% else %}{{ _("not logged in") }}{% endif %}{% if ss.last_check %} · {{ _("checked {ago}", ago=ss.last_check|ago) }}{% endif %}{% if na.error and not na.logged_in %} · {{ na.error }}{% if na.paused_until %} · {{ _("next automatic try {when}", when=na.paused_until|ago) }}{% endif %}{% endif %}</div></div>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      {% if not na.logged_in and na.key and cr.has_password %}<form method="post" action="/settings/native/login"><button class="btn btn-sm btn-primary">{{ _("Log in") }}</button></form>{% endif %}
+      {% if na.logged_in %}<form method="post" action="/session/check"><input type="hidden" name="next" value="/settings/willhaben"><button class="btn btn-sm">{{ _("Check login") }}</button></form>
+      <form method="post" action="/settings/native/logout"><button class="btn btn-ghost btn-sm">{{ _("Log out") }}</button></form>{% endif %}
+    </div>
+  </div>
+  {% if na.code_needed %}<form method="post" action="/settings/native/code" class="flex flex-wrap items-center gap-1.5">
+    <input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="{{ _('Code from willhaben') }}" class="input input-sm w-40 bg-base-200">
+    <button class="btn btn-primary btn-sm">{{ _("Confirm") }}</button>
+  </form>{% endif %}
+  {% if not na.key %}{{ ui.msg(_("No app key yet: the app interface stays off and the browser does everything. Set the key under Advanced below, or WILLHABEN_APP_KEY in .env."), 'warn') }}
+  {% elif not cr.has_password and not na.logged_in %}{{ ui.msg(_("Enter your willhaben login details below, then log in."), 'warn') }}{% endif %}
+  <p class="text-[12.5px] text-muted">{{ _("SecondHandler talks to willhaben through its app interface: your chats, your ads and their actions. Search agents, price checks and the product search stay anonymous. A new device gets a code by SMS or e-mail once.") }}</p>
+  {% with cred_site = 'willhaben', cred_auto = false %}{% include "_credentials.html" %}{% endwith %}
+</section>
+{% elif account_site is defined %}
+{# a site logged in through the app's browser (Kleinanzeigen, Vinted): for its own messages; searches stay anonymous #}
+{% set cr = credentials_state(p.id) %}
+<section id="s-account" class="flex flex-col gap-2.5 rounded-box border border-base-300 bg-base-100 px-5 py-4" data-site-account="{{ p.id }}">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div class="flex min-w-0 items-center gap-2.5">
+      <span class="size-2 shrink-0 rounded-full {{ 'bg-success' if account.logged_in else 'bg-off' if account.logged_in is none else 'bg-error' }}"></span>
+      <div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="font-semibold">{{ _("{site} account", site=account_site.name) }}</span>{{ ui.pill(_("via the browser"), '', false) }}</div>
+        <div class="text-[12.5px] text-muted">{{ _("logged in") if account.logged_in else _("not checked yet") if account.logged_in is none else _("not logged in") }}{% if account.checked_at %} · {{ _("checked {ago}", ago=account.checked_at|ago) }}{% endif %}{% if account.error %} · {{ account.error }}{% endif %}</div></div>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <form method="post" action="/settings/account/{{ p.id }}/login"><button class="btn btn-sm{{ ' btn-primary' if not account.logged_in else '' }}">{{ _("Log in") }}</button></form>
+      <form method="post" action="/settings/account/{{ p.id }}/check"><button class="btn btn-sm">{{ _("Check login") }}</button></form>
+    </div>
+  </div>
+  <p class="text-[12.5px] text-muted">{{ _("You log in once in the app's browser window; the session stays in its profile like willhaben's. It is used for your messages on {site} only: search agents, price checks and the product search stay anonymous.", site=account_site.name) }}</p>
+  {% if p.id == 'vinted' %}{% with cred_site = 'vinted' %}{% include "_credentials.html" %}{% endwith %}{% endif %}
+</section>
+{% endif %}

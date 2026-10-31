@@ -216,9 +216,11 @@ def test_platform_api_search_and_detail(client, fake):
     assert ids[:2] == ["willhaben", "kleinanzeigen"] and "fake" in ids
 
 
-def test_settings_platforms_page_and_save(client):
+def test_settings_platforms_page_and_save(client, monkeypatch):
+    from app.config import get_settings
     from app.db import get_setting
     from app.platforms import kleinanzeigen as ka
+    monkeypatch.setattr(get_settings(), "kleinanzeigen_api_auth", "")   # no .env override for the credential tests
 
     page = client.get("/settings/willhaben").text
     nav = page[page.index('<nav aria-label="Settings"'):]                 # the settings menu, not the account menu

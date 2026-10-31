@@ -1,0 +1,61 @@
+{# The folded "Advanced" box of a platform settings page: the secondary logins and keys, kept out of the way so only
+   the primary login card shows up top. willhaben: the app key, diagnostics, the browser login PayLivery still needs.
+   Kleinanzeigen: the app's search credentials. Vinted: resetting its browser session. Needs `section`; for a site `p`,
+   `site`; for willhaben `session_status`. #}
+{% import "_ui.html" as ui %}
+{% if section == 'willhaben' %}
+{% set ss = session_status %}{% set na = ss.native or {} %}
+<details id="s-advanced" class="rounded-box border border-base-300 bg-base-100 px-5 py-4" {% if not na.key %}open{% endif %}>
+  <summary class="cursor-pointer font-medium">{{ _("Advanced") }}</summary>
+  <div class="mt-3 flex flex-col gap-3.5">
+    {# the key that signs the app token request (native.app_key): WILLHABEN_APP_KEY in .env wins over the field #}
+    <div id="s-native" class="flex min-w-0 flex-col gap-1.5">
+      <span class="text-[12.5px] text-muted">{{ _("App key") }} · {{ _("from .env") if na.key == 'env' else _("stored") if na.key == 'settings' else _("missing") }}</span>
+      <form method="post" action="/settings/native/key" class="flex flex-wrap items-center gap-1.5" autocomplete="off">
+        {{ ui.env_input('key', 'WILLHABEN_APP_KEY', na.key_env or '', placeholder=_('stored – leave empty to keep') if na.key == 'settings' else _('App key'), cls='w-64') }}
+        {% if na.key != 'env' %}<button class="btn btn-sm" name="op" value="save">{{ _("Save key") }}</button>{% endif %}
+        {% if na.key == 'settings' %}<button class="btn btn-ghost btn-sm" name="op" value="forget">{{ _("Delete key") }}</button>{% endif %}
+      </form>
+      <small class="text-[12.5px] text-muted">{{ _("The key of willhaben's Android app signs the app interface's token request. Without it the app interface stays off and the browser does everything.") }}</small>
+    </div>
+
+    <div id="s-diagnostics" class="flex flex-col gap-2 border-t border-base-300 pt-3.5">
+      <span class="text-[12.5px] text-muted">{{ _("Diagnostics") }}{% if na.selftest %} · {{ _("Last read test {ago}", ago=na.selftest_at|ago) }}: {{ na.selftest|selectattr('ok')|list|length }}/{{ na.selftest|length }}{% endif %}</span>
+      {% if na.logged_in %}<form method="post" action="/settings/native/selftest"><button class="btn btn-sm self-start">{{ _("Test reads") }}</button></form>{% endif %}
+      {% if na.selftest %}<ul class="flex flex-col gap-0.5 text-[12px]">{% for r in na.selftest %}<li><span class="{{ 'text-success' if r.ok else 'text-error' }}">{{ '✓' if r.ok else '✗' }}</span> {{ r.name }} · {{ r.via }} · <span class="text-muted">{{ r.summary or r.error }}</span></li>{% endfor %}</ul>{% endif %}
+      <a id="s-browser-window" href="/session" class="text-[13px] text-muted no-underline hover:underline">{{ _("Browser window and request recording") }} →</a>
+    </div>
+
+    {# PayLivery still runs in the browser (fee window, buying and selling steps): its own willhaben login there #}
+    <div id="s-paylivery-browser" class="flex flex-col gap-2 border-t border-base-300 pt-3.5">
+      <span class="text-[12.5px] text-muted">{{ _("Browser login for PayLivery") }}</span>
+      <p class="text-[12.5px] text-muted">{{ _("PayLivery (the buyer fee, buying and selling steps) still runs in the app's browser, which needs a willhaben login of its own. Log in there once; it stays in the browser's profile.") }}</p>
+      {% if not ss.started %}<form method="post" action="/session/start"><input type="hidden" name="next" value="/settings/willhaben"><button class="btn btn-sm self-start">{{ _("Start browser") }}</button></form>
+      {% else %}<form method="post" action="/session/login"><input type="hidden" name="next" value="/settings/willhaben?remote=1"><button class="btn btn-sm self-start">{{ _("Log in in the browser") }}</button></form>{% endif %}
+    </div>
+  </div>
+</details>
+{% elif p.id == 'kleinanzeigen' %}
+{# the Kleinanzeigen app credentials (app/platforms/kleinanzeigen.api_auth): KLEINANZEIGEN_API_AUTH in .env wins over
+   the field, which is then read-only. #}
+<details id="s-advanced" class="rounded-box border border-base-300 bg-base-100 px-5 py-4" {% if not site.auth_source %}open{% endif %}>
+  <summary class="cursor-pointer font-medium">{{ _("Advanced") }}</summary>
+  <div id="s-auth" class="mt-3 flex min-w-0 flex-col gap-1.5">
+    <span class="text-[12.5px] text-muted">{{ _("App credentials (user:password)") }} · {{ _("from .env") if site.auth_source == 'env' else _("stored") if site.auth_source == 'settings' else _("missing") }}</span>
+    <form method="post" action="/settings/platform/kleinanzeigen/auth" class="flex flex-wrap items-center gap-1.5" autocomplete="off">
+      {{ ui.env_input('auth', 'KLEINANZEIGEN_API_AUTH', site.auth_env or '', placeholder=_('stored – leave empty to keep') if site.auth_source == 'settings' else 'user:password', type='text', cls='w-64') }}
+      {% if site.auth_source != 'env' %}<button class="btn btn-sm" name="op" value="save">{{ _("Save") }}</button>{% endif %}
+      {% if site.auth_source == 'settings' %}<button class="btn btn-ghost btn-sm" name="op" value="forget">{{ _("Delete") }}</button>{% endif %}
+    </form>
+    <small class="text-[12.5px] text-muted">{{ _("The search agents use the API of the Kleinanzeigen app. Set the app's own credentials (public, user:password); none are built in, so the agents stay off until one is set. A 401/403 on an agent means they changed.") }}</small>
+  </div>
+</details>
+{% elif p.id == 'vinted' %}
+<details id="s-advanced" class="rounded-box border border-base-300 bg-base-100 px-5 py-4">
+  <summary class="cursor-pointer font-medium">{{ _("Advanced") }}</summary>
+  <div class="mt-3 flex flex-col gap-2">
+    <span class="text-[12.5px] text-muted">{{ _("Reset the browser session") }}</span>
+    <form method="post" action="/session/forget/vinted" onsubmit="return confirm({{ _('Delete all Vinted cookies of this browser? Vinted is logged out here and starts afresh.')|tojson|forceescape }})"><input type="hidden" name="next" value="/settings/vinted"><button class="btn btn-ghost btn-sm self-start" title="{{ _('After “Deine Sitzung wurde blockiert”: the bot protection marked this browser') }}">{{ _("Reset Vinted") }}</button></form>
+  </div>
+</details>
+{% endif %}

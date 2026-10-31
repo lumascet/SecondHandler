@@ -61,7 +61,8 @@ def test_settings_page_shows_the_account_card(monkeypatch):
         assert 'data-site-account="vinted"' in page and "not checked yet" in page
         r = c.post("/settings/account/vinted/check", follow_redirects=False)
         assert r.headers["location"].startswith("/settings/vinted?msg=Logged")
-        assert "Vinted account: logged in" in c.get("/settings/vinted").text
+        page = c.get("/settings/vinted").text
+        assert "Vinted account" in page and ">logged in" in page and "not logged in" not in page
         r = c.post("/settings/account/vinted/login", follow_redirects=False)
         assert r.headers["location"] == "/settings/vinted?remote=vinted" and sess.opened   # its own overlay
         assert c.post("/settings/account/ebay/check").status_code == 404
