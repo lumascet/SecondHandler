@@ -247,6 +247,8 @@ class MyAd(SQLModel, table=True):
     auto_reply_instructions: str | None = None     # ad-specific facts/limits for those answers
     auto_reply_before_sale: bool | None = None     # auto_reply as it was before "reserved"/"sold" switched it off
     #                                                (sold.finish); "Remove reservation" puts it back (sold.reset)
+    auto_renew_before_sale: bool | None = None     # auto_renew as it was before "sold" switched it off; an ad open
+    #                                                again (sold.reopen) gets both back
     min_price: float | None = None                 # floor for automatic answers: never agree below this (€, per piece)
     quantity: int | None = None                    # pieces offered in this ad; None = one item
     replaced_by: str | None = None    # republished (auto-renew) under this new ad id; old chats still point here

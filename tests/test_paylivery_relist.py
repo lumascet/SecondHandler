@@ -147,6 +147,36 @@ def _own(status, actions=(), ad_id=AD):
                      actions={a: {"id": a, "relativePath": f"/bap/{a}/{ad_id}", "serviceName": "iad"} for a in actions})
 
 
+async def test_willhaben_sold_seen_before_the_paid_notice(ad, queued):
+    """The import saw willhaben's "sold" for the purchase first: the paid piece counts, the ad sells on and goes online
+    again with its switches as they were."""
+    await my_ads.import_from_account(_list(_own("sold")))
+    assert _row().sale_status == "sold" and _row().auto_reply is False and not queued
+    await sold.on_paylivery_stage(_conv(), "paid", {"stage": "paid", "amount": 10})
+    row = _row()
+    assert stock.pieces_sold(AD) == 1 and stock.remaining(AD) == 2
+    assert row.sale_status is None and not my_ads.is_sold(row)
+    assert row.auto_reply is True and row.auto_renew is True and row.auto_reply_before_sale is None
+    assert row.relist and queued == [AD]
+
+
+async def test_last_piece_after_willhaben_sold_stays_sold(ad, queued):
+    sold.finish(AD, "sold", "cs2", pieces=2)
+    await my_ads.import_from_account(_list(_own("sold")))
+    await sold.on_paylivery_stage(_conv(), "paid", {"stage": "paid"})
+    row = _row()
+    assert stock.remaining(AD) == 0 and row.sale_status == "sold" and row.auto_reply is False and not queued
+
+
+async def test_later_stage_of_an_older_purchase_does_not_open_a_sold_ad(ad, queued):
+    """Marked sold on willhaben after the piece was counted (marker gone): a later stage of that purchase leaves it."""
+    await sold.on_paylivery_stage(_conv(), "paid", {"stage": "paid"})
+    my_ads._set_relist(AD, None)
+    queued.clear()
+    await my_ads.import_from_account(_list(_own("sold")))
+    await sold.on_paylivery_stage(_conv(), "shipped", {"stage": "shipped"})
+    assert _row().sale_status == "sold" and stock.pieces_sold(AD) == 1 and not queued
+
 def _list(*ads):
     out = AdvertList(ads)
     out.total = len(out)
@@ -399,6 +429,79 @@ async def test_shipping_without_paylivery_option():
     old["treeAttributes"] = []
     assert await insert.shipping_of(s, old) == {"handover": "pickup"}
 
+
+
+# ------------------------------------------------------------------ "Online again" by hand
+async def test_reopen_records_the_missing_pieces_and_relists(ad, queued):
+    """willhaben's "sold" without a counted piece (an older version): 2 of 3 still there."""
+    await my_ads.import_from_account(_list(_own("sold")))
+    assert my_ads.reopen(AD, 2)
+    row = _row()
+    (s,) = stock.sales_of(AD)
+    assert (s.pieces, s.conversation_id, s.note) == (1, None, my_ads.REOPEN_NOTE)
+    assert row.quantity == 3 and stock.remaining(AD) == 2 and row.sale_status is None
+    assert row.auto_reply is True and row.auto_renew is True and row.relist and queued == [AD]
+
+
+async def test_reopen_counts_a_paid_chat_once(ad, queued):
+    """The paid chat gets the missing piece: its later stages count nothing twice, a cancellation gives it back."""
+    with session() as db:
+        conv = db.get(Conversation, "cs1")
+        conv.paylivery = {"stage": "paid", "amount": 11.5}
+        db.add(conv)
+        db.commit()
+    await my_ads.import_from_account(_list(_own("sold")))
+    assert my_ads.reopen(AD, 1)
+    sales = stock.sales_of(AD)
+    assert sorted((s.conversation_id or "", s.pieces, s.note) for s in sales) == [
+        ("", 1, my_ads.REOPEN_NOTE), ("cs1", 1, sold.PAYLIVERY_NOTE)]
+    await sold.on_paylivery_stage(_conv(), "shipped", {"stage": "shipped", "amount": 11.5})
+    assert stock.pieces_sold(AD) == 2 and stock.remaining(AD) == 1
+    await sold.on_paylivery_stage(_conv(), "cancelled", {"stage": "cancelled"})
+    assert stock.remaining(AD) == 2
+
+async def test_reopen_with_more_pieces_raises_the_count(ad, queued):
+    sold.finish(AD, "sold", "cs1", pieces=3)
+    assert _row().sale_status == "sold" and _row().auto_renew is False
+    assert my_ads.reopen(AD, 2)
+    row = _row()
+    assert row.quantity == 5 and stock.pieces_sold(AD) == 3 and stock.remaining(AD) == 2
+    assert row.sale_status is None and row.auto_renew is True and queued == [AD]
+
+
+async def test_reopen_refuses_a_bad_count_and_a_busy_ad(ad, queued):
+    with pytest.raises(ValueError):
+        my_ads.reopen(AD, 0)
+    my_ads._mark(AD, "edit")
+    assert my_ads.reopen(AD, 1) is False and not stock.sales_of(AD) and not queued
+
+
+async def test_reopened_single_item_comes_back_as_a_new_ad(ad, willhaben):
+    with session() as db:
+        row = db.get(MyAd, AD)
+        row.quantity = None
+        db.add(row)
+        db.commit()
+    await my_ads.import_from_account(_list(_own("sold")))
+    FakeAccount.ads = _list(_own("sold"))
+    assert my_ads.reopen(AD, 1)
+    await finish_jobs()
+    assert len(willhaben["published"]) == 1
+    old, new = _row(), _row(NEW)
+    assert old.replaced_by == NEW and new.quantity is None and not stock.sales_of(AD) and new.sale_status is None
+
+
+def test_reopen_route(ad, queued):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        r = c.post(f"/myads/{AD}/reopen", data={"available": "2"}, follow_redirects=False)
+        bad = c.post(f"/myads/{AD}/reopen", data={"available": "x"}, follow_redirects=False)
+    assert r.status_code in (302, 303) and "msg=&" in r.headers["location"] + "&"
+    assert queued == [AD] and stock.remaining(AD) == 2
+    assert "999" in bad.headers["location"]            # the count's range as the message
 
 def test_sales_ledger_note_column():
     with session() as db:

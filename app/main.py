@@ -2422,6 +2422,17 @@ async def myads_deactivate(request: Request, ad_id: str):
     return _queued(request, my_ads.enqueue("deactivate", [ad_id]))
 
 
+@app.post("/myads/{ad_id}/reopen")
+async def myads_reopen(request: Request, ad_id: str, available: str = Form("")):
+    """A sold ad with pieces left: the count corrected and online again (background job)."""
+    raw = available.strip()
+    try:
+        queued = my_ads.reopen(ad_id, int(raw) if raw.isdigit() else 0)
+    except ValueError as e:
+        return _myads_back(request, str(e), f"#ad-{ad_id}")
+    return _queued(request, int(queued))
+
+
 @app.post("/myads/{ad_id}/delete")
 async def myads_delete(request: Request, ad_id: str):
     return _queued(request, my_ads.enqueue("delete", [ad_id]))

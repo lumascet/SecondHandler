@@ -17,11 +17,12 @@
   {{ ui.pending('ad:' ~ a.ad_id,
        {'delete': _("Deleting…"), 'deactivate': _("Deactivating…"), 'activate': _("Activating…"), 'edit': _("Saving…"),
         'photos': _("Saving the photos…"), 'sold': _("Marking as sold…"), 'reserved': _("Marking as reserved…"),
-        'unreserve': _("Removing the reservation…"), 'vinted': _("Working on Vinted / willhaben…")}.get(a.pending_action, _("In progress…")),
+        'unreserve': _("Removing the reservation…"), 'vinted': _("Working on Vinted / willhaben…"),
+        'relist': _("Putting online again…")}.get(a.pending_action, _("In progress…")),
        {'delete': _("Queued: delete"), 'deactivate': _("Queued: deactivate"), 'activate': _("Queued: activate"),
         'edit': _("Queued: save"), 'photos': _("Queued: save the photos"), 'sold': _("Queued: mark as sold"),
         'reserved': _("Queued: mark as reserved"), 'unreserve': _("Queued: remove the reservation"),
-        'vinted': _("Queued: draft on Vinted")}.get(a.pending_action, _("queued"))) }}
+        'vinted': _("Queued: draft on Vinted"), 'relist': _("Queued: online again")}.get(a.pending_action, _("queued"))) }}
 {%- endmacro %}
 {# marked sold here (sold workflow): sold, even while willhaben still says active #}
 {% macro status_pill(a) -%}
@@ -188,6 +189,17 @@
   <section class="flex flex-col gap-2.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
     <div class="flex flex-wrap items-center justify-between gap-2">{{ ui.eyebrow(_("Sale")) }}<a class="link link-primary text-[12.5px] no-underline" href="/sold/{{ a.ad_id }}?kind={{ a.sale_status or 'sold' }}{% if a.sale_conversation_id %}&buyer={{ a.sale_conversation_id }}{% endif %}">{{ _("Sale page: stock, the other buyers") }} →</a></div>
     {% with p = sale_panel(a.ad_id, a.sale_conversation_id), target = '#myads-detail', next = '/myads?ad=' ~ a.ad_id ~ keep, oob = '#myads-rows,#myads-chips,#myads-count', inline = true %}{% include "_sale_actions.html" %}{% endwith %}
+    {# sold here or on willhaben, yet pieces are left (a PayLivery sale willhaben marked sold, a sale that fell through):
+       the count corrected and online again in one click (my_ads.reopen); one less than the ledger's rest is the guess #}
+    {% if (a.sale_status == 'sold' or a.status == 'sold') and not a.relist and not a.pending_action %}
+    {% set st = stock_of(a) %}
+    <form method="post" action="/myads/{{ a.ad_id }}/reopen" hx-post="/myads/{{ a.ad_id }}/reopen" hx-target="#myads-detail" hx-select="#myads-detail"
+          hx-swap="outerHTML" hx-select-oob="#myads-rows,#myads-chips,#myads-count" class="flex flex-wrap items-end gap-2 border-t border-base-300 pt-2.5">
+      <label class="flex flex-col gap-1"><span class="text-[12.5px] text-muted">{{ _("Pieces still available") }}</span>
+        <input type="number" name="available" value="{{ [(st.remaining if st else 1) - 1, 1]|max }}" min="1" max="999" step="1" required inputmode="numeric" class="input input-sm w-20 bg-base-200"></label>
+      <button class="btn whitespace-nowrap max-sm:px-2 max-sm:text-[13px]" title="{{ _('Records the pieces sold that are missing here, sells on and puts the ad online again on willhaben – as a new ad when willhaben offers no way back.') }}">{{ ui.icon('refresh', 14) }}{{ _("Online again") }}</button>
+    </form>
+    {% endif %}
   </section>
   {% endif %}
 

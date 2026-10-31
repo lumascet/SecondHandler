@@ -382,6 +382,8 @@ def finish(ad_id: str, kind: str, buyer: str | None, *, auto_off: bool = True, p
                 row.auto_reply_before_sale = row.auto_reply
             if auto_off:
                 row.auto_reply = False
+            if kind == "sold" and row.sale_status != "sold":
+                row.auto_renew_before_sale = row.auto_renew
             row.sale_status, row.sale_conversation_id, row.sale_at = kind, buyer or None, utcnow()
             if kind == "sold":
                 row.auto_renew = False    # sold: auto-renew must never reactivate or republish it
@@ -412,9 +414,20 @@ def reset(ad_id: str, *, restore_auto: bool = False) -> None:
         row.sale_status = row.sale_conversation_id = row.sale_at = None
         if restore_auto and row.auto_reply_before_sale is not None:
             row.auto_reply = row.auto_reply_before_sale
-        row.auto_reply_before_sale = None
+        row.auto_reply_before_sale = row.auto_renew_before_sale = None
         db.add(row)
         db.commit()
+
+
+def reopen(row: MyAd) -> None:
+    """The ad sells again (pieces left after all): no sale status here any more, automatic answers and auto-renew
+    as they were before the sale switched them off (unchanged where that is not known). The caller commits."""
+    row.sale_status = row.sale_conversation_id = row.sale_at = None
+    if row.auto_reply_before_sale is not None:
+        row.auto_reply = row.auto_reply_before_sale
+    if row.auto_renew_before_sale is not None:
+        row.auto_renew = row.auto_renew_before_sale
+    row.auto_reply_before_sale = row.auto_renew_before_sale = None
 
 
 def undo_sale(ad_id: str, sale_id: int) -> bool:
@@ -518,6 +531,8 @@ async def on_paylivery_stage(conv: Conversation, stage: str, state: dict[str, An
         except ValueError as e:           # sold out here already
             log.info("PayLivery purchase in chat %s not recorded for ad %s: %s", conv.id, ad.ad_id, e)
             return
+        if row.sale_status == "sold" and (stock.remaining(row.ad_id) or 0) > 0:
+            row = _reopen_after_import(row.ad_id)
         log.info("PayLivery purchase in chat %s: 1 piece of ad %s sold (%s)", conv.id, row.ad_id,
                  row.sale_status or "pieces left")
     # every later stage arms it again: willhaben may take the ad offline only when the seller accepts the purchase
@@ -526,6 +541,20 @@ async def on_paylivery_stage(conv: Conversation, stage: str, state: dict[str, An
 
         my_ads.mark_relist(row.ad_id)
         my_ads.enqueue_relist(row.ad_id)
+
+
+def _reopen_after_import(ad_id: str) -> MyAd:
+    """Sold here with pieces left right after the purchase was recorded: the account import saw willhaben's "sold" for
+    this purchase before its paid notice came (finish and my_ads.set_quantity sell out only with the last piece).
+    The ad sells on and goes online again. Only for a sale just recorded: a later stage of an older purchase must not
+    open an ad the owner marked sold on willhaben since."""
+    with session() as db:
+        row = db.get(MyAd, ad_id)
+        reopen(row)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return row
 
 
 def _recent(state: dict[str, Any], stage: str) -> bool:

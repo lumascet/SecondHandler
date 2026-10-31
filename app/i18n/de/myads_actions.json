@@ -93,5 +93,11 @@
  "{title}: {left} pieces left": "{title}: noch {left} Stück übrig",
  "„{title}“ online again ({left} pieces left)": "„{title}“ wieder online (noch {left} Stück)",
  "Photo {i} of the ad could not be loaded": "Foto {i} der Anzeige konnte nicht geladen werden",
- "„{title}“ was deleted on willhaben – not put online again": "„{title}“ wurde auf willhaben gelöscht – nicht wieder online gestellt"
+ "„{title}“ was deleted on willhaben – not put online again": "„{title}“ wurde auf willhaben gelöscht – nicht wieder online gestellt",
+ "{n} available, going online again": "{n} verfügbar, wird wieder online gestellt",
+ "Pieces still available": "Noch verfügbar",
+ "Online again": "Wieder online stellen",
+ "Records the pieces sold that are missing here, sells on and puts the ad online again on willhaben – as a new ad when willhaben offers no way back.": "Bucht die hier fehlenden verkauften Stück nach, verkauft weiter und stellt die Anzeige auf willhaben wieder online – als neue Anzeige, wenn willhaben keinen Weg zurück anbietet.",
+ "Putting online again…": "Wird wieder online gestellt…",
+ "Queued: online again": "Eingereiht: wieder online stellen"
 }

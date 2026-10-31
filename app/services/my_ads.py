@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlmodel import col, select
 
-from app.db import MyAd, current_ad, get_setting, session, utcnow
+from app.db import MyAd, Sale, current_ad, get_setting, session, utcnow
 from app.i18n import t
 from app.services import jobs, selling, stock
 from app.services.notify import notify
@@ -665,6 +665,7 @@ def set_quantity(ad_id: str, quantity: int | None) -> None:
         row.quantity = quantity
         if sold_out:
             row.sale_status, row.sale_conversation_id, row.sale_at = "sold", sales[0].conversation_id, sales[0].created_at
+            row.auto_renew_before_sale = row.auto_renew
             row.auto_renew = False    # sold: auto-renew must never reactivate or republish it
         elif restocked:
             row.sale_status = row.sale_conversation_id = row.sale_at = None
@@ -705,8 +706,12 @@ def _follow_sale_status(row: MyAd, previous: str) -> None:
     """The sale status here follows what willhaben shows (the sold workflow writes both; this covers marks made on
     willhaben itself): sold there = sold here; reserved there = reserved here (buyer unknown) unless a sale is
     recorded; a reservation lifted on willhaben (reserved → active) lifts the local one too. A piece sold with
-    PayLivery while more are left is no sell-out: the ad waits to go online again (relist)."""
+    PayLivery while more are left is no sell-out: the ad waits to go online again (relist). The switches turned off
+    are remembered (an ad open again gets them back, sold.reopen)."""
     if row.status == "sold" and row.sale_status != "sold" and not row.relist:
+        if not row.sale_status:
+            row.auto_reply_before_sale = row.auto_reply
+        row.auto_renew_before_sale = row.auto_renew
         row.sale_status, row.sale_at = "sold", utcnow()
         row.auto_reply, row.auto_renew = False, False
     elif row.status == "reserved" and row.sale_status is None:
@@ -963,6 +968,48 @@ def enqueue_relist(ad_id: str) -> bool:
     return True
 
 
+REOPEN_NOTE = "reopen"       # Sale.note of the pieces "Online again" recorded because the ledger lacked them
+
+
+def reopen(ad_id: str, available: int) -> bool:
+    """"Online again" by hand for a sold ad: `available` pieces are still there. Pieces the ledger lacks (sold with
+    PayLivery while willhaben's "sold" came first, or before the app counted such sales) are recorded: one per paid
+    PayLivery chat without a sale (as the PayLivery hook would, so its later stages count nothing twice and a
+    cancellation gives the piece back), the rest as one sale without a buyer. More pieces than the count left raise
+    the count (a single item becomes an ad with a quantity). The ad sells on here (sold.reopen) and goes online again
+    as after a PayLivery sale (relist, a background job). False: it already waits for another action. Raises
+    ValueError (message for the page) outside 1..999."""
+    from app.services import sold
+
+    if not 1 <= available <= MAX_QUANTITY:
+        raise ValueError(t("Pieces: a number from 1 to {max}", max=MAX_QUANTITY))
+    note = t("{n} available, going online again", n=available)     # texts before the first change: t() opens a session
+    bought = {s.conversation_id for s in stock.sales_of(ad_id)}
+    paid = [c for c in reversed(sold.seller_conversations(ad_id))     # oldest chat first
+            if c.id not in bought and (c.paylivery or {}).get("stage") in sold.PAID_STAGES]
+    with session() as db:
+        row = current_ad(db, ad_id)
+        if row is None or row.pending_action:
+            return False
+        sold_n = sum(s.pieces for s in stock.active_sales(db, row.ad_id))
+        missing = (row.quantity or 1) - sold_n - available
+        for conv in paid[:max(missing, 0)]:
+            amount = (conv.paylivery or {}).get("amount")
+            db.add(Sale(ad_id=row.ad_id, conversation_id=conv.id, pieces=1, price=float(amount) if amount else None,
+                        note=sold.PAYLIVERY_NOTE))
+        if missing > len(paid):
+            db.add(Sale(ad_id=row.ad_id, pieces=missing - len(paid), note=REOPEN_NOTE))
+        total = sold_n + max(missing, 0) + available
+        row.quantity = total if total > 1 else None
+        sold.reopen(row)
+        row.last_action = note
+        db.add(row)
+        db.commit()
+        ad_id = row.ad_id
+    mark_relist(ad_id)
+    return enqueue_relist(ad_id)
+
+
 async def relist(ad_id: str, job: jobs.Job | None = None) -> str:
     """Put an ad with pieces left online again after a PayLivery sale (marker MyAd.relist). Waits while willhaben
     still shows it online (a later look is scheduled); never makes a second live copy. Returns the result line."""
@@ -975,7 +1022,8 @@ async def relist(ad_id: str, job: jobs.Job | None = None) -> str:
         if plan:
             _set_relist(ad_id, None)
         return t("Nothing to put online again")
-    title, left = row.heading or ad_id, stock.remaining(ad_id) or 0
+    left = stock.remaining(ad_id)
+    title, left = row.heading or ad_id, 1 if left is None else left      # a single item: only "Online again" (reopen)
     if left <= 0:
         _set_relist(ad_id, None)
         return t("No pieces left – not put online again")
