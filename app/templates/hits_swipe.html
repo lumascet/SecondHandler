@@ -7,7 +7,7 @@
 {% block content %}
 {# exactly the screen: the page's own padding (top, and the bottom bar on phones) taken off, the card takes what is
    left between the title and the buttons (10-29: it was taller than a phone's screen) #}
-<div class="mx-auto flex h-[calc(100dvh-100px-env(safe-area-inset-bottom))] w-full max-w-[460px] flex-col gap-3 md:h-[calc(100dvh-68px)]">
+<div class="mx-auto flex h-[calc(100dvh-100px-env(safe-area-inset-bottom))] w-full max-w-[460px] flex-col gap-3 md:h-[calc(100dvh-68px)] md:max-h-[680px]">
   <div class="flex shrink-0 items-center gap-3">
     <a href="/hits" class="btn btn-ghost btn-sm -ml-2">{{ ui.icon('back', 16) }}{{ _("Hits") }}</a>
     <h1 class="flex-1 text-lg">{{ _("Swipe") }}{% if agent_id and agents.get(agent_id) %} <span class="text-base font-normal text-muted">· {{ agents[agent_id].name }}</span>{% endif %}</h1>
