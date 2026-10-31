@@ -3093,29 +3093,41 @@ async def credentials_login(site: str):
     if site not in credentials.SITES or credentials.get(site) is None:
         raise HTTPException(404)
     sess = get_session()
+    remote = "1" if site == "willhaben" else site
+
+    async def logged_in() -> bool:
+        if site == "willhaben":
+            return await sess.check_login()
+        return bool((await site_accounts.check(site))["logged_in"])
+
     try:
         if site == "willhaben":
             await sess.open_login()
-            page, remote = sess.ui_page, "1"
+            page = sess.ui_page
         else:
             await sess.open_site(site, credentials.LOGIN_PAGES[site])
-            page, remote = sess.site_pages[site], site
+            page = sess.site_pages[site]
         try:
             await label_fill.dismiss_consent(page)          # a cookie banner over the form
         except Exception:  # noqa: BLE001 - no banner
             pass
         await credentials.type_in(page, site)
         await page.wait_for_timeout(4000)
-        if site == "willhaben":
-            ok = await sess.check_login()
-        else:
-            ok = bool((await site_accounts.check(site))["logged_in"])
+        ok = await logged_in()
         msg = t("Logged in") if ok else t("Sent – finish the login in the browser window if the site asks for more")
     except SessionUnavailable as e:
         return back(f"/settings/{site}?msg={quote(str(e), safe='')}")
-    except Exception as e:  # noqa: BLE001 - a field not found: the window shows why
-        log.info("automatic login on %s stopped: %s", site, type(e).__name__)
-        msg, remote = t("The login form was not found – log in in the browser window"), ("1" if site == "willhaben" else site)
+    except Exception as e:  # noqa: BLE001 - no login form: already logged in, or the page shows a captcha/something else
+        try:
+            already = await logged_in()
+        except Exception:  # noqa: BLE001 - check itself failed
+            already = False
+        if already:
+            log.info("automatic login on %s: already logged in, no form to fill", site)
+            msg = t("Already logged in")
+        else:
+            log.info("automatic login on %s stopped: %s", site, type(e).__name__)
+            msg = t("The login form was not found – log in in the browser window")
     return back(f"/settings/{site}?remote={remote}&msg={quote(msg, safe='')}")
 
 

@@ -213,6 +213,7 @@
  "Login details deleted": "Zugangsdaten gelöscht",
  "Login details saved": "Zugangsdaten gespeichert",
  "E-mail and password are needed": "E-Mail und Passwort sind nötig",
+ "Already logged in": "Bereits eingeloggt",
  "Sent – finish the login in the browser window if the site asks for more": "Gesendet – falls die Seite mehr verlangt, im Browserfenster fertig anmelden",
  "The login form was not found – log in in the browser window": "Login-Formular nicht gefunden – im Browserfenster anmelden",
  "Store the login details first": "Zuerst die Zugangsdaten speichern",
