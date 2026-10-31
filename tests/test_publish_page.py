@@ -196,6 +196,28 @@ def test_hint_option_from_claudes_category_hint():
     assert insert.hint_option(FORM, None, **kw) is None
 
 
+def test_hint_in_claudes_own_words_finds_willhabens_category():
+    """10-30: Claude wrote "Auto/Motorrad > Autozubehör > Elektromobilität/Ladestationen", willhaben calls it
+    "KFZ-Zubehör/Motorradteile > E-Mobilität > Ladestationen/Wallboxen": nothing was assigned, the owner searched."""
+    tree = {"categoryNode": {"label": "Marktplatz", "code": "ROOT", "children": [
+        {"label": "KFZ-Zubehör/Motorradteile", "code": "KFZ", "children": [
+            {"label": "E-Mobilität", "code": "EMOB", "children": [
+                {"label": "Ladestationen/Wallboxen", "code": "WALLBOX"}, {"label": "Ladekabel", "code": "CABLE"}]},
+            {"label": "Autoteile", "code": "PARTS"}]},
+        {"label": "Haushalt", "code": "HOME", "children": [{"label": "Zubehör", "code": "HOME_ACC"}]},
+        {"label": "Foto", "code": "FOTO", "children": [{"label": "Zubehör", "code": "FOTO_ACC"}]},
+    ]}, "attributes": []}
+    kw = {"condition": None, "attributes": None}
+    hint = "Auto/Motorrad > Autozubehör > Elektromobilität/Ladestationen"
+    assert insert.hint_option({"categoryTree": tree}, hint, **kw)["path"][-1]["code"] == "WALLBOX"
+    assert insert.hint_option({"categoryTree": tree}, "Sonstiges > Zubehör", **kw) is None      # two alike: no guess
+    assert insert.hint_option({"categoryTree": tree}, "Garten > Rasenmäher", **kw) is None
+
+    # the search: every result (not the first 25), and the closest ones when no category has every word
+    assert [h["code"] for h in insert.search_categories(tree, "Elektromobilität Ladestationen")] == ["WALLBOX"]
+    assert len(insert.search_categories(tree, "zubehör")) == 5                  # every leaf under KFZ-Zubehör too
+
+
 async def test_prepare_falls_back_to_the_category_hint(wh):
     wh.suggest = {"categories": []}                    # live: willhaben suggested nothing for a wallbox
     d = _draft(category_hint="Audio > Mobile Lautsprecher")

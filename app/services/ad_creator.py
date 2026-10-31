@@ -9,7 +9,7 @@ import statistics
 import zipfile
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from sqlmodel import select
 
@@ -484,11 +484,13 @@ def undo_revision(draft_id: int) -> AdDraft:
 
 # ------------------------------------------------------------------ publish on willhaben (direct, per click)
 def category_queries(title: str, product_query: str | None, search_keywords: str | None,
-                     user_query: str | None = None) -> list[str]:
+                     user_query: str | None = None, category_hint: str | None = None) -> list[str]:
     """What to ask willhaben's category suggestion, best first. Long titles often get no suggestion at all,
-    and the short search keywords alone can point somewhere odd (live: "Keyboards" for a speaker)."""
+    and the short search keywords alone can point somewhere odd (live: "Keyboards" for a speaker); last the end of
+    Claude's category hint ("Elektromobilität/Ladestationen": a wallbox got no suggestion from its title, 10-30)."""
     words = [w.strip(",;:·-") for w in (title or "").split()]
-    cands = [user_query, title, " ".join(words[:4]), " ".join(words[:3]), product_query, search_keywords]
+    hint_end = re.split(r"[>›]", category_hint or "")[-1].replace("/", " ").strip()
+    cands = [user_query, title, " ".join(words[:4]), " ".join(words[:3]), product_query, search_keywords, hint_end]
     out: dict[str, str] = {}
     for q in cands:
         if q and q.strip():
@@ -506,7 +508,7 @@ async def prepare_willhaben(draft_id: int, query: str | None = None) -> AdDraft:
     sess = get_session()
     form = await insert.cached_form(sess)
     raw, used = None, None
-    for q in category_queries(d.title or d.input_text, d.product_query, d.search_keywords, query):
+    for q in category_queries(d.title or d.input_text, d.product_query, d.search_keywords, query, d.category_hint):
         raw, used = await insert.suggest_categories(sess, q), q
         if insert.suggestion_paths(raw):
             break
@@ -597,11 +599,11 @@ def save_wh_choice(draft_id: int, code: str | None, values: dict[str, dict[str, 
     return update_draft(draft_id, wh_plan=plan) if plan != (d.wh_plan or {}) else d
 
 
-def enqueue_prepare(draft_id: int) -> bool:
+def enqueue_prepare(draft_id: int, then: Callable[[AdDraft], Any] | None = None) -> bool:
     """"Prepare for willhaben" as a background job (lane ads, read-only on willhaben): categories and required fields
-    land in wh_plan, the batch row swaps itself in when done. False: not a draft, busy, or already queued."""
+    land in wh_plan, the batch row swaps itself in when done. then(draft): what follows once there are categories
+    (the batch's "Publish ticked" on a draft without one). False: not a draft, busy, or already queued."""
     from app.services import jobs
-    from app.willhaben.session import NotLoggedIn, SessionUnavailable
 
     key = f"preparing:{draft_id}"
     with session() as db:
@@ -612,9 +614,20 @@ def enqueue_prepare(draft_id: int) -> bool:
     async def run(job) -> str:
         try:
             d = await prepare_willhaben(draft_id)
-        except (NotLoggedIn, SessionUnavailable, RuntimeError) as e:
+        except Exception as e:           # the browser's own errors too (a closed page): the row says why, not a toast only
             update_draft(draft_id, error=t("willhaben form not reachable: {error}", error=str(e)))
             raise
+        if then is not None:
+            if d.status != "draft":                 # discarded or published meanwhile: nothing follows
+                pass
+            elif (d.wh_plan or {}).get("options"):
+                try:
+                    then(d)
+                except Exception as e:
+                    update_draft(draft_id, error=t("Publishing failed: {error}", error=str(e)))
+                    raise
+            else:
+                update_draft(draft_id, error=t("willhaben suggests no category – choose one in the row, then publish"))
         return t("{n} categories suggested", n=len((d.wh_plan or {}).get("options") or []))
 
     jobs.submit("prepare", t("Prepare „{title}“ for willhaben", title=(d.title or f"#{draft_id}")[:60]), run,

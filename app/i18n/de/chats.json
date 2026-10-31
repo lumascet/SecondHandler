@@ -62,6 +62,8 @@
  "first": "erst",
  "log in to willhaben": "bei willhaben einloggen",
  "Browser session is not running": "Browser-Session läuft nicht",
+ "The browser was closed – it starts again with the next willhaben request": "Der Browser wurde geschlossen – er startet mit der nächsten willhaben-Anfrage neu",
+ "The browser page closed during the request – try again: {error}": "Die Browser-Seite wurde während der Anfrage geschlossen – bitte nochmal versuchen: {error}",
  "not logged in": "nicht eingeloggt",
  "Session expired": "Session abgelaufen",
  "Message from {name}": "Nachricht von {name}",

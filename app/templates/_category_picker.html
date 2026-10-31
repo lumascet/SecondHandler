@@ -1,5 +1,6 @@
 {# Category choice inside a publish form. Same inputs: option (radio), o{n}_<code> selects, picker search → pick_url.
-   pick_only: just the search (the batch table has its own category select); pick_swap: htmx swap of the answer. #}
+   pick_only: just the search (the batch table has its own category select); pick_swap: htmx swap of the answer;
+   pick_q: what the search starts with (the end of Claude's category hint), searched as soon as it opens. #}
 {% if not pick_only %}
 {% set sel = plan.selected if plan.selected is defined and plan.selected is not none and plan.selected < (plan.options or [])|length else 0 %}
 {% for o in plan.options or [] %}{% set oi = loop.index0 %}
@@ -14,9 +15,9 @@
 <details class="wh-catpick text-[13px] text-muted" data-search="/api/willhaben/categories" data-pick="{{ pick_url }}" data-target="{{ pick_target or '' }}" data-include="{{ pick_include or '' }}" data-swap="{{ pick_swap or 'outerHTML' }}" data-select="{{ pick_select or '' }}"{% if pick_oob %} hx-select-oob="{{ pick_oob }}"{% endif %} {% if not plan.options and not pick_only %}open{% endif %}>
   <summary class="cursor-pointer">{{ _("Choose another category") }}</summary>
   <div class="flex flex-col gap-1.5 pt-2">
-    <input type="search" data-catq autocomplete="off" placeholder="{{ _('Search willhaben categories, e.g. speaker') }}" class="input input-sm w-full bg-base-100">
-    <small data-catmsg data-empty="{{ _('No category found.') }}" data-fail="{{ _('Search failed: {error}') }}"></small>
-    <ul data-catres class="m-0 flex list-none flex-col gap-1 p-0"></ul>
+    <input type="search" data-catq autocomplete="off" value="{{ pick_q or '' }}" placeholder="{{ _('Search willhaben categories, e.g. speaker') }}" class="input input-sm w-full bg-base-100">
+    <small data-catmsg data-empty="{{ _('No category found.') }}" data-fail="{{ _('Search failed: {error}') }}" data-count="{{ _('{n} categories – scroll for more') }}"></small>
+    <ul data-catres class="m-0 flex max-h-72 list-none flex-col gap-1 overflow-y-auto p-0"></ul>
   </div>
 </details>
 <script>
@@ -50,6 +51,7 @@
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || r.status);
         if (!data.results.length) msg.textContent = msg.dataset.empty;
+        else if (data.results.length > 8) msg.textContent = msg.dataset.count.replace('{n}', data.results.length);
         for (const c of data.results) {
           const li = document.createElement('li'), b = document.createElement('button');
           b.type = 'button'; b.className = 'btn btn-sm h-auto min-h-8 justify-start whitespace-normal py-1.5 text-left font-normal text-base-content'; b.textContent = c.path; b.dataset.code = c.code;
@@ -59,6 +61,10 @@
       } catch (e) { msg.textContent = msg.dataset.fail.replace('{error}', e.message); }
     };
     let timer;
+    document.addEventListener('toggle', (e) => {     // opened with a search term already in it (pick_q): its results
+      const box = e.target.matches && e.target.matches('.wh-catpick') && e.target.open && e.target;
+      if (box && box.querySelector('[data-catq]').value.trim() && !box.querySelector('[data-catres]').children.length) search(box);
+    }, true);
     document.addEventListener('input', (e) => {
       const box = e.target.closest && e.target.matches('[data-catq]') && e.target.closest('.wh-catpick');
       if (!box) return;

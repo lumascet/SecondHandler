@@ -367,6 +367,14 @@ async def save_table(batch_id: int, rows: dict[int, dict[str, str]]) -> tuple[li
     return redraw, unsaved
 
 
+def _publish_chosen(d: AdDraft) -> bool:
+    """Publish a draft with the category and the fields chosen in its row (the first suggestion if none was)."""
+    plan = d.wh_plan or {}
+    sel = plan.get("selected") or 0
+    code = ad_creator.option_code(plan["options"][sel]) if 0 <= sel < len(plan["options"]) else None
+    return ad_creator.enqueue_publish(d.id, sel, {}, plan.get("shipping"), code=code)
+
+
 def run_action(batch_id: int, verb: str, ids: list[int], instruction: str = "",
                unsaved: set[int] = frozenset()) -> tuple[str, str]:
     """One button of the table for all ticked drafts (or the one row it belongs to): (message, tone). unsaved: drafts
@@ -376,22 +384,27 @@ def run_action(batch_id: int, verb: str, ids: list[int], instruction: str = "",
     if not picked:
         return t("No ad ticked"), "warn"
     if verb == "publish":
-        n = 0
+        n = asking = 0
         for d in picked:
             if d.status != "draft" or d.id in unsaved:
                 continue
-            plan = d.wh_plan or {}
-            if not plan.get("options"):
-                ad_creator.update_draft(d.id, error=t("No willhaben category yet – prepare it for willhaben first"))
-                continue
-            sel = plan.get("selected") or 0
-            code = ad_creator.option_code(plan["options"][sel]) if 0 <= sel < len(plan["options"]) else None
-            n += ad_creator.enqueue_publish(d.id, sel, {}, plan.get("shipping"), code=code)
-        rest = len(picked) - n
-        if not n:
+            if (d.wh_plan or {}).get("options"):
+                n += _publish_chosen(d)
+            elif ad_creator.enqueue_prepare(d.id, then=_publish_chosen):   # no category yet: ask willhaben first
+                ad_creator.update_draft(d.id, error=None)
+                asking += 1
+            elif d.refining:
+                ad_creator.update_draft(d.id, error=t(ad_creator.REFINING_BUSY))
+            else:                       # its categories are being asked for already
+                ad_creator.update_draft(d.id, error=t("willhaben categories are still being fetched – publish once "
+                                                      "they are there"))
+        rest = len(picked) - n - asking
+        if not n and not asking:
             return t("Nothing published – see the notes in the rows"), "warn"
-        return (t("{n} ads are being published one after another", n=n)
-                + (" · " + t("{n} need attention (see the rows)", n=rest) if rest else "")), "ok" if not rest else "warn"
+        parts = ([t("{n} ads are being published one after another", n=n)] if n else []) \
+            + ([t("{n} ads: willhaben categories first, then they are published", n=asking)] if asking else []) \
+            + ([t("{n} need attention (see the rows)", n=rest)] if rest else [])
+        return " · ".join(parts), "ok" if not rest else "warn"
     if verb == "prepare":
         n = sum(ad_creator.enqueue_prepare(d.id) for d in picked)
         return t("{n} ads are being prepared for willhaben", n=n), "ok"

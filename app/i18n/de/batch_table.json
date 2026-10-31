@@ -1,6 +1,9 @@
 {
+ "{n} categories – scroll for more": "{n} Kategorien – für mehr scrollen",
+ "{n} ads: willhaben categories first, then they are published": "{n} Anzeigen: zuerst die willhaben-Kategorien, dann werden sie veröffentlicht",
+ "willhaben categories are still being fetched – publish once they are there": "Die willhaben-Kategorien werden noch abgefragt – veröffentlichen, sobald sie da sind",
+ "willhaben suggests no category – choose one in the row, then publish": "willhaben schlägt keine Kategorie vor – in der Zeile eine wählen, dann veröffentlichen",
  "No ad ticked": "Keine Anzeige angehakt",
- "No willhaben category yet – prepare it for willhaben first": "Noch keine willhaben-Kategorie – zuerst Kategorien abfragen",
  "Nothing published – see the notes in the rows": "Nichts veröffentlicht – siehe Hinweise in den Zeilen",
  "{n} ads are being published one after another": "{n} Anzeigen werden nacheinander veröffentlicht",
  "{n} need attention (see the rows)": "{n} brauchen Aufmerksamkeit (siehe Zeilen)",

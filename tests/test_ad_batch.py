@@ -207,6 +207,8 @@ def test_category_queries_order():
     assert q == ["Lautsprecher", "Logitech Rechargeable Speaker S715i, schwarz, iPod-Dock",
                  "Logitech Rechargeable Speaker S715i", "Logitech Rechargeable Speaker", "Logitech S715i"]
     assert category_queries("Rad", None, "rad") == ["Rad"]
+    assert category_queries("NRGkick 32A", None, None, None, "Auto > Elektromobilität/Ladestationen")[-1] \
+        == "Elektromobilität Ladestationen"                          # the end of Claude's category hint, last
 
 
 def test_failed_draft_is_retried_with_the_same_notes_and_photos(client, monkeypatch):  # noqa: F811
@@ -369,19 +371,24 @@ def test_batch_table_publishes_and_prepares_the_ticked_rows(client, monkeypatch)
     monkeypatch.setattr(ad_creator, "enqueue_publish",
                         lambda draft_id, option, values, shipping=None, code=None: published.append((draft_id, option, shipping)) or True)
     form = [*_row(a, cat="SPK", handover="pickup"), *_row(b, cat="SPK", handover="both"), *_row(c, handover="pickup")]
-    r = client.post(f"/new-ad/batch/{batch_id}/drafts", data=_form([*form, ("sel", str(a)), ("sel", str(b)), ("sel", str(c)),
-                                                              ("act", "publish")]))
-    assert published == [(a, 0, {"handover": "pickup"}),
-                         (b, 1, {"handover": "both", "paylivery": False, "size": None, "carrier": None})]
-    assert "2 ads are being published one after another" in r.text and "1 need attention" in r.text
-    assert len(re.findall(r"<template>\s*<tbody", r.text)) == 3 and "No willhaben category yet" in r.text
-    assert f'name="sel" value="{a}" form="bt" checked' in r.text                 # the ticks stay
 
     async def prepare(draft_id, query=None):
         return ad_creator.update_draft(draft_id, wh_plan={"location": "1150 Wien", "options": [_opt("SPK", "Lautsprecher")]})
     monkeypatch.setattr(ad_creator, "prepare_willhaben", prepare)
+    r = client.post(f"/new-ad/batch/{batch_id}/drafts", data=_form([*form, ("sel", str(a)), ("sel", str(b)), ("sel", str(c)),
+                                                              ("act", "publish")]))
+    # c has no willhaben category yet: publishing asks willhaben for it first (10-30: it refused and asked nothing)
+    assert "2 ads are being published one after another" in r.text
+    assert "1 ad: willhaben categories first, then it is published" in r.text and "need attention" not in r.text
+    assert len(re.findall(r"<template>\s*<tbody", r.text)) == 3
+    assert f'name="sel" value="{a}" form="bt" checked' in r.text                 # the ticks stay
+    wait_jobs()
+    assert published == [(a, 0, {"handover": "pickup"}),
+                         (b, 1, {"handover": "both", "paylivery": False, "size": None, "carrier": None}),
+                         (c, 0, None)]
+
     r = client.post(f"/new-ad/batch/{batch_id}/drafts", data=_form([*form, ("act", f"prepare:{c}")]))
-    assert "1 ads are being prepared" in r.text
+    assert "1 ad is being prepared" in r.text
     wait_jobs()
     row = client.get(f"/new-ad/batch/{batch_id}/row/{c}").text
     assert row.strip().startswith("<table>") and f'<tbody id="row-{c}"' in row and "data-pending-key" not in row
@@ -395,6 +402,41 @@ def test_batch_table_publishes_and_prepares_the_ticked_rows(client, monkeypatch)
     with dbmod.session() as db:
         assert db.get(dbmod.AdDraft, c).status == "draft"
     assert "No ad ticked" in client.post(f"/new-ad/batch/{batch_id}/drafts", data=_form([("act", "publish")])).text
+
+
+def test_publishing_without_a_category_asks_willhaben_then_publishes(client, monkeypatch):  # noqa: F811
+    """The real chain: the prepare job queues the publish job in the same lane, which runs after it; a draft
+    discarded while its categories were fetched does not go live."""
+    from app.services import ad_creator
+
+    batch_id, (a, b, c) = _table_batch()
+    went_live = []
+
+    async def prepare(draft_id, query=None):
+        return ad_creator.update_draft(draft_id, wh_plan={"location": "1150 Wien", "options": [_opt("SPK", "Lautsprecher")]})
+
+    async def publish(did, option, values, stop_after=None, shipping=None, job=None, code=None):
+        went_live.append((did, code))
+        return ad_creator.update_draft(did, status="published", wh_ad_id="1000000009")
+    monkeypatch.setattr(ad_creator, "prepare_willhaben", prepare)
+    monkeypatch.setattr(ad_creator, "publish_willhaben", publish)
+    client.post(f"/new-ad/batch/{batch_id}/drafts", data=_form([*_row(c, handover="pickup"), ("sel", str(c)),
+                                                              ("act", "publish")]))
+    wait_jobs()
+    assert went_live == [(c, "SPK")]
+    with dbmod.session() as db:
+        assert db.get(dbmod.AdDraft, c).status == "published" and not db.get(dbmod.AdDraft, c).error
+
+    ad_creator.update_draft(b, wh_plan=None)
+
+    async def prepare_then_discard(draft_id, query=None):
+        await prepare(draft_id)
+        return ad_creator.update_draft(draft_id, status="discarded")
+    monkeypatch.setattr(ad_creator, "prepare_willhaben", prepare_then_discard)
+    client.post(f"/new-ad/batch/{batch_id}/drafts", data=_form([*_row(b, handover="pickup"), ("sel", str(b)),
+                                                              ("act", "publish")]))
+    wait_jobs()
+    assert went_live == [(c, "SPK")]
 
 
 def test_written_drafts_are_prepared_for_willhaben_right_away(client, monkeypatch):  # noqa: F811
@@ -431,3 +473,14 @@ def test_batch_rows_mark_every_select_and_keep_the_tick(client):  # noqa: F811
         assert selects and all(" selected" in sel for sel in selects), [sel[:80] for sel in selects if " selected" not in sel]
     assert f'value="{c}" form="bt" checked' in client.get(f"/new-ad/batch/{batch_id}/row/{c}").text
     assert f'value="{c}" form="bt" checked' not in client.get(f"/new-ad/batch/{batch_id}/row/{c}?checked=0").text
+
+
+def test_category_search_of_a_row_without_category_starts_with_claudes_hint(client):  # noqa: F811
+    from app.services import ad_creator
+
+    batch_id, (a, b, c) = _table_batch()
+    ad_creator.update_draft(c, category_hint="Auto/Motorrad > Autozubehör > Elektromobilität/Ladestationen")
+    ad_creator.update_draft(a, category_hint="Audio > Lautsprecher")
+    assert 'data-catq autocomplete="off" value="Elektromobilität Ladestationen"' in \
+        client.get(f"/new-ad/batch/{batch_id}/row/{c}").text
+    assert 'data-catq autocomplete="off" value=""' in client.get(f"/new-ad/batch/{batch_id}/row/{a}").text  # has one

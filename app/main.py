@@ -2865,7 +2865,7 @@ async def ad_draft_wh_publish(request: Request, draft_id: int):
 
 
 @app.get("/api/willhaben/categories")
-async def api_wh_categories(q: str = "", limit: int = 25):
+async def api_wh_categories(q: str = "", limit: int = 200):
     """Read-only: leaf categories of willhaben's insertion form matching q (form cached ~1 h in memory)."""
     from app.willhaben import insert
     if len(q.strip()) < 2:
@@ -2874,7 +2874,7 @@ async def api_wh_categories(q: str = "", limit: int = 25):
         form = await insert.cached_form(get_session())
     except (NotLoggedIn, SessionUnavailable, RuntimeError) as e:
         return JSONResponse({"results": [], "error": str(e)}, status_code=503)
-    return {"results": insert.search_categories(form.get("categoryTree") or {}, q, limit=max(1, min(limit, 50)))}
+    return {"results": insert.search_categories(form.get("categoryTree") or {}, q, limit=max(1, min(limit, 500)))}
 
 
 @app.get("/ad-drafts/{draft_id}/image/{idx}")

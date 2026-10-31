@@ -128,6 +128,9 @@ class _FakePage:
         self.url = ORIGIN + "/robots.txt"
         self.results = list(results)
 
+    def is_closed(self):
+        return False
+
     async def evaluate(self, js, arg=None):
         return self.results.pop(0)
 

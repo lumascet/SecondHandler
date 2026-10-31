@@ -96,6 +96,9 @@ class BrowserSession:
         self._ui_used_at = time.monotonic()   # last use of the visible page (see park_idle_ui)
         self.working_pages: set[Any] = set()   # pages other parts keep open (Vinted's live tab): never parked or closed
         self._ui_holds = 0
+        self._lost = False             # the browser closed under the app (crash, OOM kill): started again on next use
+        self._stopping = False
+        self._heal_lock = asyncio.Lock()
         # live chat: own page holding the chat WebSocket (see start_chat_listener)
         self._creating_internal = False
         self._chat_cb = None
@@ -139,6 +142,11 @@ class BrowserSession:
     async def start(self) -> None:
         from playwright.async_api import async_playwright
 
+        self._lost = False                     # started by hand after a crash: _ready must not start it once more
+        if self._pw is not None and self.context is None:      # the driver of the crashed browser
+            with suppress(Exception):
+                await self._pw.stop()
+            self._pw = None
         self.settings.profile_dir.mkdir(parents=True, exist_ok=True)
         try:
             if not await self._launch_chrome():
@@ -160,6 +168,7 @@ class BrowserSession:
             record_all.attach(self.context)          # everything the browser does, while switched on (session page)
             # Chrome reopens the tabs of the last session from the persistent profile (login flows, the remote
             # view, site tabs): the app uses one, the rest stayed open unseen – 20 renderers, ~1.2 GB (10-27)
+            self.context.on("close", self._on_context_closed)
             restored = self.context.pages[1:]
             for page in restored:
                 with suppress(Exception):
@@ -182,19 +191,60 @@ class BrowserSession:
     async def stop(self) -> None:
         if self.native_chat is not None:
             await self.native_chat.stop()
+        self._stopping = True
         try:
             if self.context:
                 await self.context.close()
         finally:
-            self.context = self.ui_page = self.api_page = self.home_page = None
+            self._stopping = False
+            self.context = self.ui_page = self.api_page = self.home_page = self.chat_page = None
             self.site_pages = {}
             if self._pw:
-                await self._pw.stop()
+                with suppress(Exception):      # its driver died with the browser
+                    await self._pw.stop()
                 self._pw = None
+
+    def _on_context_closed(self, *_: Any) -> None:
+        """Chrome gone without stop() (crashed, killed for memory): every request failed with "Target page, context or
+        browser has been closed" until the app was restarted (10-30, preparing a draft). _ready starts it again."""
+        if self._stopping:
+            return
+        log.warning("browser closed unexpectedly, starting it again on the next request")
+        self._lost = True
+        self.context = self.ui_page = self.api_page = self.home_page = self.chat_page = None
+        self.site_pages = {}
+        self.error = t("The browser was closed – it starts again with the next willhaben request")
 
     def _require(self) -> None:
         if not self.context or not self.api_page:
             raise SessionUnavailable(self.error or t("Browser session is not running"))
+
+    async def _ready(self) -> None:
+        """_require, after healing what closed under the app: the browser (started again) or the API page (opened
+        again: a closed one stayed closed, and with it every willhaben request)."""
+        async with self._heal_lock:
+            if self._lost:
+                self._lost = False
+                await self.stop()
+                await self.start()
+            if self.context is not None and (self.api_page is None or self.api_page.is_closed()):
+                log.warning("browser: the API page was closed, opening it again")
+                ui = self.ui_page
+                self._creating_internal = True
+                try:
+                    self.api_page = await self.context.new_page()
+                finally:
+                    self._creating_internal = False
+                    self.ui_page = ui
+                await self._goto(self.api_page, PARK_URL, wait_until="domcontentloaded")
+        self._require()
+
+    def _gone(self, e: Exception) -> Exception:
+        """A request that failed because the page or browser closed meanwhile: SessionUnavailable, which the callers
+        show on the draft (Playwright's and patchright's own errors are no RuntimeError); others as they are."""
+        if self._lost or self.api_page is None or self.api_page.is_closed():
+            return SessionUnavailable(t("The browser page closed during the request – try again: {error}", error=e))
+        return e
 
     # ---------------------------------------------------------------- API calls
     @staticmethod
@@ -251,7 +301,7 @@ class BrowserSession:
             native.counts["fallback"] += 1
         else:
             native.counts["browser"] += 1
-        self._require()
+        await self._ready()
         headers = {"accept": accept, "x-wh-client": WEB_CLIENT}
         csrf = await self._csrf()
         if csrf:
@@ -275,6 +325,8 @@ class BrowserSession:
                 except Exception as e:
                     recorder.record_http("account", kind, method, url, req_headers=headers, req_body=payload, outcome="error",
                                          error=str(e), duration_ms=int((time.monotonic() - started) * 1000))
+                    if (gone := self._gone(e)) is not e:
+                        raise gone from e
                     raise
                 tr.status = res["status"]
         recorder.record_http("account", kind, method, url, req_headers=headers, req_body=payload, status=res["status"],
@@ -302,7 +354,7 @@ class BrowserSession:
                 if not native.falls_back(nr.status, "POST"):
                     return ApiResponse(status=nr.status, text=nr.text, url=nr.url)
                 native.counts["fallback"] += 1
-        self._require()
+        await self._ready()
         headers = {"accept": "application/json", "x-wh-client": WEB_CLIENT}
         csrf = await self._csrf()
         if csrf:
@@ -329,6 +381,8 @@ class BrowserSession:
                     recorder.record_http("account", "upload", "UPLOAD", url, req_headers=headers, outcome="error",
                                          error=str(e), upload=(field, mime),
                                          duration_ms=int((time.monotonic() - started) * 1000))
+                    if (gone := self._gone(e)) is not e:
+                        raise gone from e
                     raise
                 tr.status = res["status"]
         # the file itself is not stored (photos: size + hash only), it is matched by field and type
@@ -394,7 +448,7 @@ class BrowserSession:
 
         The web app itself does this via an iframe on /webapi/sso/login?background-login.
         """
-        self._require()
+        await self._ready()
         try:
             await self._goto(self.api_page, f"{ORIGIN}/webapi/sso/login?background-login", "login", wait_until="load", timeout=20000)
             await self.api_page.wait_for_load_state("networkidle", timeout=10000)
@@ -774,7 +828,10 @@ class BrowserSession:
         """Re-open the chat socket when it went silent (long network outage, a new app login)."""
         while True:
             await asyncio.sleep(60)
-            if self._chat_cb is None:
+            if self._lost:                     # the browser closed under the app: back without waiting for a request
+                with suppress(Exception):
+                    await self._ready()
+            if not self.started or self._chat_cb is None:
                 continue
             last = self.chat_live.get("last_frame") or self.chat_live.get("since")
             if last is None or (utcnow() - last).total_seconds() > 90:

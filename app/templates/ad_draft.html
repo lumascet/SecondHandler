@@ -108,7 +108,7 @@
         <form method="post" action="/new-ad/{{ d.id }}/willhaben/publish" id="wh-publish" class="flex flex-col"
               hx-post="/new-ad/{{ d.id }}/willhaben/publish" hx-include="#title, #desc, #price, #quantity" title="{{ _('Goes live on willhaben as a free private ad – it waits a few seconds in the queue, where you can take it back.') }}"
               hx-target="#willhaben" hx-select="#willhaben" hx-select-oob="#draft-error,#draft-head" hx-swap="outerHTML" hx-push-url="false">
-          <div class="flex flex-col gap-2.5 border-b border-base-300 px-5 py-3.5">{{ ui.eyebrow(_("Category")) }}{% with pick_url="/new-ad/" ~ d.id ~ "/willhaben/category", pick_target="#willhaben", pick_select="#willhaben", pick_oob="#draft-error,#draft-head" %}{% include "_category_picker.html" %}{% endwith %}</div>
+          <div class="flex flex-col gap-2.5 border-b border-base-300 px-5 py-3.5">{{ ui.eyebrow(_("Category")) }}{% with pick_q=(d.category_hint or '').replace('›', '>').split('>')[-1].replace('/', ' ').strip() if not plan.options else '', pick_url="/new-ad/" ~ d.id ~ "/willhaben/category", pick_target="#willhaben", pick_select="#willhaben", pick_oob="#draft-error,#draft-head" %}{% include "_category_picker.html" %}{% endwith %}</div>
           {% if plan.options %}
           <div class="flex flex-col gap-2.5 border-b border-base-300 px-5 py-3.5">{{ ui.eyebrow(_("Handover")) }}{% include "_wh_handover.html" %}</div>
           <div class="flex flex-wrap items-center gap-3 px-5 py-3.5"><button class="btn btn-primary">{{ _("Publish on willhaben now") }}</button><small class="text-muted">{{ _("Takes about half a minute: photos are uploaded, then the free ad is activated. Nothing that costs money is ever booked.") }}</small></div>

@@ -118,8 +118,9 @@ def clear_form_cache() -> None:
     _form_cache.clear()
 
 
-def search_categories(tree: dict[str, Any], query: str, limit: int = 25) -> list[dict[str, Any]]:
-    """Leaf categories whose name or path contains every word of the query, best (name match, short path) first."""
+def search_categories(tree: dict[str, Any], query: str, limit: int = 200) -> list[dict[str, Any]]:
+    """Leaf categories whose name or path contains every word of the query, best (name match, short path) first;
+    none of them: those with the most of its words ("lautsprecher bluetooth" still finds the speakers)."""
     words = [_norm(w) for w in (query or "").split() if _norm(w)]
     if not words:
         return []
@@ -128,10 +129,14 @@ def search_categories(tree: dict[str, Any], query: str, limit: int = 25) -> list
         if not info.get("leaf"):
             continue
         label, hay = _norm(info.get("label")), _norm(" ".join(info.get("path") or []))
-        if all(w in hay for w in words):
-            hits.append((0 if all(w in label for w in words) else 1, len(info["path"]), " › ".join(info["path"]), code))
+        found = sum(w in hay for w in words)
+        if found:
+            hits.append((-found, 0 if all(w in label for w in words) else 1, len(info["path"]),
+                         " › ".join(info["path"]), code))
+    if hits and any(-h[0] == len(words) for h in hits):
+        hits = [h for h in hits if -h[0] == len(words)]
     hits.sort()
-    return [{"code": code, "label": path.split(" › ")[-1], "path": path} for _, _, path, code in hits[:limit]]
+    return [{"code": code, "label": path.split(" › ")[-1], "path": path} for *_, path, code in hits[:limit]]
 
 
 async def get_own_ad(s: BrowserSession, ad_id: str) -> dict[str, Any]:
@@ -425,11 +430,43 @@ def hint_option(form: dict[str, Any], hint: str | None, *, condition: str | None
     hits = [c for c, info in leaves if [_norm(p) for p in info["path"]][-len(want):] == want]
     if not hits:
         hits = [c for c, info in leaves if _norm(info.get("label")) == want[-1]]
+    if not hits:
+        hits = _similar_leaves(leaves, hint or "")
     if len(hits) != 1:              # none, or several ("Zubehör"): no guess – the owner picks one
         return None
     info = cats[hits[0]]
     path = [{"label": lbl, "code": c} for lbl, c in zip(info["path"], info["codes"], strict=False)]
     return _option(cats, attribute_values(tree), path, condition, attributes)
+
+
+def _words(s: str) -> list[str]:
+    return [w for w in re.findall(r"[^\W_]+", (s or "").lower()) if len(w) >= 3]
+
+
+def _alike(a: str, b: str) -> bool:
+    """One word of a category name like the other: equal, or one inside the other ("elektromobilität" and the
+    "mobilität" of "E-Mobilität", "ladestation" and "ladestationen")."""
+    return a == b or (min(len(a), len(b)) >= 5 and (a in b or b in a))
+
+
+def _similar_leaves(leaves: list[tuple[str, dict[str, Any]]], hint: str) -> list[str]:
+    """Claude names willhaben's categories in its own words (10-30: "Auto/Motorrad > Autozubehör >
+    Elektromobilität/Ladestationen" for willhaben's "KFZ-Zubehör/Motorradteile > E-Mobilität > Ladestationen/
+    Wallboxen"): the leaves whose name shares the most words with the hint's last part, then with the whole hint.
+    Several equally good ones: all of them (no guess)."""
+    segs = [p for p in re.split(r"[>›]", hint) if p.strip()]
+    last, every = _words(segs[-1]) if segs else [], _words(hint)
+    best: tuple[int, int] = (0, 0)
+    out: list[str] = []
+    for code, info in leaves:
+        label, path = _words(info.get("label") or ""), _words(" ".join(info.get("path") or []))
+        score = (sum(any(_alike(w, x) for x in label) for w in last), sum(any(_alike(w, x) for x in path) for w in every))
+        if not score[0] or score < best:
+            continue
+        if score > best:
+            best, out = score, []
+        out.append(code)
+    return out
 
 
 def build_plan(form: dict[str, Any], raw_suggestions: Any, *, condition: str | None,

@@ -180,6 +180,9 @@ class _FakePage:
         self.results = list(results)
         self.gotos = []
 
+    def is_closed(self):
+        return False
+
     async def evaluate(self, js, arg=None):
         r = self.results.pop(0)
         if isinstance(r, Exception):

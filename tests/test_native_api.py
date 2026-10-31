@@ -274,7 +274,7 @@ async def test_the_browser_session_uses_it_and_falls_back(data, monkeypatch):
     s.context = s.api_page = object()
     monkeypatch.setattr(s, "_csrf", _none)
     monkeypatch.setattr(s, "_ensure_parked", _none)
-    s.api_page = type("P", (), {"evaluate": staticmethod(in_browser), "url": "https://www.willhaben.at/robots.txt"})()
+    s.api_page = type("P", (), {"evaluate": staticmethod(in_browser), "url": "https://www.willhaben.at/robots.txt", "is_closed": staticmethod(lambda: False)})()
 
     answers_plan = [200]
     r = await s.api("GET", "/webapi/chat-api/v1/counter")
@@ -355,7 +355,7 @@ async def test_a_failed_write_is_not_repeated_in_the_browser(data, monkeypatch):
         return {"status": 200, "text": "{}", "url": "web"}
 
     s.context = object()
-    s.api_page = type("P", (), {"evaluate": staticmethod(in_browser), "url": "https://www.willhaben.at/robots.txt"})()
+    s.api_page = type("P", (), {"evaluate": staticmethod(in_browser), "url": "https://www.willhaben.at/robots.txt", "is_closed": staticmethod(lambda: False)})()
     monkeypatch.setattr(s, "_csrf", _none)
     with pytest.raises(native.NativeError):
         await s.api("PUT", "/webapi/myatz/bap/deactivate/1")

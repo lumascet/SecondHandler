@@ -84,7 +84,7 @@
           {{ copy_btn() }}
         </div>
         {% if plan.options is defined and not opts and not preparing %}<small class="text-warning">{{ _("No category found for this draft – search for one below, e.g. by the product type.") }}</small>{% endif %}
-        {% if not preparing %}{% with pick_only=true, pick_url="/new-ad/batch/" ~ b.id ~ "/drafts?act=category:" ~ d.id, pick_target="#row-" ~ d.id, pick_include="#bt", pick_swap="none" %}{% include "_category_picker.html" %}{% endwith %}{% endif %}
+        {% if not preparing %}{% with pick_only=true, pick_q=(d.category_hint or '').replace('›', '>').split('>')[-1].replace('/', ' ').strip() if not (d.wh_plan or {}).get('options') else '', pick_url="/new-ad/batch/" ~ b.id ~ "/drafts?act=category:" ~ d.id, pick_target="#row-" ~ d.id, pick_include="#bt", pick_swap="none" %}{% include "_category_picker.html" %}{% endwith %}{% endif %}
         {% endif %}
         {% if st.count or st.llm_estimate or match.name %}<div class="text-muted">{% if st.count %}{{ _("Comparison ({n}): median {median}, middle {p25}–{p75}", n=st.count, median=st.median|eur, p25=st.p25|eur, p75=st.p75|eur) }}{% endif %}{% if st.llm_estimate %} · {{ _("Claude estimates {price}", price=st.llm_estimate|eur) }}{% endif %}{% if match.name %} · Geizhals: <a href="{{ match.url }}" target="_blank" rel="noopener" class="text-primary hover:underline">{{ match.name[:50] }}</a>{% if match.price_from %}, {{ _("new from {price}", price=match.price_from|eur) }}{% endif %}{% endif %}</div>{% endif %}
         {% if st.note %}<div><strong>Claude:</strong> {{ st.note }}</div>{% endif %}
