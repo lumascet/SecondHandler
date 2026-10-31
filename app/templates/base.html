@@ -756,6 +756,30 @@ document.addEventListener('alpine:init', () => {
     },
   }));
 
+  // Reload button of a chat: the refetch runs as a background job (lane chat). Its button spins and is disabled from
+  // the click until the job (marker key "chatreload:<id>") finishes, then the thread is swapped in place. `armed`
+  // covers the gap before the first /jobs answer shows the job; a job too quick (or that never registers) clears after
+  // a few seconds so the button never stays stuck.
+  Alpine.data('reloadBtn', (key) => ({
+    key, armed: false, watching: false,
+    get busy() { return this.armed || this.$store.jobs.isWorking(this.key); },
+    start() {
+      this.armed = true;
+      this.$store.jobs.poll();
+      if (this.watching) return;
+      this.watching = true;
+      let seen = false, tries = 0;
+      const iv = setInterval(() => {
+        const w = this.$store.jobs.isWorking(this.key);
+        if (w) seen = true;
+        if ((seen && !w) || (!seen && ++tries > 8)) {
+          clearInterval(iv); this.watching = false; this.armed = false;
+          refreshInPlace([document.getElementById('chat-messages')]);   // show the refetched thread
+        }
+      }, 1000);
+    },
+  }));
+
   // auto-save: <form x-data="autosave" …> posts with X-Autosave (server answers {"ok", "error"}): switches at once,
   // text a moment after typing stops. Show the state with <small x-text="state"></small>.
   Alpine.data('autosave', () => ({

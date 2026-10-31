@@ -22,10 +22,14 @@
           {%- set tr = partner_trust(conv) %}
           {%- if tr.facts %}<span class="hidden truncate text-muted sm:inline" data-partner-facts>{{ tr.facts|join(' · ') }}</span>{% endif %}
           {%- for f in tr.flags %}{{ ui.pill(f.label, 'bad' if f.severity == 'high' else 'warn', true, 'shrink-0', _('Their account on the site – a young account or one without ratings is worth a second look')) }}{% endfor %}</span></div>
-      <div class="flex min-w-0 items-center gap-1.5 text-[13px] text-muted">{% if vinted_on %}{{ ui.site_mark(conv.platform or 'willhaben', 16) }}{% endif %}{% if conv.role %}{{ ui.tag(_("Selling") if selling else _("Buying"), not selling) }}{% endif %}<span class="truncate">{{ conv.ad_title or '' }}</span></div>
+      <div class="flex min-w-0 items-center gap-1.5 text-[13px] text-muted">{% if vinted_on %}{{ ui.site_mark(conv.platform or 'willhaben', 16) }}{% endif %}{% if conv.role %}{{ ui.tag(_("Selling") if selling else _("Buying"), not selling) }}{% endif %}{% if conv.ad_id %}<a href="{{ (conv.ad_context or {}).get('url') or '#' }}" data-ad="{{ ad_ref(conv.platform or 'willhaben', conv.ad_id) }}" class="truncate text-muted no-underline hover:text-base-content hover:underline" title="{{ _('Open the ad') }}">{{ conv.ad_title or conv.ad_id }}</a>{% else %}<span class="truncate">{{ conv.ad_title or '' }}</span>{% endif %}</div>
     </div>
     <div class="flex shrink-0 items-center gap-1.5">
-      <form method="post" action="/chats/{{ conv.id }}/refresh" hx-post="/chats/{{ conv.id }}/refresh" hx-swap="none"><button class="btn btn-sm max-sm:px-2" title="{{ _('Reload') }}">{{ ui.icon('refresh', 14) }}<span class="max-sm:sr-only">{{ _("Reload") }}</span></button></form>
+      <form method="post" action="/chats/{{ conv.id }}/refresh" hx-post="/chats/{{ conv.id }}/refresh" hx-swap="none"
+            x-data="reloadBtn({{ ('chatreload:' ~ conv.id)|tojson|forceescape }})" @htmx:after-request="start()">
+        <button class="btn btn-sm max-sm:px-2" :disabled="busy" :title="busy ? {{ _('Reloading…')|tojson|forceescape }} : {{ _('Reload')|tojson|forceescape }}">
+          <span x-show="busy" x-cloak class="loading loading-spinner loading-xs"></span><span x-show="!busy">{{ ui.icon('refresh', 14) }}</span>
+          <span class="max-sm:sr-only">{{ _("Reload") }}</span></button></form>
       {% if conv.platform == 'vinted' %}<a href="https://www.vinted.at/inbox/{{ conv.id }}" target="_blank" rel="noopener" class="btn btn-sm">Vinted{{ ui.icon('external', 14) }}</a>
       {% else %}<a href="https://www.willhaben.at/iad/myprofile/chat" target="_blank" rel="noopener" class="btn btn-sm">willhaben{{ ui.icon('external', 14) }}</a>{% endif %}
       {# finished: no answer due (the yellow dot goes); a new message from them opens it again #}

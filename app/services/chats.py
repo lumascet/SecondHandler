@@ -1366,7 +1366,7 @@ def enqueue_reload(conversation_id: str) -> jobs.Job:
     with session() as db:
         c = db.get(Conversation, conversation_id)
     return jobs.submit(f"chat-reload-{conversation_id}", t("Reload the chat with {name}", name=(c.partner_name if c else None) or t("unknown")),
-                       run, lane="chat", reuse_queued=True)
+                       run, lane="chat", reuse_queued=True, current=f"chatreload:{conversation_id}")
 
 
 # ------------------------------------------------------------------ automatic answers

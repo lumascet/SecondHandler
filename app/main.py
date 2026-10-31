@@ -2498,6 +2498,7 @@ async def jobs_status(since: int | None = None):
         pending += jobs.current_keys("agent:")             # a search agent's check (scheduled or "Check now")
         pending += jobs.current_keys("shipping:")          # Claude prepares a parcel from a chat
         pending += jobs.current_keys("purchase:")          # a purchase order about to contact the seller
+        pending += jobs.current_keys("chatreload:")        # a chat reloading its history (Reload button)
         pending += [f"batch:{i}" for i in db.exec(select(AdBatch.id).where(col(AdBatch.status).in_(("sorting", "creating"))))]
         last = _live_cursor()
         new = [] if since is None or since >= last else list(db.exec(

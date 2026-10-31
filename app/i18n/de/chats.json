@@ -23,6 +23,8 @@
  "Description": "Beschreibung",
  "Role: {role}": "Rolle: {role}",
  "Reload history": "Verlauf neu laden",
+ "Reloading…": "Wird neu geladen…",
+ "Open the ad": "Anzeige öffnen",
  "No history stored.": "Kein Verlauf gespeichert.",
  "Guidance for this answer (optional)": "Vorgabe für diese Antwort (optional)",
  "e.g. counter-offer €180, pickup Saturday from 10 am": "z. B. Gegenangebot 180 €, Abholung Samstag ab 10 Uhr",
