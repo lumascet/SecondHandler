@@ -615,63 +615,37 @@ async def sync_one(cid: str, push: bool = True) -> int:
     return n
 
 
-SEND_TIMEOUT_MS = 20000
-
-
 class SendError(RuntimeError):
     pass
 
 
 async def send(cid: str, text: str) -> dict[str, Any]:
-    """Send `text` into a Vinted conversation the way a person does: its page in a tab of the logged-in browser, the
-    text into the message field, the send button. Vinted's own web app makes the call
-    (POST api.vinted.at/messaging/main/conversations/<uuid>/replies {content, is_personal_data_sharing_check_skipped:
-    false, photo_temp_uuids: null} -> 201 {id, message_type "reply_plain", data.content}, seen 2026-10-21) with the
-    CSRF token, anon id and siid only it has. Sent only when that answer came (201); else SendError, and nothing is
-    retried. Vinted's warning about personal data (a phone number, an address) is never clicked away."""
-    from app.willhaben.session import get_session
+    """Send `text` into a Vinted conversation through Vinted's own messaging API, called from inside the logged-in page
+    (the page carries the CSRF token and anon id), not by driving its text field and button:
+      POST api.vinted.at/messaging/main/conversations/<uuid>/replies
+           {content, is_personal_data_sharing_check_skipped: false, photo_temp_uuids: null}
+           -> 201 {id, message_type "reply_plain", data.content}   (seen 2026-10-21)
+    is_personal_data_sharing_check_skipped stays false: if Vinted raises its warning about personal data (a phone
+    number, an address) the reply is refused and nothing is sent, as before. Returns the reply; SendError otherwise,
+    and nothing is retried."""
+    from app.i18n import t
+    from app.platforms import vinted_listing as vl
 
-    sess = get_session()
-    sess._require()
     text = (text or "").strip()
     if not text:
         raise SendError("empty")
-    ui = sess.ui_page
-    sess._creating_internal = True
+    url = f"https://api.vinted.at/messaging/main/conversations/{cid}/replies"
+    body = {"content": text, "is_personal_data_sharing_check_skipped": False, "photo_temp_uuids": None}
     try:
-        page = await sess.context.new_page()
-    finally:
-        sess._creating_internal = False
-        sess.ui_page = ui
-    try:
-        await page.goto(f"{ORIGIN}/inbox/{cid}", wait_until="domcontentloaded", timeout=30000)
-        if "/member/" in page.url:
-            from app.services import site_accounts
-            site_accounts._save("vinted", False)
-            raise SendError("not logged in to Vinted")
-        box = page.locator("textarea").first
-        await box.wait_for(state="visible", timeout=SEND_TIMEOUT_MS)
-        await box.click()
-        await box.fill(text)
-        await page.wait_for_timeout(400)
-        is_reply = lambda r: (r.request.method == "POST" and f"/conversations/{cid}/replies" in r.url)  # noqa: E731
-        async with page.expect_response(is_reply, timeout=SEND_TIMEOUT_MS) as got:
-            button = box.locator("xpath=ancestor::form[1]").locator("button[type=submit]")
-            if await button.count():
-                await button.first.click()
-            else:
-                await box.press("Enter")
-        resp = await got.value
-        body = _parse(await resp.text())
-        if resp.status not in (200, 201) or not isinstance(body, dict) or not body.get("id"):
-            raise SendError(f"Vinted answered HTTP {resp.status}")
-        return body
-    except SendError:
-        raise
-    except Exception as e:  # noqa: BLE001 - no field, no answer in time: not sent as far as we know
+        async with vl.Upload(url=f"{ORIGIN}/inbox/{cid}") as page:
+            status, data, resp_text = await page.call("POST", url, body)
+    except vl.ListingError as e:          # not logged in (Upload already noted it), or the page did not open
+        raise SendError(str(e)) from None
+    except Exception as e:  # noqa: BLE001 - no answer: not sent as far as we know
         raise SendError(str(e) or type(e).__name__) from e
-    finally:
-        await page.close()
+    if status not in (200, 201) or not isinstance(data, dict) or not data.get("id"):
+        raise SendError(t("Vinted refused: {error}", error=vl.errors_of(resp_text) or f"HTTP {status}"))
+    return data
 
 
 def record_sent(draft_id: int, reply: dict[str, Any]) -> None:
