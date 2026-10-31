@@ -1,6 +1,6 @@
 [project]
 name = "secondhandler"
-version = "0.5.3"
+version = "0.5.4"
 description = "Self-hosted, LLM-powered agent for second-hand marketplaces (willhaben, Vinted, Kleinanzeigen and more): it searches and curates listings, estimates which one is the best deal, and handles buying and selling for you."
 requires-python = ">=3.12"
 dependencies = [
