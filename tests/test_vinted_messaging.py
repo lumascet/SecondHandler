@@ -1,6 +1,8 @@
-"""Vinted messaging over the API: auth taken from the session's cookies, the inbox/conversation calls, and the
-fall-back-to-browser signal (None) when logged out or on failure."""
+"""Vinted messaging over the API: the owned cookie jar (seeded from the session), the inbox/conversation/escrow
+calls, the logged-out/fallback signal (None), and the pure SSE event framing."""
 from types import SimpleNamespace
+
+import pytest
 
 from app.platforms import vinted as vi
 from app.platforms import vinted_messaging as vm
@@ -12,7 +14,7 @@ class Ctx:
     def __init__(self, cookies):
         self._cookies = cookies
 
-    async def cookies(self, url):
+    async def cookies(self, urls):
         return self._cookies
 
 
@@ -20,59 +22,66 @@ def _sess(cookies):
     return SimpleNamespace(context=Ctx(cookies))
 
 
-async def test_auth_needs_a_logged_in_cookie():
-    assert await vm.auth(_sess([{"name": "anon_id", "value": "a1"}])) is None          # no session cookie
-    assert await vm.auth(SimpleNamespace(context=None)) is None                        # no browser
-    jar, anon = await vm.auth(_sess([{"name": "access_token_web", "value": "tok"},
-                                     {"name": "anon_id", "value": "a1"}]))
-    assert "access_token_web=tok" in jar and anon == "a1"
+@pytest.fixture(autouse=True)
+def _reset():
+    vm._jar.clear()
+    vm._anon = None
+    yield
+    vm._jar.clear()
+    vm._anon = None
+    vi.set_client(None)
+
+
+async def test_seed_requires_a_session_cookie():
+    assert await vm.seed_from_browser(_sess([{"name": "anon_id", "value": "a1"}])) is False   # no session cookie
+    assert await vm.seed_from_browser(SimpleNamespace(context=None)) is False                 # no browser
+    assert await vm.seed_from_browser(_sess([{"name": "access_token_web", "value": "t"},
+                                             {"name": "anon_id", "value": "a1"}])) is True
+    assert vm._jar.get("access_token_web") == "t" and vm._anon == "a1"
 
 
 async def test_inbox_calls_the_api_with_the_session_cookie():
     c = vi.VintedClient(transport=Queue([(200, b'{"conversations":[{"id":"u1"}]}')]))
     c.limiter = RateLimiter(0, name="Vinted")
     vi.set_client(c)
-    try:
-        data = await vm.inbox(_sess([{"name": "access_token_web", "value": "tok"},
-                                     {"name": "anon_id", "value": "a1"}]))
-        assert data == {"conversations": [{"id": "u1"}]}
-        url, headers = c._transport.calls[-1]
-        assert url == "https://api.vinted.at/messaging/main/inbox"
-        assert headers["Cookie"].startswith("access_token_web=tok") and headers["X-Anon-Id"] == "a1"
-        assert headers["Accept"].startswith("application/json")
-    finally:
-        vi.set_client(None)
+    data = await vm.inbox(_sess([{"name": "access_token_web", "value": "t"}, {"name": "anon_id", "value": "a1"}]))
+    assert data == {"conversations": [{"id": "u1"}]}
+    url, headers = c._transport.calls[-1]
+    assert url == "https://api.vinted.at/messaging/main/inbox"
+    assert "access_token_web=t" in headers["Cookie"] and headers["X-Anon-Id"] == "a1"
 
 
-async def test_conversation_url_and_logged_out_fallback():
-    c = vi.VintedClient(transport=Queue([(200, b'{"messages":[]}')]))
+async def test_conversation_and_escrow_urls():
+    c = vi.VintedClient(transport=Queue([(200, b'{"messages":[]}'), (200, b'{"escrow_order":{}}')]))
     c.limiter = RateLimiter(0, name="Vinted")
     vi.set_client(c)
-    try:
-        assert await vm.conversation(_sess([{"name": "v_sid", "value": "s"}]), "01a1-uuid") == {"messages": []}
-        assert c._transport.calls[-1][0] == "https://api.vinted.at/messaging/main/conversations/01a1-uuid"
-        # logged out: no call, None so the caller uses the browser tab
-        assert await vm.inbox(_sess([{"name": "anon_id", "value": "a1"}])) is None
-    finally:
-        vi.set_client(None)
+    s = _sess([{"name": "v_sid", "value": "s"}])
+    assert await vm.conversation(s, "01a1-uuid") == {"messages": []}
+    assert c._transport.calls[-1][0] == "https://api.vinted.at/messaging/main/conversations/01a1-uuid"
+    assert await vm.escrow(s, "77") == {"escrow_order": {}}
+    assert c._transport.calls[-1][0] == "https://api.vinted.at/escrow-orders/api/v2/escrow-orders/77"
 
 
-async def test_escrow_url():
-    c = vi.VintedClient(transport=Queue([(200, b'{"escrow_order":{"id":77}}')]))
+async def test_logged_out_returns_none():
+    assert await vm.inbox(_sess([{"name": "anon_id", "value": "a1"}])) is None   # no auth cookie, no call, fall back
+
+
+async def test_http_error_without_refresh(monkeypatch):
+    async def no(sess):
+        return False
+    monkeypatch.setattr(vm, "_refresh", no)
+    monkeypatch.setattr(vm, "seed_from_browser", no)
+    vm._jar.update({"access_token_web": "t"})                 # already seeded; the 401 can't be recovered -> None
+    c = vi.VintedClient(transport=Queue([(401, b"nope")]))
     c.limiter = RateLimiter(0, name="Vinted")
     vi.set_client(c)
-    try:
-        assert await vm.escrow(_sess([{"name": "v_sid", "value": "s"}]), "77") == {"escrow_order": {"id": 77}}
-        assert c._transport.calls[-1][0] == "https://api.vinted.at/escrow-orders/api/v2/escrow-orders/77"
-    finally:
-        vi.set_client(None)
+    assert await vm.inbox(_sess([{"name": "access_token_web", "value": "t"}])) is None
 
 
-async def test_http_error_falls_back():
-    c = vi.VintedClient(transport=Queue([(403, b"nope")]))
-    c.limiter = RateLimiter(0, name="Vinted")
-    vi.set_client(c)
-    try:
-        assert await vm.inbox(_sess([{"name": "access_token_web", "value": "tok"}])) is None
-    finally:
-        vi.set_client(None)
+def test_sse_event_framing():
+    buf = [""]
+    assert vm.sse_events("data: a\n\ndata: b\n", buf) == ["a"]     # one complete event, one still buffered
+    assert buf[0] == "data: b\n"
+    assert vm.sse_events("\n\n", buf) == ["b"]
+    buf = [""]
+    assert vm.sse_events(":heartbeat\n\ndata: x\ndata: y\n\n", buf) == ["x\ny"]   # comment skipped, multiline joined
