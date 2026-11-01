@@ -1352,7 +1352,7 @@ def enqueue_sync() -> jobs.Job:
             return res["skipped"]
         return t("{n} conversations, {changed} updated", n=res["conversations"], changed=res["changed"])
 
-    return jobs.submit("chat-sync", t("Sync chats with willhaben"), run, lane="chat", reuse_queued=True)
+    return jobs.submit("chat-sync", t("Sync chats"), run, lane="chat", reuse_queued=True)
 
 
 def enqueue_reload(conversation_id: str) -> jobs.Job:

@@ -134,11 +134,18 @@ LIVE_FALLBACK = timedelta(minutes=15)
 
 async def _chat_sync() -> None:
     # The live WebSocket triggers syncs as messages arrive; polling is only the safety net then.
+    from app import platforms
+    from app.platforms import vinted_inbox
     last = chats.last_sync_at[0]
+    if quiet_hours.holds(last):     # no polling at night; messages the live sockets bring still sync
+        return
+    try:                              # Vinted too (its own throttle + live-state apply): not solely the live stream
+        if platforms.enabled("vinted"):
+            await vinted_inbox.sync()
+    except Exception as e:  # noqa: BLE001 - willhaben's poll still runs
+        log.warning("vinted chat sync failed: %s", e)
     if get_session().chat_live_ok() and last and utcnow() - last < LIVE_FALLBACK:
-        return
-    if quiet_hours.holds(last):     # no polling at night; messages the live socket brings still sync
-        return
+        return                      # willhaben's live socket is healthy: skip its poll
     try:
         with timeline.fresh(actor="scheduler"):
             async with timeline.run("sched", t("Chat sync"), name="chat-sync"):
