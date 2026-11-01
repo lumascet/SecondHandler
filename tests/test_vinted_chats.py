@@ -7,14 +7,6 @@ from app.db import Conversation, Message, session
 from app.platforms import vinted_inbox
 from app.services import chats
 
-
-@pytest.fixture(autouse=True)
-def _reset_vinted_jar():
-    from app.platforms import vinted_messaging
-    vinted_messaging._jar.clear()
-    yield
-    vinted_messaging._jar.clear()
-
 INBOX = {"conversations": [{
     "id": "01a1-uuid", "conversation_type": "order", "created_at": "2026-10-20T10:00:00+02:00",
     "is_unread_by_current_user": True,
@@ -181,22 +173,27 @@ async def test_a_new_message_from_the_other_side_is_pushed(monkeypatch):
 
 async def test_live_events_and_the_reloaded_inbox(monkeypatch):
     import json
-    from types import SimpleNamespace
 
     opened = []
 
     async def sync_one(cid):
         opened.append(cid)
     monkeypatch.setattr(vinted_inbox, "sync_one", sync_one)
-    await vinted_inbox._on_sse(json.dumps({"message_type": "refresh_conversation",
-                                           "data": {"conversation_id": "01a1-uuid", "user_msg_thread_id": 5}}))
+    await vinted_inbox._on_live(json.dumps({"_state": "open", "status": 200}))
+    assert vinted_inbox.live["state"] == "connected"
+    await vinted_inbox._on_live(json.dumps({"message_type": "refresh_conversation",
+                                            "data": {"conversation_id": "01a1-uuid", "user_msg_thread_id": 5}}))
+    await vinted_inbox._on_live(json.dumps({"message_type": "refresh_inbox", "data": {}}))
     assert opened == ["01a1-uuid"]
 
-    async def fake_inbox(sess):                                   # refresh_inbox re-reads the list via the API
-        return json.loads(json.dumps(INBOX))
-    monkeypatch.setattr("app.platforms.vinted_messaging.inbox", fake_inbox)
-    monkeypatch.setattr("app.willhaben.session.get_session", lambda: SimpleNamespace())
-    await vinted_inbox._on_sse(json.dumps({"message_type": "refresh_inbox", "data": {}}))
+    class Resp:
+        url = "https://api.vinted.at/messaging/main/inbox?page=1"
+        status = 200
+        request = type("Q", (), {"method": "GET"})()
+
+        async def text(self):
+            return json.dumps(INBOX)
+    await vinted_inbox._on_live_response(Resp())
     with session() as db:
         assert db.get(Conversation, "01a1-uuid").partner_name == "verkaeufer_x"
 
@@ -445,8 +442,8 @@ async def test_a_message_the_live_event_brings_is_pushed_once(monkeypatch):
     assert pushes == []
     conv["messages"].append({"id": "m3", "created_at": "2026-10-21T23:00:00+02:00", "sender_id": "77",
                              "message_type": "message", "data": {"body": "Noch Fragen?"}})
-    await vinted_inbox._on_sse(json.dumps({"message_type": "refresh_conversation",
-                                           "data": {"conversation_id": "01a1-uuid"}}))
+    await vinted_inbox._on_live(json.dumps({"message_type": "refresh_conversation",
+                                            "data": {"conversation_id": "01a1-uuid"}}))
     assert len(pushes) == 1                                                # the live event pushed it
 
     inbox = copy.deepcopy(INBOX)
@@ -454,10 +451,14 @@ async def test_a_message_the_live_event_brings_is_pushed_once(monkeypatch):
                                                  "sender_id": "77", "message_type": "legacy_last_message",
                                                  "data": {"content": "Noch Fragen?"}}
 
-    async def fake_inbox(sess):
-        return copy.deepcopy(inbox)
-    monkeypatch.setattr("app.platforms.vinted_messaging.inbox", fake_inbox)
-    await vinted_inbox._on_sse(json.dumps({"message_type": "refresh_inbox", "data": {}}))   # same message, no 2nd push
+    class Resp:
+        url = "https://api.vinted.at/messaging/main/inbox?page=1"
+        status = 200
+        request = type("Q", (), {"method": "GET"})()
+
+        async def text(self):
+            return json.dumps(inbox)
+    await vinted_inbox._on_live_response(Resp())                          # the reloaded inbox: the same message
     await vinted_inbox.sync(force=True)
     assert len(pushes) == 1
 
@@ -576,43 +577,41 @@ async def test_the_language_they_write_in_decides(monkeypatch):
     assert "schreibt Italienisch: schreib deine Antwort auf Italienisch" in rules and "auf Deutsch." not in rules
 
 
-async def test_start_live_launches_the_stream_task(monkeypatch):
-    """The push stream is a background task now, not a browser tab: start_live launches it once (idempotent)."""
+async def test_a_refused_live_stream_is_reloaded_once_then_left_alone(monkeypatch):
+    """10-28/29: the live tab's stream was refused (401) every 2 s for 18 hours – its login ran out and the page
+    never renewed it, and the watchdog took the refusals for signs of life."""
     import asyncio
-    from types import SimpleNamespace
+    import json as _json
 
     from app.platforms import vinted_inbox as vi
-    monkeypatch.setattr("app.willhaben.session.get_session", lambda: SimpleNamespace(started=True))
-    monkeypatch.setattr("app.services.site_accounts.state", lambda pid: {"logged_in": True})
 
-    async def noop():
-        await asyncio.sleep(3600)
-    monkeypatch.setattr(vi, "_live_loop", noop)
-    vi._live["task"] = None
-    try:
-        assert await vi.start_live() is True
-        task = vi._live["task"]
-        assert task is not None and not task.done()
-        assert await vi.start_live() is True and vi._live["task"] is task     # idempotent: the same task
-    finally:
-        if vi._live.get("task"):
-            vi._live["task"].cancel()
-            vi._live["task"] = None
+    class Page:
+        def __init__(self):
+            self.reloads, self.closed = 0, False
 
+        def is_closed(self):
+            return self.closed
 
-async def test_on_sse_tolerates_noise(monkeypatch):
-    import json
+        async def reload(self, **kw):
+            self.reloads += 1
 
-    from app.platforms import vinted_inbox as vi
-    calls = []
-
-    async def sync_one(cid):
-        calls.append(cid)
-    monkeypatch.setattr(vi, "sync_one", sync_one)
-    await vi._on_sse("not json")
-    await vi._on_sse(json.dumps({"foo": 1}))                 # no message_type
-    await vi._on_sse(json.dumps({"message_type": "other"}))
-    assert calls == []
+        async def close(self):
+            self.closed = True
+    page = Page()
+    monkeypatch.setattr(vi, "live", {"state": "connected", "since": None, "last_event": None, "events": 0, "page": page})
+    refused = _json.dumps({"_state": "open", "status": 401})
+    for _ in range(vi.LIVE_REFUSED_MAX):
+        await vi._on_live(refused)
+    await asyncio.sleep(0)
+    await asyncio.gather(*list(vi._live_tasks))
+    assert page.reloads == 1 and not page.closed and vi.live["last_event"] is None   # no sign of life
+    for _ in range(vi.LIVE_REFUSED_MAX):
+        await vi._on_live(refused)
+    await asyncio.sleep(0)
+    await asyncio.gather(*list(vi._live_tasks))
+    assert page.closed and page.reloads == 1 and vi.live["state"] == "refused" and vi.live["retry_at"]
+    await vi._on_live(_json.dumps({"_state": "open", "status": 200}))
+    assert vi.live["refused"] == 0 and vi.live["renewals"] == 0 and vi.live["state"] == "connected"
 
 
 def test_offers_in_a_vinted_chat_are_read_with_their_amounts():
