@@ -161,26 +161,30 @@ async def subscribe(sess: Any, on_event: Callable[[str], Any], *, open_cb: Calla
 
     if not await _ensure(sess):
         return 401
-    headers = {"Accept": "text/event-stream", "Cookie": _cookie_header()}
-    if _anon:
-        headers["X-Anon-Id"] = _anon
-    buf = [""]
-    try:
-        async with AsyncSession(impersonate="chrome") as s:
-            async with s.stream("GET", f"{MSG_API}/messaging/real-time/subscribe", headers=headers,
-                                timeout=None) as r:
-                if open_cb:
-                    await _maybe_await(open_cb(r.status_code))
-                if r.status_code != 200:
-                    return r.status_code
-                async for chunk in r.aiter_content():
-                    text = chunk.decode("utf-8", "replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
-                    for data in sse_events(text, buf):
-                        await _maybe_await(on_event(data))
-    except Exception as e:  # noqa: BLE001 - the stream dropped; the caller reconnects
-        log.info("vinted sse: stream ended (%s)", type(e).__name__)
-        return 0
-    return 200
+    url = f"{MSG_API}/messaging/real-time/subscribe"
+    for attempt in range(2):                           # a refused stream renews the token once, then reconnects
+        headers = {"Accept": "text/event-stream", "Cookie": _cookie_header()}
+        if _anon:
+            headers["X-Anon-Id"] = _anon
+        buf = [""]
+        try:
+            async with AsyncSession(impersonate="chrome") as s:
+                async with s.stream("GET", url, headers=headers, timeout=None) as r:
+                    if r.status_code in (401, 403) and attempt == 0 and await _refresh(sess):
+                        continue                       # token renewed: reconnect with the fresh cookies
+                    if open_cb:
+                        await _maybe_await(open_cb(r.status_code))
+                    if r.status_code != 200:
+                        return r.status_code
+                    async for chunk in r.aiter_content():
+                        text = chunk.decode("utf-8", "replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+                        for data in sse_events(text, buf):
+                            await _maybe_await(on_event(data))
+        except Exception as e:  # noqa: BLE001 - the stream dropped; the caller reconnects
+            log.info("vinted sse: stream ended (%s)", type(e).__name__)
+            return 0
+        return 200
+    return 401
 
 
 async def _maybe_await(v: Any) -> None:
