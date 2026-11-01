@@ -57,6 +57,17 @@ async def test_conversation_url_and_logged_out_fallback():
         vi.set_client(None)
 
 
+async def test_escrow_url():
+    c = vi.VintedClient(transport=Queue([(200, b'{"escrow_order":{"id":77}}')]))
+    c.limiter = RateLimiter(0, name="Vinted")
+    vi.set_client(c)
+    try:
+        assert await vm.escrow(_sess([{"name": "v_sid", "value": "s"}]), "77") == {"escrow_order": {"id": 77}}
+        assert c._transport.calls[-1][0] == "https://api.vinted.at/escrow-orders/api/v2/escrow-orders/77"
+    finally:
+        vi.set_client(None)
+
+
 async def test_http_error_falls_back():
     c = vi.VintedClient(transport=Queue([(403, b"nope")]))
     c.limiter = RateLimiter(0, name="Vinted")

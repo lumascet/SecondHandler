@@ -68,3 +68,8 @@ async def inbox(sess: Any) -> dict[str, Any] | None:
 async def conversation(sess: Any, cid: str) -> dict[str, Any] | None:
     """One conversation (/messaging/main/conversations/<id>), or None to fall back."""
     return await _get(sess, f"/messaging/main/conversations/{cid}")
+
+
+async def escrow(sess: Any, order_id: str) -> dict[str, Any] | None:
+    """The escrow order a conversation refers to (shipment state etc.), or None when it has none / the call fails."""
+    return await _get(sess, f"/escrow-orders/api/v2/escrow-orders/{order_id}")

@@ -573,10 +573,21 @@ async def _load(cid: str, push: bool = True) -> int:
     order event (shipped, delivered …) pushed, each once. How many messages it holds."""
     extra: dict[str, Any] = {}
     before_in, before_ev = _newest_in(cid), _newest_event(cid)
-    conv = await _catch(f"{ORIGIN}/inbox/{cid}", f"/messaging/main/conversations/{cid}", extra=extra, untranslate_cid=cid)
-    if conv is None:
-        await asyncio.sleep(LOAD_RETRY_S)
+    from app.platforms import vinted_messaging
+    from app.willhaben.session import get_session
+    conv = await vinted_messaging.conversation(get_session(), cid)      # the API, with the session's cookies
+    if conv is not None and is_translated(conv):                        # machine-translated: the browser reads the original
+        conv = None
+    elif conv is not None:
+        data = conv.get("data") or {}
+        oid = data.get("escrow_order_id") or data.get("order_id")
+        if oid:
+            extra["escrow"] = await vinted_messaging.escrow(get_session(), str(oid))
+    if conv is None:                                                   # not via the API: the browser tab (untranslate + escrow)
         conv = await _catch(f"{ORIGIN}/inbox/{cid}", f"/messaging/main/conversations/{cid}", extra=extra, untranslate_cid=cid)
+        if conv is None:
+            await asyncio.sleep(LOAD_RETRY_S)
+            conv = await _catch(f"{ORIGIN}/inbox/{cid}", f"/messaging/main/conversations/{cid}", extra=extra, untranslate_cid=cid)
     if conv is None:
         return 0
     n = apply_conversation(cid, conv, extra.get("escrow"))
