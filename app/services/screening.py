@@ -16,9 +16,10 @@ from typing import Any
 import httpx
 from sqlmodel import col, select
 
-from app.db import Hit, SearchAgent, session, utcnow
-from app.platforms import condition, shipping_info
-from app.services import ad_images, scam
+from app.db import Hit, SearchAgent, get_setting, session, utcnow
+from app.platforms import condition, registry, shipping_info
+from app.platforms.types import DEFAULT_PLATFORM
+from app.services import ad_images, ad_ocr, scam
 from app.services.ad_images import MAX_IMAGE_BYTES  # noqa: F401  (re-exported)
 from app.i18n import LANGS, background_lang, t
 from app.llm.base import LLMError, get_backend
@@ -35,6 +36,50 @@ DEAL_RANK = {"great": 3, "good": 2, "fair": 1, "unknown": 1, "overpriced": 0}
 # agent threshold -> lowest deal that still notifies ("unknown" passes "fair" but not "good")
 MIN_RANK = {"match": 0, "fair": 1, "good": 2}
 _transport: httpx.AsyncBaseTransport | None = None   # tests inject a mock transport
+THIN_BODY_CHARS = 80               # an ad text this short probably hides its specs in a photo: worth an OCR pass
+OCR_CONCURRENCY = 3                # hits whose photos are read at once (each site's limiter paces its own requests)
+
+
+def _thin_text(hit: Hit) -> bool:
+    """The ad text is too thin to judge from — a seller who lists only "HP · Sehr gut · 500 €" (Vinted's list gives
+    no more) likely put the model and specs into a photo. A rich description already has them, so it is skipped."""
+    return len(" ".join((hit.body or "").split())) < THIN_BODY_CHARS
+
+
+async def read_photo_text(hits: list[Hit]) -> None:
+    """Fill hit.photo_text for the thin-text hits that have not been read yet, from the words their photos carry
+    (services/ad_ocr). Once per hit (also stores "" = nothing found, so it is not retried every screening). Off with
+    the setting read_photo_text=0, or when tesseract is not installed. Never raises: a failure leaves photo_text None."""
+    if not ad_ocr.HAVE_TESSERACT or get_setting("read_photo_text") == "0":
+        return
+    todo = [h for h in hits if h.photo_text is None and _thin_text(h)
+            and registry.get(h.platform or DEFAULT_PLATFORM).can("detail")]
+    if not todo:
+        return
+    sem = asyncio.Semaphore(OCR_CONCURRENCY)
+
+    async def one(h: Hit) -> None:
+        text = ""
+        try:
+            async with sem:
+                p = registry.get(h.platform or DEFAULT_PLATFORM)
+                d = await p.detail(h.ad_id, url=h.url)
+                photos = list(getattr(d, "images", None) or []) if d is not None else []
+                if photos:
+                    with tempfile.TemporaryDirectory(prefix="wh-ocr-") as tmp:
+                        text = await ad_ocr.read_photos(photos, Path(tmp), platform=h.platform, transport=_transport)
+        except Exception as e:  # noqa: BLE001 - OCR is a nice-to-have, never fails a screening
+            log.info("photo OCR for hit %s failed (%s)", h.id, type(e).__name__)
+            return                                   # leave photo_text None: try again next time
+        h.photo_text = text
+        with session() as db:
+            row = db.get(Hit, h.id)
+            if row is not None:
+                row.photo_text = text
+                db.add(row)
+                db.commit()
+
+    await asyncio.gather(*(one(h) for h in todo), return_exceptions=True)
 
 
 def thresholds() -> dict[str, str]:
@@ -201,6 +246,7 @@ async def ask(agent: SearchAgent, hits: list[Hit], check: list[int],
                           "location": h.location, "private": h.is_private, "description": h.body,
                           "condition": condition.shown(h.item_condition, h.item_condition_label, h.platform) or None,
                           "new_price": _new_price(h),
+                          "photo_text": h.photo_text or None,    # specs read out of the photos (services/ad_ocr)
                           **({"check_geizhals": (h.geizhals or {}).get("name") or "",
                               "geizhals_results": cands.setdefault(nr, _gh_candidates(h))} if nr in check else {}),
                           "shipping": shipping_info.prompt_line(h.shipping_price, h.shipping)
@@ -248,6 +294,7 @@ async def screen(agent_id: int, hits: list[Hit]) -> int:
     # more) – right ones kept, wrong ones not used (10-30: a Captiva at € 2,019 rated a Nigopi a bargain while the
     # screening's own note said "another, stronger model"); looking for the right one stays the switch's
     check = [nr for nr, h in enumerate(hits, 1) if geizhals_check.unchecked(h.geizhals)]
+    await read_photo_text(hits)         # specs a seller hid in a photo (OCR), before the judge weighs the hit
     try:
         by_nr, cands = await ask(agent, hits, check, _stats(agent_id, {h.id for h in hits}))
     except LLMError as e:

@@ -96,6 +96,9 @@ class Hit(SQLModel, table=True):
     # its similar ads' rating when Geizhals knows no new price (the agent's price-zone rule): {level, median, count, at}
     similar: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     photo_hash: str | None = None      # dHash of its first photo (services/photo_match), "-" = not loadable
+    # text the photos carry (OCR, services/ad_ocr): a seller often hides the specs in a spec-sheet screenshot or on a
+    # label, not in the ad text. Filled once when the ad text is thin; "" = read, nothing usable found; None = not tried
+    photo_text: str | None = None
     # the condition the site states (app/platforms/condition.py): from the list, or from the ad page once opened (Shpock)
     item_condition: str | None = None
     item_condition_label: str | None = None

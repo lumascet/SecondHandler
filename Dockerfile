@@ -11,6 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify supervisor curl ca-certificates \
+      tesseract-ocr tesseract-ocr-deu \
  && rm -rf /var/lib/apt/lists/*
 
 # wireproxy: userspace WireGuard with a local proxy, for the anonymous requests' VPN exits (app/platforms/vpn.py).

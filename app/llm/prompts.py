@@ -698,6 +698,8 @@ def screen_prompt(*, agent_name: str, brief: str, hits: list[dict[str, Any]], st
                 lines.append(f"      {i}. {c['name']} · {price}")
         if h.get("description"):
             lines.append(f"    {h['description'][:400]}")
+        if h.get("photo_text"):   # specs the seller put only in a photo (spec-sheet screenshot, label), OCR-read
+            lines.append(f"    Text aus den Fotos (automatisch per OCR erkannt, kann Fehler enthalten): {h['photo_text']}")
         if h.get("scam_flags"):   # cheap heuristic hints, if available
             lines.append(f"    Auffälligkeiten (automatisch erkannt): {', '.join(h['scam_flags'])}")
     lines += ["", f"Sprache für reason: {language}", "Aufgabe: Bewerte jeden Treffer (nr wie oben)."]
