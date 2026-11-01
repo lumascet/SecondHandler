@@ -824,7 +824,8 @@ async def _live_loop() -> None:
                 await asyncio.sleep(60)
                 continue
             sess = get_session()
-            if not sess.started or site_accounts.state("vinted")["logged_in"] is False:
+            if not sess.started or (site_accounts.state("vinted")["logged_in"] is False
+                                    and not vinted_messaging.has_auth()):
                 live.update(state="logged out", since=utcnow())
                 await asyncio.sleep(60)
                 continue
@@ -858,8 +859,9 @@ async def start_live() -> bool:
     from app.services import site_accounts
     from app.willhaben.session import get_session
 
+    from app.platforms import vinted_messaging
     sess = get_session()
-    if not sess.started or site_accounts.state("vinted")["logged_in"] is False:
+    if not sess.started or (site_accounts.state("vinted")["logged_in"] is False and not vinted_messaging.has_auth()):
         return False
     task = _live.get("task")
     if task is not None and not task.done():
@@ -900,13 +902,13 @@ async def sync(force: bool = False) -> dict[str, Any]:
     from app.services import site_accounts
     from app.willhaben.session import get_session
 
+    from app.platforms import vinted_messaging
     sess = get_session()
-    if not sess.started or site_accounts.state("vinted")["logged_in"] is False:
+    if not sess.started or (site_accounts.state("vinted")["logged_in"] is False and not vinted_messaging.has_auth()):
         return {"skipped": "not logged in"}
     if not force and time.monotonic() - _last_sync[0] < SYNC_EVERY_S:
         return {"skipped": "recently"}
     _last_sync[0] = time.monotonic()
-    from app.platforms import vinted_messaging
     inbox = await vinted_messaging.inbox(sess)                       # straight from the API, with the session's cookies
     via = "api"
     if inbox is None:                                               # not logged in there or the call failed: the browser tab

@@ -12,6 +12,7 @@ from app.services import chats
 def _reset_vinted_jar():
     from app.platforms import vinted_messaging
     vinted_messaging._jar.clear()
+    vinted_messaging._loaded = True        # don't read a persisted jar in tests
     yield
     vinted_messaging._jar.clear()
 

@@ -8,14 +8,17 @@ Everything the old live/sync browser tabs did is done here with curl_cffi and th
               events ({message_type: refresh_inbox | refresh_conversation, data:{conversation_id}}) drive the reads.
   * refresh – POST www.vinted.at/web/api/auth/refresh to renew the access token, since no tab keeps it alive.
 
-The cookies are an owned jar: seeded once from the browser's Playwright context (the Vinted login lives there), then
-kept fresh by the refresh call. A 401 that refresh cannot fix marks Vinted logged out, so the normal browser re-login
-(site_accounts) recovers it and re-seeds the jar — the browser is touched only for login, never for everyday chat.
+The cookies are an owned jar: seeded from the browser's Playwright context (the Vinted login lives there), kept fresh
+by the refresh call, and PERSISTED to disk (data/vinted-native.json, like willhaben-native.json) so the rotated
+refresh token survives a restart — on start the jar is loaded from disk, not re-seeded from the (by then stale)
+browser cookie. A successful call re-asserts the login flag; a 401 that neither refresh nor a browser re-seed can fix
+falls back to the browser tab and leaves re-login to site_accounts. The browser is touched only for login.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Callable
 
 log = logging.getLogger(__name__)
@@ -23,9 +26,11 @@ log = logging.getLogger(__name__)
 AUTH_COOKIES = ("access_token_web", "_vinted_fr_session", "v_sid")   # any one marks a logged-in web session
 WEB = "https://www.vinted.at"
 REFRESH_URL = f"{WEB}/web/api/auth/refresh"
+STATE_FILE = "vinted-native.json"         # the owned jar persisted to disk (mode 600), like willhaben-native.json
 
 _jar: dict[str, str] = {}                 # the owned cookie jar (name -> value), the single source of truth
 _anon: str | None = None
+_loaded = False                           # whether the on-disk jar has been read this process
 
 
 def _cookie_header() -> str:
@@ -34,6 +39,53 @@ def _cookie_header() -> str:
 
 def _logged_in() -> bool:
     return any(k in _jar for k in AUTH_COOKIES)
+
+
+def _state_path():
+    from app.config import get_settings
+
+    return get_settings().data_dir / STATE_FILE
+
+
+def _persist() -> None:
+    """Write the jar + anon id to disk (atomic, mode 600) so the rotated refresh token survives a restart — the bug
+    that made the browser-free chat fail before was re-seeding the stale browser cookie instead of this."""
+    try:
+        p = _state_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"jar": _jar, "anon": _anon}, f)
+        os.replace(tmp, p)
+    except OSError as e:  # noqa: BLE001
+        log.info("vinted api: could not persist the jar (%s)", type(e).__name__)
+
+
+def _load_persisted() -> dict[str, Any]:
+    try:
+        return json.loads(_state_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def has_auth() -> bool:
+    """We hold (or have persisted) a logged-in cookie — even if the login flag wrongly says otherwise."""
+    if _logged_in():
+        return True
+    jar = _load_persisted().get("jar") or {}
+    return any(k in jar for k in AUTH_COOKIES)
+
+
+def _assert_logged_in() -> None:
+    """A working API call proves we are logged in: correct the flag if a past failure wrongly cleared it."""
+    try:
+        from app.services import site_accounts
+
+        if site_accounts.state("vinted").get("logged_in") is not True:
+            site_accounts._save("vinted", True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def seed_from_browser(sess: Any) -> bool:
@@ -55,11 +107,23 @@ async def seed_from_browser(sess: Any) -> bool:
     _jar.clear()
     _jar.update(jar)
     _anon = jar.get("anon_id")
+    _persist()
     return True
 
 
 async def _ensure(sess: Any) -> bool:
-    return True if _logged_in() else await seed_from_browser(sess)
+    """A usable jar: in memory, else the one persisted last run (its rotated token is current), else the browser."""
+    global _anon, _loaded
+    if _logged_in():
+        return True
+    if not _loaded:
+        _loaded = True
+        jar = _load_persisted().get("jar")
+        if isinstance(jar, dict) and any(k in jar for k in AUTH_COOKIES):
+            _jar.update(jar)
+            _anon = _load_persisted().get("anon")
+            return True
+    return await seed_from_browser(sess)
 
 
 async def _refresh(sess: Any) -> bool:
@@ -83,6 +147,7 @@ async def _refresh(sess: Any) -> bool:
     got = {c.name: c.value for c in r.cookies.jar}
     if got:
         _jar.update(got)
+        _persist()                                     # keep the rotated token across restarts
         log.info("vinted api: token refreshed (%d cookies)", len(got))
     return True
 
@@ -110,6 +175,7 @@ async def _get(sess: Any, path: str) -> dict[str, Any] | None:
             log.info("vinted api %s failed (%s)", path, type(e).__name__)
             return None
         if r.status_code == 200:
+            _assert_logged_in()
             try:
                 data = json.loads(r.text)
             except ValueError:

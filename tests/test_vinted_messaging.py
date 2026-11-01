@@ -26,6 +26,7 @@ def _sess(cookies):
 def _reset():
     vm._jar.clear()
     vm._anon = None
+    vm._loaded = True          # skip the on-disk jar load; tests drive seed_from_browser directly
     yield
     vm._jar.clear()
     vm._anon = None
@@ -76,6 +77,20 @@ async def test_http_error_without_refresh(monkeypatch):
     c.limiter = RateLimiter(0, name="Vinted")
     vi.set_client(c)
     assert await vm.inbox(_sess([{"name": "access_token_web", "value": "t"}])) is None
+
+
+def test_jar_persists_across_a_restart(monkeypatch, tmp_path):
+    p = tmp_path / "vinted-native.json"
+    monkeypatch.setattr(vm, "_state_path", lambda: p)
+    vm._jar.clear()
+    vm._jar.update({"access_token_web": "t1", "_vinted_fr_session": "s1"})
+    vm._anon = "a1"
+    vm._persist()
+    vm._jar.clear()                                # simulate a restart: memory gone, disk remains
+    vm._anon = None
+    assert vm.has_auth()                           # the rotated token survives on disk
+    st = vm._load_persisted()
+    assert st["jar"]["access_token_web"] == "t1" and st["anon"] == "a1"
 
 
 def test_sse_event_framing():
