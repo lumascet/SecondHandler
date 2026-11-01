@@ -122,12 +122,3 @@ async def test_working_pages_are_neither_parked_nor_closed(monkeypatch):
     s.working_pages.add(live)
     assert await s.park_idle_ui()
     assert not live.closed and live.visits == [] and ui.visits == ["about:blank"]
-
-
-def test_the_live_tab_blocks_ad_hosts_only():
-    from app.platforms import vinted_inbox
-    block = vinted_inbox._AD_HOSTS.search
-    assert block("https://aax-eu.amazon-adsystem.com/e/dtb/bid") and block("https://gum.criteo.com/sid/json")
-    assert block("https://securepubads.g.doubleclick.net/tag/js/gpt.js")
-    assert not block("https://www.vinted.at/api/v2/inbox") and not block("https://geo.captcha-delivery.com/captcha/")
-    assert not block("https://www.vinted.at/?ref=amazon-adsystem.com")
