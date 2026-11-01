@@ -977,7 +977,12 @@ async def sync(force: bool = False) -> dict[str, Any]:
     if not force and time.monotonic() - _last_sync[0] < SYNC_EVERY_S:
         return {"skipped": "recently"}
     _last_sync[0] = time.monotonic()
-    inbox = await _catch(f"{ORIGIN}/inbox", "/messaging/main/inbox")
+    from app.platforms import vinted_messaging
+    inbox = await vinted_messaging.inbox(sess)                       # straight from the API, with the session's cookies
+    via = "api"
+    if inbox is None:                                               # not logged in there or the call failed: the browser tab
+        inbox = await _catch(f"{ORIGIN}/inbox", "/messaging/main/inbox")
+        via = "browser"
     if inbox is None:
         if site_accounts.state("vinted")["logged_in"] is False:
             return {"skipped": "not logged in"}
@@ -994,8 +999,8 @@ async def sync(force: bool = False) -> dict[str, Any]:
     for c in (inbox.get("conversations") or [])[:MAX_DETAILS * 2]:   # the item cards (photo, price); kept fresh a while
         if c.get("id"):
             await chats.ensure_ad_context(str(c["id"]))
-    log.info("vinted chats: %d conversations, %d opened, %d messages", len(inbox.get("conversations") or []),
-             min(len(changed), MAX_DETAILS), read)
+    log.info("vinted chats: %d conversations, %d opened, %d messages (inbox via %s)", len(inbox.get("conversations") or []),
+             min(len(changed), MAX_DETAILS), read, via)
     if not first:                                  # the first sync of all: what was there is no news
         await _push_incoming(incoming)
     return {"conversations": len(inbox.get("conversations") or []), "opened": min(len(changed), MAX_DETAILS)}

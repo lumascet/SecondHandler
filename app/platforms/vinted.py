@@ -27,7 +27,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from app.i18n import t
 from app.platforms import condition, shipping_info
 from app.platforms.base import InvalidSearchUrl, Platform, PlatformError
-from app.platforms.httpclient import HttpPlatformClient, Transport
+from app.platforms.httpclient import FetchResponse, HttpPlatformClient, Transport
 from app.platforms.ratelimit import RateLimiter
 from app.platforms.text import clean_text, euro, mentions, one_line, to_float
 from app.platforms.types import AdDetail, Listing, SearchPage, SearchSpec
@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)
 
 HOST = "www.vinted.at"
 HOSTS = ("vinted.at", "vinted.de")
+MSG_API = "https://api.vinted.at"            # the messaging API the web app calls (inbox, conversations, the SSE stream)
 ORDERS = {"newest": "newest_first", "relevance": "relevance", "price_asc": "price_low_to_high",
           "price_desc": "price_high_to_low"}
 VOLATILE = {"page", "time", "search_id", "search_session_id", "search_by_image_uuid", "order", "currency", "per_page",
@@ -321,6 +322,14 @@ class VintedClient(HttpPlatformClient):
         if r.status_code != 200:
             raise PlatformError(t("Vinted ad {id}: HTTP {status}", id=ad_id, status=r.status_code))
         return parse_item(r.text, ad_id, host)
+
+    async def messaging_get(self, path: str, cookie: str, anon: str | None = None) -> FetchResponse:
+        """A GET on the messaging API (api.vinted.at) with the logged-in session's cookie. Authenticated and
+        per-user, so never cached; the recorder redacts the Cookie header."""
+        headers = {"Accept": "application/json, text/plain, */*", "Cookie": cookie, "Locale": "de-AT"}
+        if anon:
+            headers["X-Anon-Id"] = anon
+        return await self._get(f"{MSG_API}{path}", headers=headers, kind="detail")
 
 
 _client: VintedClient | None = None
