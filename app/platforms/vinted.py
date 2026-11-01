@@ -329,7 +329,9 @@ class VintedClient(HttpPlatformClient):
         headers = {"Accept": "application/json, text/plain, */*", "Cookie": cookie, "Locale": "de-AT"}
         if anon:
             headers["X-Anon-Id"] = anon
-        return await self._get(f"{MSG_API}{path}", headers=headers, kind="detail")
+        # from the home IP, never the anonymous VPN exit: this is the owner's logged-in session (like the browser
+        # login and the SSE stream), and a datacenter VPN IP on it is blocked (403) by the bot protection
+        return await self._get(f"{MSG_API}{path}", headers=headers, kind="detail", direct=True)
 
 
 _client: VintedClient | None = None

@@ -52,6 +52,29 @@ async def test_inbox_calls_the_api_with_the_session_cookie():
     assert "access_token_web=t" in headers["Cookie"] and headers["X-Anon-Id"] == "a1"
 
 
+async def test_messaging_goes_direct_even_when_the_vpn_is_on(monkeypatch):
+    """The logged-in messaging call stays on the home IP (route None), never the anonymous VPN exit — a datacenter
+    VPN IP on the owner's session is what the bot protection blocks (403), the bug that took the chat offline."""
+    c = vi.VintedClient(transport=Queue([(200, b'{"conversations":[]}')]))
+    c.limiter = RateLimiter(0, name="Vinted")
+    vi.set_client(c)
+    c._tunnel = lambda: object()                 # Vinted's VPN switch is on
+    seen: dict = {}
+    real_once = c._send_once
+
+    async def spy_once(full, kind, headers, route, *, force_direct=False):
+        seen["route"], seen["direct"] = route, force_direct
+        return await real_once(full, kind, headers, route, force_direct=force_direct)
+
+    async def no_vpn(*a, **k):
+        raise AssertionError("an authenticated messaging request must not go through the VPN")
+
+    monkeypatch.setattr(c, "_send_once", spy_once)
+    monkeypatch.setattr(c, "_send_vpn", no_vpn)
+    assert await vm.inbox(_sess([{"name": "access_token_web", "value": "t"}])) == {"conversations": []}
+    assert seen == {"route": None, "direct": True}
+
+
 async def test_conversation_and_escrow_urls():
     c = vi.VintedClient(transport=Queue([(200, b'{"messages":[]}'), (200, b'{"escrow_order":{}}')]))
     c.limiter = RateLimiter(0, name="Vinted")
