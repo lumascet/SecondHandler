@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 AUTH_COOKIES = ("access_token_web", "_vinted_fr_session", "v_sid")   # any one marks a logged-in web session
 WEB = "https://www.vinted.at"
 REFRESH_URL = f"{WEB}/web/api/auth/refresh"
+SSE_URL = "https://sse.vinted.at/messaging/real-time/subscribe"   # the web real-time push host (not api.vinted.at)
 STATE_FILE = "vinted-native.json"         # the owned jar persisted to disk (mode 600), like willhaben-native.json
 CONNECT_TIMEOUT_S = 20                     # bound on getting the first response when opening the SSE stream
 READ_IDLE_S = 40                           # heartbeats arrive ~every 12s; no data this long = a dead stream, reconnect
@@ -236,13 +237,12 @@ async def subscribe(sess: Any, on_event: Callable[[str], Any], *, open_cb: Calla
     streamed, or the refusal). Raises nothing: network errors return 0."""
     from curl_cffi.requests import AsyncSession
 
-    from app.platforms.vinted import MSG_API
-
     if not await _ensure(sess):
         return 401
-    url = f"{MSG_API}/messaging/real-time/subscribe"
+    url = SSE_URL
     for attempt in range(2):                           # a refused stream renews the token once, then reconnects
-        headers = {"Accept": "text/event-stream", "Cookie": _cookie_header()}
+        headers = {"Accept": "text/event-stream", "Cookie": _cookie_header(), "Origin": WEB,
+                   "Referer": f"{WEB}/", "Locale": "de-AT", "Platform": "web", "X-Next-App": "marketplace-web"}
         if _anon:
             headers["X-Anon-Id"] = _anon
         buf = [""]
