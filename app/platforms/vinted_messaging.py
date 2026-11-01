@@ -130,8 +130,10 @@ async def _ensure(sess: Any) -> bool:
     return await seed_from_browser(sess)
 
 
-async def _refresh(sess: Any) -> bool:
-    """Renew the access token over HTTP and merge the new cookies into the jar. False when it cannot be renewed."""
+async def _refresh(sess: Any) -> bool | None:
+    """Renew the access token over HTTP and merge the new cookies into the jar. Tri-state: True = refreshed; False =
+    the refresh token was genuinely rejected (4xx: the caller may re-seed from the browser); None = a transient
+    failure (exception or 5xx) — keep the (still-good) persisted token, do NOT re-seed."""
     if not _jar:
         return False
     from curl_cffi.requests import AsyncSession
@@ -142,11 +144,14 @@ async def _refresh(sess: Any) -> bool:
     try:
         async with AsyncSession(impersonate="chrome") as s:
             r = await s.post(REFRESH_URL, headers=headers, timeout=30)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - transient network error
         log.info("vinted api: refresh failed (%s)", type(e).__name__)
-        return False
+        return None
+    if r.status_code // 100 == 5:
+        log.info("vinted api: refresh -> HTTP %s (transient)", r.status_code)
+        return None
     if r.status_code // 100 != 2:
-        log.info("vinted api: refresh -> HTTP %s", r.status_code)
+        log.info("vinted api: refresh -> HTTP %s (rejected)", r.status_code)
         return False
     got = {c.name: c.value for c in r.cookies.jar}
     if got:
@@ -185,13 +190,17 @@ async def _get(sess: Any, path: str) -> dict[str, Any] | None:
             except ValueError:
                 return None
             return data if isinstance(data, dict) else None
-        if r.status_code in (401, 403) and attempt == 0 and await _refresh(sess):
-            continue                                   # refreshed the token: try again
-        if r.status_code in (401, 403) and attempt <= 1 and await seed_from_browser(sess):
-            continue                                   # re-seed from the browser (it may have re-logged in)
+        if r.status_code in (401, 403) and attempt == 0:
+            rr = await _refresh(sess)
+            if rr is True:
+                continue                               # refreshed the token: retry
+            if rr is False and await seed_from_browser(sess):
+                continue                               # genuinely rejected: re-seed from the browser (re-login), retry
+            if rr is None:
+                return None                            # transient refresh failure: keep the token, just fail this call
         log.info("vinted api %s -> HTTP %s", path, r.status_code)
         if r.status_code in (401, 403):
-            await _mark_logged_out(sess)
+            await _mark_logged_out(sess)               # rejected and the browser can't help: genuinely logged out
         return None
     return None
 
@@ -246,8 +255,11 @@ async def subscribe(sess: Any, on_event: Callable[[str], Any], *, open_cb: Calla
                     log.info("vinted sse: connect failed (%s)", type(e).__name__)
                     return 0
                 try:
-                    if r.status_code in (401, 403) and attempt == 0 and await _refresh(sess):
-                        continue                       # token renewed: reconnect with the fresh cookies
+                    if r.status_code in (401, 403) and attempt == 0:
+                        rr = await _refresh(sess)
+                        if rr is True or (rr is False and await seed_from_browser(sess)):
+                            continue                   # refreshed, or re-seeded after a genuine reject: reconnect
+                        # rr is None (transient): keep the token, let the caller back off and retry later
                     if open_cb:
                         await _maybe_await(open_cb(r.status_code))
                     if r.status_code != 200:
