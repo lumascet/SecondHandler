@@ -3,8 +3,8 @@
 Search agents, the ad viewer, the Claude screening, the scam check and the price check talk to a site only through
 its adapter in `app/platforms/`. The adapters today: willhaben (`willhaben.py`), kleinanzeigen.de (`kleinanzeigen.py`,
 the app's JSON API), Shpock (`shpock.py`, the website's GraphQL API, asked with GET), Vinted (`vinted.py`, the
-React Server Components data of the website's own pages), Preisjäger (`preisjaeger.py`, the deal cards of the
-search page) and eBay (`ebay.py`, the result cards of ebay.at's search page). A new site is one module plus fixtures and tests. Buying, chats and your own ads stay willhaben's.
+React Server Components data of the website's own pages), Preisjäger (`preisjaeger.py`, the Pepper Android app's
+signed REST API) and eBay (`ebay.py`, the result cards of ebay.at's search page). A new site is one module plus fixtures and tests. Buying, chats and your own ads stay willhaben's.
 Facebook Marketplace needs a login; a site like that would need the browser transport described below.
 
 ## The contract (`app/platforms/base.py`)

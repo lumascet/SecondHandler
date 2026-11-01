@@ -58,7 +58,7 @@ def sites():
 
 def test_every_site_says_how_far_it_pages():
     expect = {"willhaben": (200, True), "kleinanzeigen": (50, True), "ebay": (60, True), "shpock": (40, True),
-              "vinted": (96, True), "preisjaeger": (30, True), "facebook": (24, False)}
+              "vinted": (96, True), "preisjaeger": (30, False), "facebook": (24, False)}
     for pid, (size, can) in expect.items():
         p = platforms.get(pid)
         assert (p.PAGE_SIZE_MAX, p.CAN_PAGE) == (size, can), pid
@@ -101,7 +101,6 @@ async def test_kleinanzeigen_counts_pages_from_zero(sites):
 @pytest.mark.parametrize("pid,module,cls,routes,param,expect", [
     ("ebay", "ebay", "EbayClient", EBAY_ROUTES, "_pgn", "2"),
     ("vinted", "vinted", "VintedClient", VINTED_ROUTES, "page", "2"),
-    ("preisjaeger", "preisjaeger", "PreisjaegerClient", PREISJAEGER_ROUTES, "page", "2"),
 ])
 async def test_page_two_asks_for_the_next_page(sites, pid, module, cls, routes, param, expect):
     client = _wrap(module, cls, routes)
@@ -125,6 +124,15 @@ async def test_shpock_pages_with_its_offset(sites):
     first, third = (json.loads(s["variables"])["pagination"] for s in _sent(client))
     assert first == {"limit": 40}
     assert third == {"limit": 40, "offset": 80}
+
+
+async def test_preisjaeger_has_one_page(sites):
+    client = _wrap("preisjaeger", "PreisjaegerClient", PREISJAEGER_ROUTES)
+    p = platforms.get("preisjaeger")
+    spec = p.keyword_search("rennrad")
+    assert (await p.search(spec)).ads                                    # page 1 fetches
+    assert (await p.search(spec, page=2)).ads == []                      # the deal feed is a single page
+    assert len(_sent(client)) == 1                                       # no request for a page that is not there
 
 
 async def test_facebook_has_one_page(sites):

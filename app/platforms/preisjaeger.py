@@ -1,24 +1,35 @@
 """preisjaeger.at (Austria), the deal community, as a platform adapter: deals from shops, not private listings.
 
-The search page (www.preisjaeger.at/search?q=…&sortBy=new&hide_expired=true) renders each deal as a Vue component
-whose props are JSON in a data-vue3 attribute ("ThreadMainListItemNormalizer" → thread): title, price, the
-comparison price ("statt"), shop, temperature, voucher code, posting time and the main image. No login; the site
-sits behind Cloudflare, so requests go through curl_cffi impersonating Chrome.
+preisjaeger.at and mydealz.de are white-label builds of the same Pepper ("tippingcanoe") backend, so the Android
+app talks to a shared mobile REST API (https://www.preisjaeger.at/rest_api/v2/…) that returns clean JSON — no
+Cloudflare-fronted HTML to scrape. `thread` lists deals for a search (one JSON object per deal: title, price, the
+comparison price `next_best_price`, merchant, temperature, voucher `code`, posting time and image). As on the
+website, there is no details page; the viewer shows the listing.
 
-A search without results shows "Die heißesten Deals von heute" instead: those deals never count as hits. The deal
-pages carry no machine-readable description, so the viewer shows the listing (no `detail` capability). The shop
-fills the location field (it is what a deal has instead of a place), the comparison price the struck-out price.
-The website ignores price limits in the link; the adapter keeps them (priceFrom/priceTo) and filters itself.
+The app signs every request OAuth-1.0 style (HMAC-SHA1) with a consumer key/secret baked into it — group-wide
+distribution values, not personal secrets (like the Kleinanzeigen app credentials the project already uses). The
+bundled pair works out of the box; PREISJAEGER_OAUTH="key:secret" (.env or Settings → Platforms) overrides it if the
+app rotates it. No user login. We send the oauth parameters in the Authorization header only, so the request URL
+stays stable and `_get`'s response cache still works.
+
+A search without results answers with an empty `data` list. The REST payload carries no shipping price, so shipping
+stays unknown. The website ignores price limits in the link; the adapter keeps them (priceFrom/priceTo) and filters
+itself.
 """
 from __future__ import annotations
 
-import html
+import hmac
 import json
 import logging
 import re
+import time
+from base64 import encodebytes
+from hashlib import sha1
+from random import randint
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, quote_plus, urlencode, urlsplit
 
+from app.config import get_settings
 from app.i18n import t
 from app.platforms import condition
 from app.platforms.base import InvalidSearchUrl, Platform, PlatformError
@@ -30,83 +41,109 @@ from app.platforms.types import Listing, SearchPage, SearchSpec
 log = logging.getLogger(__name__)
 
 WEB = "https://www.preisjaeger.at"
+API = f"{WEB}/rest_api/v2"
 STATIC = "https://static.preisjaeger.at"
-PAGE_HEADERS = {"Accept": "text/html,application/xhtml+xml", "Accept-Language": "de-AT"}
-_VUE = re.compile(r"""data-vue3=(?:'([^']*)'|"([^"]*)")""")
-_FALLBACK = re.compile(r"heißesten Deals|hottest deals", re.I)
+
+# The Pepper Android app's bundled OAuth credentials (distribution values, not personal secrets) and user-agent.
+OAUTH_CONSUMER_KEY = "83561944886fdab16690e78a1f5f5559846dd86d"
+OAUTH_SECRET = "f0561bf4d666c1cfe942390bc2761a9ce02cedb8"
+APP_UA = "com.tippingcanoe.preisjaeger ANDROID [v7.05.02] [30 | sdk_gphone_x86_64] [@2.625x]"
+
+
+# ------------------------------------------------------------------ signing
+def oauth_creds() -> tuple[str, str, str]:
+    """(consumer_key, secret, source): the bundled app credentials, or an override from PREISJAEGER_OAUTH in .env
+    ("key:secret"), or the same setting in Settings → Platforms, for when the app rotates them."""
+    raw = get_settings().preisjaeger_oauth.strip()
+    src = "env"
+    if not raw:
+        try:
+            from app.db import get_setting
+
+            raw = (get_setting("preisjaeger_oauth") or "").strip()
+            src = "settings"
+        except Exception:  # noqa: BLE001 - no database yet
+            raw = ""
+    if raw and ":" in raw:
+        key, _, secret = raw.partition(":")
+        return key.strip(), secret.strip(), src
+    return OAUTH_CONSUMER_KEY, OAUTH_SECRET, "bundled"
+
+
+def _sign(method: str, url: str, params: dict[str, str]) -> tuple[str, str]:
+    """Sign `url` with the ordered query `params` and return (Authorization header, URL query string). `criteria`
+    is percent-encoded once; the oauth parameters go into the signature base string and the header, never the URL,
+    so the same search always yields the same URL (and cache key). Replicates the app's byte construction."""
+    key, secret, _ = oauth_creds()
+    hmac_key = (secret + "&").encode()                      # consumer secret + "&" + (empty) token secret
+    auth = {
+        "oauth_consumer_key": key,
+        "oauth_nonce": str(randint(-2**63, 2**63 - 1)),
+        "oauth_signature_method": "HMAC-SHA1",
+        "oauth_timestamp": str(int(time.time())),
+        "oauth_version": "1.0",
+    }
+    sent = dict(params)
+    if sent.get("criteria"):
+        sent["criteria"] = quote(sent["criteria"])
+    base_params = {**sent, **auth}
+    norm = "&".join(f"{k}={v}" for k, v in sorted(base_params.items()))
+    message = "&".join([method, quote_plus(url), quote_plus(norm)]).encode()
+    auth["oauth_signature"] = quote_plus(encodebytes(hmac.new(hmac_key, message, sha1).digest()).decode().strip())
+    header = "OAuth " + ",".join(f'{k}="{v}"' for k, v in auth.items())
+    return header, "&".join(f"{k}={v}" for k, v in sent.items())
 
 
 # ------------------------------------------------------------------ parsing
-def _threads(page: str) -> list[dict[str, Any]]:
-    out = []
-    for m in _VUE.finditer(page or ""):
-        raw = m.group(1) if m.group(1) is not None else m.group(2)
-        if "ThreadMainListItemNormalizer" not in raw:
-            continue
-        try:
-            obj = json.loads(html.unescape(raw))
-        except ValueError:
-            continue
-        thread = (obj.get("props") or {}).get("thread")
-        if isinstance(thread, dict) and thread.get("threadId"):
-            out.append(thread)
-    return out
-
-
-def _is_fallback(page: str) -> bool:
-    """No results: the page lists today's hottest deals under its own heading before the first deal."""
-    first = page.find("ThreadMainListItemNormalizer")
-    if first < 0:
-        return False
-    start = page.rfind("<h1", 0, first)
-    return bool(_FALLBACK.search(page[start if start >= 0 else max(0, first - 6000):first]))
-
-
-def image_url(img: dict[str, Any] | None, size: str = "300x300") -> str | None:
-    if not isinstance(img, dict) or not img.get("path") or not img.get("name"):
-        return None
-    uid = img.get("uid") or f"{img['name']}.{img.get('ext') or 'jpg'}"
-    return f"{STATIC}/{img['path']}/{img['name']}/re/{size}/qt/60/{uid}"
+def _image(th: dict[str, Any]) -> str | None:
+    img = th.get("image")
+    if isinstance(img, dict) and (img.get("uri") or img.get("large_uri")):
+        return img.get("uri") or img.get("large_uri")
+    return th.get("icon_list_url") or None
 
 
 def parse_listing(th: dict[str, Any]) -> Listing:
     price = to_float(th.get("price")) or None          # 0: a voucher or percentage deal without a price
-    before = to_float(th.get("nextBestPrice"))
-    pct = to_float(th.get("percentage"))
-    merchant = (th.get("merchant") or {}).get("merchantName") or th.get("linkHost")
-    ship = th.get("shipping") or {}
-    shipping = to_float(ship.get("price"))
-    if ship.get("isFree"):
-        shipping = 0.0
-    temp = to_float(th.get("temperature"))
+    before = to_float(th.get("next_best_price"))
+    pct = to_float(th.get("price_discount"))
+    merchant = (th.get("merchant") or {}).get("name") or th.get("merchant_name_display")
+    temp = to_float(th.get("temperature_rating"))
+    group = th.get("group_display_summary") or (th.get("main_group") or {}).get("name")
     facts = [f"{temp:.0f}°" if temp is not None else None,
-             t("Voucher code {code}", code=th["voucherCode"]) if th.get("voucherCode") else None,
-             t("Shipping {price}", price=euro(shipping)) if shipping else None,
-             one_line((th.get("mainGroup") or {}).get("threadGroupName")),
-             t("local deal") if th.get("isLocal") else None]
-    tid = str(th.get("threadId"))
-    slug = th.get("titleSlug")
-    return Listing(ad_id=tid, heading=one_line(th.get("title")) or "", body=" · ".join(f for f in facts if f) or None,
+             t("Voucher code {code}", code=th["code"]) if th.get("code") else None,
+             one_line(group),
+             t("local deal") if th.get("local") else None]
+    tid = str(th.get("thread_id"))
+    title = one_line(th.get("title")) or ""
+    return Listing(ad_id=tid, heading=title, body=" · ".join(f for f in facts if f) or None,
                    price=price, price_display=euro(price) if price else (f"−{pct:g} %" if pct else None),
                    old_price=before if before and price is not None and before > price else None,
-                   location=one_line(merchant), postcode=None, state=None, published_at=from_epoch(th.get("publishedAt")),
-                   changed_at=None, end_date=from_epoch((th.get("endDate") or {}).get("timestamp")),
-                   url=f"{WEB}/deals/{slug}-{tid}" if slug else f"{WEB}/share-deal/{tid}",
-                   image_url=image_url(th.get("mainImage")), is_private=None, is_bumped=None, status="active",
-                   platform="preisjaeger", item_condition=condition.preisjaeger(th.get("title"))[0],   # inferred: no label
-                   shipping_price=shipping, shipping="ship" if shipping is not None else None)
+                   location=one_line(merchant), postcode=None, state=None, published_at=from_epoch(th.get("submitted")),
+                   changed_at=None, end_date=from_epoch(th.get("expiry_date")),
+                   url=th.get("deal_uri") or f"{WEB}/share-deal/{tid}",
+                   image_url=_image(th), is_private=None, is_bumped=None, status="active",
+                   platform="preisjaeger", item_condition=condition.preisjaeger(title)[0],   # inferred: no label
+                   shipping_price=None, shipping=None)                                        # the API states none
 
 
-def parse_search(page: str, price_from: float | None = None, price_to: float | None = None) -> SearchPage:
-    """The search page -> SearchPage: live deals only, within the price limits (deals without a price drop out of a
-    limited search). The fallback list of a search without results gives an empty page."""
-    if "ThreadMainListItemNormalizer" not in (page or "") and "Ergebnisse" not in (page or ""):
+def _threads(body: str | dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
+    try:
+        doc = json.loads(body) if isinstance(body, (str, bytes)) else body
+    except ValueError:
+        raise PlatformError(t("Preisjäger answered without a result list")) from None
+    data = doc.get("data") if isinstance(doc, dict) else doc
+    if not isinstance(data, list):
         raise PlatformError(t("Preisjäger answered without a result list"))
-    if _is_fallback(page):
-        return SearchPage(rows_found=0, ads=[])
+    return [th for th in data if isinstance(th, dict) and th.get("thread_id")]
+
+
+def parse_search(body: str | dict[str, Any], price_from: float | None = None,
+                 price_to: float | None = None) -> SearchPage:
+    """The /rest_api/v2/thread answer -> SearchPage: live deals only, within the price limits (deals without a price
+    drop out of a limited search). An empty `data` list gives an empty page."""
     ads = []
-    for th in _threads(page):
-        if th.get("isExpired") or th.get("type") == "Discussion" or th.get("deletedAt"):
+    for th in _threads(body):
+        if th.get("expired") or (th.get("type") or {}).get("type_universal_id") == "discussions":
             continue
         ad = parse_listing(th)
         if price_from is not None and (ad.price is None or ad.price < price_from):
@@ -147,9 +184,17 @@ class PreisjaegerClient(HttpPlatformClient):
     def classify(self, url: str) -> str:
         return classify(url)
 
-    async def search_page(self, params: dict[str, str], price_from: float | None, price_to: float | None, *,
-                          cache_s: float = 0) -> SearchPage:
-        r = await self._get(f"{WEB}/search", params=params, headers=PAGE_HEADERS, cache_s=cache_s, kind="search")
+    async def _signed_get(self, path: str, params: dict[str, str], *, kind: str, cache_s: float = 0):
+        url = f"{API}{path}"
+        header, qs = _sign("GET", url, params)
+        headers = {"Authorization": header, "Accept": "application/json", "User-Agent": APP_UA}
+        return await self._get(f"{url}?{qs}" if qs else url, headers=headers, cache_s=cache_s, kind=kind)
+
+    async def search_page(self, criteria: dict[str, Any], price_from: float | None, price_to: float | None, *,
+                          limit: int = 30, cache_s: float = 0) -> SearchPage:
+        params = {"criteria": json.dumps(criteria, separators=(",", ":")),
+                  "history_item_needed": "false", "limit": str(limit)}
+        r = await self._signed_get("/thread", params, kind="search", cache_s=cache_s)
         if r.status_code != 200:
             raise PlatformError(t("Preisjäger search returned HTTP {status}", status=r.status_code))
         return parse_search(r.text, price_from, price_to)
@@ -192,7 +237,7 @@ class PreisjaegerPlatform(Platform):
     locale = "de-AT"
     capabilities = frozenset({"search_url", "keyword_search", "images"})
     PAGE_SIZE_MAX = 30          # one result page of the deal list
-    CAN_PAGE = True
+    CAN_PAGE = False            # the mobile API pages by cursor, not page number; one page is plenty for a deal feed
     access = "http"
     min_interval_s = 300                      # deals come in slowly; the community needs minutes to post them
 
@@ -248,15 +293,19 @@ class PreisjaegerPlatform(Platform):
         spec.url = self._url(spec)
         return spec
 
+    def _criteria(self, spec: SearchSpec) -> dict[str, Any]:
+        return {"query": spec.keyword or "", "tab": "new", "only_discussions": False, "only_vouchers": False,
+                "only_non_expired": True, "whereabouts": "search"}
+
     async def search(self, spec: SearchSpec, *, rows: int | None = None, cache_s: float = 0,
                      page: int = 1) -> SearchPage:
-        from app.config import get_settings
-
-        params = self._params(spec, spec.sort)
-        if page > 1:                                # the deal list's own paging
-            params["page"] = str(page)
-        result = await self.client.search_page(params, spec.price_from, spec.price_to, cache_s=cache_s)
-        result.ads = result.ads[:rows or get_settings().search_rows]
+        want = rows or get_settings().search_rows
+        if page > 1:                                     # CAN_PAGE is False: the deal feed is a single page
+            return SearchPage(rows_found=0, ads=[], title=spec.keyword)
+        limit = min(want, self.PAGE_SIZE_MAX)
+        result = await self.client.search_page(self._criteria(spec), spec.price_from, spec.price_to,
+                                               limit=limit, cache_s=cache_s)
+        result.ads = result.ads[:want]
         result.title = spec.keyword
         return result
 
@@ -270,6 +319,9 @@ class PreisjaegerPlatform(Platform):
     def classify(self, url: str) -> str:
         return classify(url)
 
+    def status(self) -> dict[str, Any]:
+        return {**super().status(), "auth_source": oauth_creds()[2]}
+
     async def aclose(self) -> None:
         global _client
         if _client is not None:
@@ -277,4 +329,5 @@ class PreisjaegerPlatform(Platform):
             _client = None
 
 
-__all__ = ["PreisjaegerClient", "PreisjaegerPlatform", "get_client", "set_client", "parse_search", "parse_listing"]
+__all__ = ["PreisjaegerClient", "PreisjaegerPlatform", "get_client", "set_client", "parse_search", "parse_listing",
+           "oauth_creds"]

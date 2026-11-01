@@ -102,7 +102,7 @@ def test_kleinanzeigen_list_and_ad():
 
 
 def test_preisjaeger_is_inferred():
-    page = pj.parse_search((FIXTURES / "preisjaeger_search.html").read_text(encoding="utf-8"))
+    page = pj.parse_search((FIXTURES / "preisjaeger_search.json").read_text(encoding="utf-8"))
     assert {(a.item_condition, a.item_condition_label) for a in page.ads} == {("new", None)}
     assert condition.preisjaeger("Apple iPad Air refurbished") == ("refurbished", None)
     assert condition.preisjaeger("Ersatzteil-Set für Akkuschrauber") == ("new", None)

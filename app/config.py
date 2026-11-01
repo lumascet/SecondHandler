@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     platform_facebook_per_hour: int | None = 60     # own budget, below willhaben's
     kleinanzeigen_api_auth: str = ""            # "user:pw" of the kleinanzeigen app API (the app's own public creds);
     #                                             set here it wins over Settings → Platforms; none set: the agents are off
+    preisjaeger_oauth: str = ""                 # "key:secret" of the preisjaeger app API (the app's own public creds);
+    #                                             set here it wins over Settings → Platforms; empty: the bundled pair is used
     willhaben_app_key: str = ""                 # signs the willhaben app API's token request (from willhaben's Android app);
     #                                             set here it wins over Settings → willhaben; none: the browser does it all
     # --- VPN for the anonymous requests (app/platforms/vpn.py): WireGuard configs are uploaded in Settings → VPN

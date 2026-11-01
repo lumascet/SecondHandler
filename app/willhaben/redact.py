@@ -128,7 +128,8 @@ def redact_json(data: Any, ctx: RedactContext | None = None) -> Any:
                 o["value"] = "Erika"
             message = _is_message(o, parent)
             person = o.get("__typename") in PERSON_TYPES
-            if (o.get("name") in SELLER_PLUGINS or o.get("type") in SELLER_PLUGINS) and isinstance(o.get("data"), dict):
+            tags = {v for v in (o.get("name"), o.get("type")) if isinstance(v, str)}   # not Preisjäger's type object
+            if tags & SELLER_PLUGINS and isinstance(o.get("data"), dict):
                 seller = o["data"]
                 if isinstance(seller.get("name"), str) and seller["name"]:
                     ctx.names[seller["name"]] = "Erika M."

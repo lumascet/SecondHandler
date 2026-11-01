@@ -90,7 +90,7 @@ SHPOCK_ROUTES = [("/graphql", "shpock_search.json", "application/json"),
                  ("/i/asu6-t2hxq7bDRFz", "shpock_item.html", "text/html")]
 VINTED_ROUTES = [("/catalog", "vinted_catalog.rsc", "text/x-component"),
                  ("/items/10341874098", "vinted_item.rsc", "text/x-component")]
-PREISJAEGER_ROUTES = [("/search", "preisjaeger_search.html", "text/html")]
+PREISJAEGER_ROUTES = [("/rest_api/v2/thread", "preisjaeger_search.json", "application/json")]
 EBAY_ROUTES = [("/itmdesc/920036165580", "ebay_desc.html", "text/html"),
                ("/itm/920036165580", "ebay_item.html", "text/html"), ("/sch/i.html", "ebay_search.html", "text/html")]
 

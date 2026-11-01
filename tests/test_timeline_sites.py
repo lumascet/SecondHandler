@@ -88,11 +88,13 @@ def test_redaction_of_the_other_sites_formats():
     out = redact.redact_html(shpock, redact.RedactContext())
     assert "Max M." not in out and "Erika M." in out and "userA0000000001" not in out
     assert '"latitude":47.5' in out and "47.486998" not in out and "Apple IPhone 15 Pro" in out
-    pj = (FIXTURES / "preisjaeger_search.html").read_text(encoding="utf-8")
-    out = redact.redact_html(pj, redact.RedactContext())
-    assert "dealjaeger" not in out and "EKE Case" in out and out.count("data-vue3=") == pj.count("data-vue3=")
+    import json as _json
+    pj = _json.loads((FIXTURES / "preisjaeger_search.json").read_text(encoding="utf-8"))
+    clean = redact.redact_json(pj, redact.RedactContext())
+    dump = _json.dumps(clean, ensure_ascii=False)
+    assert "dealjaeger" not in dump and "EKE Case" in dump          # the poster's name is redacted, the shop kept
     from app.platforms import preisjaeger
-    assert [a.ad_id for a in preisjaeger.parse_search(out).ads] == ["369807", "369875", "369687", "369564"]   # still parses
+    assert [a.ad_id for a in preisjaeger.parse_search(clean).ads] == ["369807", "369875", "369687", "369564"]   # still parses
     page = (FIXTURES / "ebay_search.html").read_text(encoding="utf-8").replace("verkaeufer-2", "Echter.Haendler")
     out = redact.redact_html(page, redact.RedactContext())
     assert "Echter.Haendler" not in out and out.count("% positiv") == page.count("% positiv")

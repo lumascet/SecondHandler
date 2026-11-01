@@ -46,8 +46,8 @@ def test_the_sites_state_it():
     assert {a.shipping for a in shpock.parse_search(load("shpock_search.json")).ads} <= {"ship", "pickup", None}
     fb = facebook.parse_search((FIXTURES / "facebook_search.html").read_text(encoding="utf-8")).ads
     assert "pickup" in {a.shipping for a in fb}
-    pj = preisjaeger.parse_search((FIXTURES / "preisjaeger_search.html").read_text(encoding="utf-8")).ads
-    assert all(a.shipping in (None, "ship") for a in pj)
+    pj = preisjaeger.parse_search((FIXTURES / "preisjaeger_search.json").read_text(encoding="utf-8")).ads
+    assert pj and all(a.shipping is None and a.shipping_price is None for a in pj)   # the REST API states no shipping
 
 
 def test_ebay_asks_for_the_owners_postcode():
