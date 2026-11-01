@@ -117,11 +117,11 @@ def test_chat_list_filters_unread_awaiting_reply_and_drafts():
 
     with session() as db:
         for cid, name, unread in (("u", "Ungelesen-Person", 2), ("w", "Wartet-Person", 0), ("d", "Entwurf-Person", 0),
-                                  ("m", "Erledigt-Person", 0)):
+                                  ("m", "Erledigt-Person", 0), ("f", "Fertig-mit-Entwurf", 0)):
             db.add(Conversation(id=cid, partner_name=name, unread_count=unread, last_message_at=utcnow(), role="seller"))
         db.commit()
         at = utcnow()
-        for cid, direction in (("w", "out"), ("w", "in"), ("m", "in"), ("d", "in")):
+        for cid, direction in (("w", "out"), ("w", "in"), ("m", "in"), ("d", "in"), ("f", "in")):
             at += timedelta(seconds=1)
             db.add(Message(conversation_id=cid, ext_id=f"{cid}{at.timestamp()}", direction=direction, text="x", created_at=at))
         at += timedelta(seconds=1)
@@ -129,17 +129,21 @@ def test_chat_list_filters_unread_awaiting_reply_and_drafts():
         db.add(Message(conversation_id="m", ext_id="m-notice", direction="in", text="notice", kind="system",
                        created_at=at + timedelta(seconds=1)))          # a site notice does not count as their message
         db.add(Draft(conversation_id="d", text="Ja"))
+        db.add(Draft(conversation_id="f", text="Ja"))                  # a draft left over on a finished deal
+        # "f" is finished (marked), yet still carries a draft: it must not nag from the action filters
+        db.get(Conversation, "f").finished_at = at + timedelta(seconds=2)
         db.commit()
     set_setting("chats_app_seen_since", (at + timedelta(seconds=5)).isoformat())   # all of it seen in the app
-    names = ("Ungelesen-Person", "Wartet-Person", "Entwurf-Person", "Erledigt-Person")
+    names = ("Ungelesen-Person", "Wartet-Person", "Entwurf-Person", "Erledigt-Person", "Fertig-mit-Entwurf")
     with TestClient(app) as c:
         def shown(url):
             page = c.get(url).text.split('id="chat-list-items"')[1]
             return {n for n in names if n in page}
-        assert shown("/chats") == set(names)
+        assert shown("/chats") == set(names)                          # a finished-today chat still shows in the list
         assert shown("/chats?show=unread") == {"Ungelesen-Person"}
         assert shown("/chats?show=reply") == {"Wartet-Person", "Entwurf-Person"}   # my move: they wrote, or a draft waits
-        assert shown("/chats?show=draft") == {"Entwurf-Person"}
+        assert shown("/chats?show=draft") == {"Entwurf-Person"}                     # the finished deal's draft is not here
+        assert shown("/chats?show=finished") == {"Fertig-mit-Entwurf"}
         assert shown("/chats?show=reply&role=buyer") == set()
         assert 'href="/chats?role=seller&amp;show=reply"' in c.get("/chats?show=reply").text
 

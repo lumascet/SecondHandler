@@ -845,7 +845,7 @@ def badge_counts(db) -> dict[str, int]:
     o = overview(db)
     ids = {c.id for c in o["shown"]}
     return {"chats": sum(n for cid, n in o["unread"].items() if cid in ids),
-            "chats_action": len(ids & (o["waiting"] | o["open_drafts"]))}
+            "chats_action": len(ids & (o["waiting"] | o["open_drafts"]) - o["finished"])}
 
 
 def summary_counts(db) -> tuple[int, int]:
@@ -853,7 +853,7 @@ def summary_counts(db) -> tuple[int, int]:
     only, several drafts of one chat once (the list's "Draft" filter)."""
     o = overview(db)
     ids = {c.id for c in o["shown"]}
-    return sum(n for cid, n in o["unread"].items() if cid in ids), len(ids & o["open_drafts"])
+    return sum(n for cid, n in o["unread"].items() if cid in ids), len(ids & o["open_drafts"] - o["finished"])
 
 
 _clear_tasks: set[asyncio.Task] = set()

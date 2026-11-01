@@ -83,8 +83,8 @@
                          and (not role_filter or c.role == role_filter)
                          and ((not show_filter and (c.id not in finished or c.id in finished_fresh)) or show_filter == 'all'
                               or (show_filter == 'finished' and c.id in finished)
-                              or (show_filter == 'unread' and unread_by_chat.get(c.id)) or (show_filter == 'reply' and (c.id in waiting or c.id in open_drafts))
-                              or (show_filter == 'draft' and c.id in open_drafts)) %}
+                              or (show_filter == 'unread' and unread_by_chat.get(c.id)) or (show_filter == 'reply' and c.id not in finished and (c.id in waiting or c.id in open_drafts))
+                              or (show_filter == 'draft' and c.id in open_drafts and c.id not in finished)) %}
     <a href="/chats/{{ c.id }}{{ filter_q }}" @click="rowClick($event)"
        hx-get="/chats/{{ c.id }}{{ filter_q }}" hx-target="#chat-pane" hx-select="#chat-pane" hx-swap="outerHTML" hx-select-oob="#chat-list-items,#chat-live" hx-push-url="true" hx-trigger="open-row"
        class="grid w-full grid-cols-[56px_minmax(0,1fr)_auto] items-start gap-3 rounded-[10px] p-2.5 text-base-content no-underline hover:bg-hover {{ 'bg-brand-soft' if conv is defined and conv and conv.id == c.id else '' }}"
