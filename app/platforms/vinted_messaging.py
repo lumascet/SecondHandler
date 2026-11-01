@@ -16,6 +16,8 @@ falls back to the browser tab and leaves re-login to site_accounts. The browser 
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -27,6 +29,8 @@ AUTH_COOKIES = ("access_token_web", "_vinted_fr_session", "v_sid")   # any one m
 WEB = "https://www.vinted.at"
 REFRESH_URL = f"{WEB}/web/api/auth/refresh"
 STATE_FILE = "vinted-native.json"         # the owned jar persisted to disk (mode 600), like willhaben-native.json
+CONNECT_TIMEOUT_S = 20                     # bound on getting the first response when opening the SSE stream
+READ_IDLE_S = 40                           # heartbeats arrive ~every 12s; no data this long = a dead stream, reconnect
 
 _jar: dict[str, str] = {}                 # the owned cookie jar (name -> value), the single source of truth
 _anon: str | None = None
@@ -235,17 +239,34 @@ async def subscribe(sess: Any, on_event: Callable[[str], Any], *, open_cb: Calla
         buf = [""]
         try:
             async with AsyncSession(impersonate="chrome") as s:
-                async with s.stream("GET", url, headers=headers, timeout=None) as r:
+                cm = s.stream("GET", url, headers=headers, timeout=None)   # no total timeout: the stream is long-lived
+                try:
+                    r = await asyncio.wait_for(cm.__aenter__(), CONNECT_TIMEOUT_S)   # but bound the connect itself
+                except Exception as e:  # noqa: BLE001 - timeout or connection error: reconnect
+                    log.info("vinted sse: connect failed (%s)", type(e).__name__)
+                    return 0
+                try:
                     if r.status_code in (401, 403) and attempt == 0 and await _refresh(sess):
                         continue                       # token renewed: reconnect with the fresh cookies
                     if open_cb:
                         await _maybe_await(open_cb(r.status_code))
                     if r.status_code != 200:
                         return r.status_code
-                    async for chunk in r.aiter_content():
+                    it = r.aiter_content()
+                    while True:
+                        try:
+                            chunk = await asyncio.wait_for(it.__anext__(), READ_IDLE_S)   # heartbeats keep it alive
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            log.info("vinted sse: no data within %ds, reconnecting", READ_IDLE_S)
+                            break
                         text = chunk.decode("utf-8", "replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
                         for data in sse_events(text, buf):
                             await _maybe_await(on_event(data))
+                finally:
+                    with contextlib.suppress(Exception):
+                        await cm.__aexit__(None, None, None)
         except Exception as e:  # noqa: BLE001 - the stream dropped; the caller reconnects
             log.info("vinted sse: stream ended (%s)", type(e).__name__)
             return 0
