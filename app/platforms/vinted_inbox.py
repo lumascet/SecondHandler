@@ -839,13 +839,13 @@ async def _live_loop() -> None:
                     log.info("vinted live: stream refused (%s)", status)
 
             status = await vinted_messaging.subscribe(sess, lambda d: _live_spawn(_on_sse(d)), open_cb=opened)
-            if status in (401, 403):
-                live.update(state=f"refused {status}", since=utcnow())
-                await asyncio.sleep(LIVE_BACKOFF_S)
-            else:
+            if status in (200, 0):               # clean stream end or a transient connect error: reconnect soon
                 if live.get("state") == "connected":
                     live.update(state="reconnecting", since=utcnow())
                 await asyncio.sleep(RECONNECT_S)
+            else:                                 # 401/403/404/5xx: a refusing or missing endpoint — back off, don't hammer
+                live.update(state=f"refused {status}", since=utcnow())
+                await asyncio.sleep(LIVE_BACKOFF_S)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 - keep the stream alive across any error
