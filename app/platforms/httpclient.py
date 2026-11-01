@@ -159,6 +159,9 @@ class Lane:
 
 _lane: ContextVar[Lane | None] = ContextVar("vpn_lane", default=None)
 _lane_limiters: dict[tuple[str, str], RateLimiter] = {}
+# the logged-in session's own direct request (Vinted messaging): paced on its own limiter, so an anonymous search
+# block (403 on the shared limiter) never pauses chat and a chat bot-protection 403 never pauses the search
+_authed: ContextVar[bool] = ContextVar("authed_request", default=False)
 
 
 def lane_limiter(pid: str, server: str, like: RateLimiter) -> RateLimiter:
@@ -293,6 +296,7 @@ class HttpPlatformClient:
         self.name = name or platform_id
         self.channel = channel
         self._limiter = limiter
+        self._authed_lim: RateLimiter | None = None   # the logged-in session's limiter, built on first direct request
         self.session_s = session_s
         self._cache: dict[Any, tuple[float, FetchResponse]] = {}
         headers = headers or {}
@@ -316,13 +320,24 @@ class HttpPlatformClient:
 
     @property
     def limiter(self) -> RateLimiter:
-        """The site's limiter – within a lane of this site (parallel work) the lane's server's own."""
+        """The site's limiter – within a lane of this site (parallel work) the lane's server's own; for the logged-in
+        session's own request (direct=True) its own, kept apart from the anonymous search's cool-down and strikes."""
+        if _authed.get():
+            return self._authed_limiter()
         ln = self._lane()
         return ln.limiter if ln is not None else self._limiter
 
     @limiter.setter
     def limiter(self, value: RateLimiter) -> None:
         self._limiter = value
+
+    def _authed_limiter(self) -> RateLimiter:
+        """The logged-in session's limiter: the site's pacing, but its OWN cool-down and strikes, so a search 403
+        (the shared limiter) does not pause chat and a chat bot-protection 403 does not pause the search."""
+        if self._authed_lim is None:
+            base = self._limiter
+            self._authed_lim = RateLimiter(base.min_gap_s, 0, base.max_wait_s, name=self.name or self.platform)
+        return self._authed_lim
 
     def _lane(self) -> Lane | None:
         ln = _lane.get()
@@ -456,24 +471,30 @@ class HttpPlatformClient:
             return replay.as_fetch_response(rec, full)
         # `direct`: a logged-in request (the Vinted messaging API with the session's own cookies) goes from the home
         # IP like the browser login, never through the anonymous VPN exit — a rotating datacenter IP on an
-        # authenticated session is what the bot protection blocks (403), which took the chat offline
-        tunnel, r = (None if direct else self._tunnel()), None
-        if tunnel is None:
-            if not direct and _trial.get() is not None:   # the VPN test: never from the home IP, even after the switch went off
-                raise PlatformError(t("{name}: the VPN is off, the test sends nothing directly", name=self.name))
-            try:
-                r = await self._send_once(full, kind, headers, None, force_direct=direct)
-            except ExitMoved:                   # the VPN was switched on while it waited: through the VPN after all
-                if direct or (tunnel := self._tunnel()) is None:   # a direct request stays direct
-                    raise
-            except TransportError as e:
-                raise PlatformError(t("Network error: {error}", error=e)) from e
-        if r is None:
-            r = await self._send_vpn(tunnel, full, kind, headers, valid)
-        self._check_status(r)
-        if r.status_code == 200 and valid is not None and not valid(r):
-            return r                            # no answer to keep, and no sign that the site lets us in again
-        self.limiter.reward()
+        # authenticated session is what the bot protection blocks (403), which took the chat offline. It is also
+        # paced on its own limiter (_authed), so an anonymous search block does not pause chat, nor chat the search.
+        tok = _authed.set(True) if direct else None
+        try:
+            tunnel, r = (None if direct else self._tunnel()), None
+            if tunnel is None:
+                if not direct and _trial.get() is not None:   # the VPN test: never from the home IP, even after the switch went off
+                    raise PlatformError(t("{name}: the VPN is off, the test sends nothing directly", name=self.name))
+                try:
+                    r = await self._send_once(full, kind, headers, None, force_direct=direct)
+                except ExitMoved:                   # the VPN was switched on while it waited: through the VPN after all
+                    if direct or (tunnel := self._tunnel()) is None:   # a direct request stays direct
+                        raise
+                except TransportError as e:
+                    raise PlatformError(t("Network error: {error}", error=e)) from e
+            if r is None:
+                r = await self._send_vpn(tunnel, full, kind, headers, valid)
+            self._check_status(r)
+            if r.status_code == 200 and valid is not None and not valid(r):
+                return r                            # no answer to keep, and no sign that the site lets us in again
+            self.limiter.reward()
+        finally:
+            if tok is not None:
+                _authed.reset(tok)
         if cache_s and r.status_code in (200, 404):
             now = time.monotonic()
             if len(self._cache) > 200:

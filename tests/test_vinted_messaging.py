@@ -125,6 +125,32 @@ async def test_a_403_reseeds_the_datadome_and_does_not_log_out(monkeypatch):
     assert seeded["n"] == 1 and vm._jar["datadome"] == "dd2"                                 # but the jar is healed
 
 
+async def test_a_search_block_does_not_pause_chat():
+    """The anonymous search and the logged-in chat pace on separate limiters: a 403 that paused the search limiter
+    (a long cool-down) must not stop a chat read — the logged-in session has its own limiter."""
+    c = vi.VintedClient(transport=Queue([(200, b'{"conversations":[]}')]))
+    c.limiter = RateLimiter(0, name="Vinted")
+    c.limiter.penalize()                                     # a search block: the shared limiter is now cooling down
+    vi.set_client(c)
+    assert c.limiter.cooling_down_s > 0                      # a search call would be refused
+    assert await vm.inbox(_sess([{"name": "access_token_web", "value": "t"}])) == {"conversations": []}
+
+
+async def test_a_chat_403_does_not_pause_the_search(monkeypatch):
+    """A bot-protection 403 on the chat pauses only the chat's own limiter, never the shared search limiter, so a
+    datadome refusal on the owner's session does not also stall the anonymous product search."""
+    async def reseed(sess):
+        return True
+    monkeypatch.setattr(vm, "seed_from_browser", reseed)
+    c = vi.VintedClient(transport=Queue([(403, b"datadome")]))
+    c.limiter = RateLimiter(0, name="Vinted")
+    vi.set_client(c)
+    vm._jar.update({"access_token_web": "t"})
+    assert await vm.inbox(_sess([{"name": "access_token_web", "value": "t"}])) is None   # 403 -> reseed, fall back
+    assert c.limiter.cooling_down_s == 0                     # the search limiter was left untouched
+    assert c._authed_limiter().cooling_down_s > 0            # the chat paused itself instead
+
+
 def test_jar_persists_across_a_restart(monkeypatch, tmp_path):
     p = tmp_path / "vinted-native.json"
     monkeypatch.setattr(vm, "_state_path", lambda: p)
