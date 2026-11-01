@@ -5,6 +5,7 @@ Telegram message. If Claude fails, hits are notified as before (fail open: no hi
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import tempfile
@@ -281,13 +282,20 @@ async def screen(agent_id: int, hits: list[Hit]) -> int:
 
 
 async def screen_all(agent_id: int, hits: list[Hit]) -> set[int]:
-    """Screen up to MAX_PER_RUN hits, MAX_PER_CALL per Claude call. Returns the ids Claude was sent: a call that judged
-    none (failed) counts, its hits fail open, but ends the round; the hits after it are not sent."""
-    asked: set[int] = set()
+    """Screen up to MAX_PER_RUN hits, MAX_PER_CALL per Claude call. The first call runs alone — if it fails (a backend
+    outage) the round ends so the rest stay pending instead of all failing open — then the remaining calls run in
+    parallel (disjoint hit sets). Returns the ids Claude was sent."""
     hits = hits[:MAX_PER_RUN]
-    for i in range(0, len(hits), MAX_PER_CALL):
-        part = hits[i:i + MAX_PER_CALL]
-        asked |= {h.id for h in part}
-        if not await screen(agent_id, part):
-            break
+    if not hits:
+        return set()
+    parts = [hits[i:i + MAX_PER_CALL] for i in range(0, len(hits), MAX_PER_CALL)]
+    asked = {h.id for h in parts[0]}
+    if not await screen(agent_id, parts[0]):          # first call failed: end the round (outage circuit-breaker)
+        return asked
+    rest = parts[1:]
+    if rest:
+        for r in await asyncio.gather(*(screen(agent_id, part) for part in rest), return_exceptions=True):
+            if isinstance(r, Exception):    # one chunk's error must not orphan the siblings mid-commit
+                log.warning("screening chunk failed for agent %s: %s", agent_id, r)
+        asked |= {h.id for part in rest for h in part}
     return asked

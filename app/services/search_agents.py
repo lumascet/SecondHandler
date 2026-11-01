@@ -1626,19 +1626,37 @@ async def check_hits(hit_ids: list[int], job: Any = None) -> dict[str, int]:
         seen.add(key)
         todo.append(h)
     out = {"checked": 0, "online": 0, "gone": 0, "failed": 0}
-    for i, h in enumerate(todo, 1):
-        if job is not None:
-            job.progress(i - 1, t("Checking {title}", title=(h.heading or h.ad_id)[:50]), None)
-        try:
-            d = await _site(h.platform).detail(h.ad_id, url=h.url)
-        except Exception as e:  # noqa: BLE001 - one ad must not stop the others
-            log.info("availability of hit %s not loaded: %s", h.id, e)
-            out["failed"] += 1
-            continue
-        status = site_status(d)
-        record_status(h.platform or "willhaben", h.ad_id, status, d)
-        out["checked"] += 1
-        out["online" if status == "active" else "gone"] += 1
+    if not todo:
+        return out
+    # Group by platform and run the platforms concurrently: each platform's own RateLimiter still serializes its
+    # requests at its min_gap (no site sees a higher rate), but hits on different platforms no longer wait behind
+    # each other — the scan was one serial loop over all 100 hits before.
+    by_platform: dict[str, list[Hit]] = {}
+    for h in todo:
+        by_platform.setdefault(h.platform or "willhaben", []).append(h)
+    done = [0]
+
+    async def _run_platform(pid: str, hits: list[Hit]) -> dict[str, int]:
+        res = {"checked": 0, "online": 0, "gone": 0, "failed": 0}
+        for h in hits:                      # serial within a platform; its limiter paces it anyway
+            if job is not None:
+                job.progress(done[0], t("Checking {title}", title=(h.heading or h.ad_id)[:50]), None)
+            try:
+                d = await _site(pid).detail(h.ad_id, url=h.url)
+            except Exception as e:  # noqa: BLE001 - one ad must not stop the others
+                log.info("availability of hit %s not loaded: %s", h.id, e)
+                res["failed"] += 1
+            else:
+                status = site_status(d)
+                record_status(pid, h.ad_id, status, d)
+                res["checked"] += 1
+                res["online" if status == "active" else "gone"] += 1
+            done[0] += 1
+        return res
+
+    for res in await asyncio.gather(*(_run_platform(pid, hits) for pid, hits in by_platform.items())):
+        for k in out:
+            out[k] += res[k]
     return out
 
 
