@@ -104,26 +104,62 @@ async def test_http_error_without_refresh(monkeypatch):
 
 
 async def test_a_403_reseeds_the_datadome_and_does_not_log_out(monkeypatch):
-    """A 403 is the bot-protection cookie (datadome), not a logout: the limiter then pauses Vinted (no in-call retry),
-    so re-seed the datadome from the logged-in browser for the next attempt and leave the login untouched."""
-    seeded = {"n": 0}
+    """A 403 is the bot-protection cookie (datadome), not a logout: the limiter then pauses Vinted (no in-call retry);
+    a browser page (a turn: it gets the login and gives the new datadome back) fetches a fresh one for the next try."""
+    fresh = {"n": 0}
 
-    async def reseed(sess):
-        seeded["n"] += 1
-        vm._jar.update({"access_token_web": "fresh", "datadome": "dd2"})
-        return True
+    async def datadome(sess):
+        fresh["n"] += 1
+        vm._jar["datadome"] = "dd2"
 
     async def never_logout(sess):
         raise AssertionError("a 403 must not log the session out")
 
-    monkeypatch.setattr(vm, "seed_from_browser", reseed)
+    monkeypatch.setattr(vm, "_fresh_datadome", datadome)
     monkeypatch.setattr(vm, "_mark_logged_out", never_logout)
     vm._jar.update({"access_token_web": "stale"})
     c = vi.VintedClient(transport=Queue([(403, b"datadome")]))
     c.limiter = RateLimiter(0, name="Vinted")
     vi.set_client(c)
     assert await vm.inbox(_sess([{"name": "access_token_web", "value": "stale"}])) is None   # falls back this time
-    assert seeded["n"] == 1 and vm._jar["datadome"] == "dd2"                                 # but the jar is healed
+    assert fresh["n"] == 1 and vm._jar["datadome"] == "dd2"                                  # but the jar is healed
+
+
+class TurnCtx:
+    """A browser context that remembers what it got (add_cookies) and what a page left behind."""
+    def __init__(self, cookies):
+        self.store = {c["name"]: dict(c) for c in cookies}
+
+    async def cookies(self, urls=None):
+        return [dict(c) for c in self.store.values()]
+
+    async def add_cookies(self, cookies):
+        for c in cookies:
+            self.store[c["name"]] = dict(c)
+
+
+async def test_the_browser_borrows_the_login_and_gives_it_back(monkeypatch, tmp_path):
+    """One holder: before a Vinted page the browser gets the jar's current token (not its own stale one), after it the
+    jar takes back what the page left (the web app refreshed it), and the jar does not refresh meanwhile."""
+    monkeypatch.setattr(vm, "_state_path", lambda: tmp_path / "v.json")
+    ctx = TurnCtx([{"name": "access_token_web", "value": "old", "domain": ".vinted.at", "path": "/"},
+                   {"name": "refresh_token_web", "value": "r-old", "domain": ".vinted.at", "path": "/"}])
+    sess = SimpleNamespace(context=ctx)
+    vm._jar.update({"access_token_web": "t2", "refresh_token_web": "r2"})
+    async with vm.browser_turn(sess):
+        assert ctx.store["access_token_web"]["value"] == "t2" and ctx.store["refresh_token_web"]["value"] == "r2"
+        assert await vm._refresh(sess) is None                       # the browser holds it now: no second refresh
+        ctx.store["access_token_web"]["value"] = "t3"               # the page's web app refreshed it
+        ctx.store["refresh_token_web"]["value"] = "r3"
+    assert vm._jar["access_token_web"] == "t3" and vm._jar["refresh_token_web"] == "r3"
+
+
+async def test_an_empty_jar_does_not_overwrite_a_new_browser_login(monkeypatch, tmp_path):
+    monkeypatch.setattr(vm, "_state_path", lambda: tmp_path / "v.json")
+    ctx = TurnCtx([{"name": "access_token_web", "value": "new-login", "domain": ".vinted.at", "path": "/"}])
+    async with vm.browser_turn(SimpleNamespace(context=ctx)):
+        pass
+    assert ctx.store["access_token_web"]["value"] == "new-login" and vm._jar["access_token_web"] == "new-login"
 
 
 async def test_a_search_block_does_not_pause_chat():

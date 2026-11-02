@@ -69,6 +69,12 @@ async def explore(delay_s: float = 0) -> dict[str, Any] | None:
     sess = get_session()
     if not sess.started:
         return None
+    from app.platforms import vinted_messaging
+    async with vinted_messaging.browser_turn(sess):
+        return await _explore(sess)
+
+
+async def _explore(sess: Any) -> dict[str, Any] | None:
     inbox = await sess.read_hidden(f"{ORIGIN}/inbox", r"Posteingang|Nachrichten|Inbox",
                                    timeout_ms=30000, keep=_vinted_data,
                                    allow=_allow, deny=_deny)
@@ -494,10 +500,17 @@ async def _catch(url: str, part: str, timeout_ms: int = 30000, extra: dict[str, 
     `extra`: gets the page's order call too ("escrow": escrow_order with current_user_side), when it makes one.
     `untranslate_cid`: if that conversation came machine-translated, turn Vinted's translation off and read it afresh,
     so the original foreign text comes through (the app translates it itself)."""
+    from app.platforms import vinted_messaging
     from app.willhaben.session import get_session
 
     sess = get_session()
     sess._require()
+    async with vinted_messaging.browser_turn(sess):    # the page borrows the app's login, gives back what it left
+        return await _catch_in_turn(sess, url, part, timeout_ms, extra, untranslate_cid)
+
+
+async def _catch_in_turn(sess: Any, url: str, part: str, timeout_ms: int, extra: dict[str, Any] | None,
+                         untranslate_cid: str | None) -> dict[str, Any] | None:
     ui = sess.ui_page
     sess._creating_internal = True
     try:

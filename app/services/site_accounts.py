@@ -173,7 +173,14 @@ async def check(pid: str) -> dict[str, Any]:
     site = SITES[pid]
     sess = get_session()
     try:
-        final, text = await sess.load_hidden(site.check_url, with_text=True)
+        if pid == "vinted":           # the page borrows the app's login and gives back what it left (one holder)
+            from app.platforms import vinted_messaging
+            async with vinted_messaging.browser_turn(sess):
+                final, text = await sess.load_hidden(site.check_url, with_text=True)
+                if not (logged_out_url(site, final) or _BLOCKED.search(text or "")):
+                    await _close_login_tab(sess, pid)
+        else:
+            final, text = await sess.load_hidden(site.check_url, with_text=True)
     except SessionUnavailable as e:
         return _save(pid, None, str(e))
     except Exception as e:  # noqa: BLE001 - a timeout or a closed browser: unknown, said so
@@ -189,6 +196,17 @@ async def check(pid: str) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 - keeping them is a nicety
         log.info("%s session cookies not kept: %s", site.name, e)
     return _save(pid, True)
+
+
+async def _close_login_tab(sess: Any, pid: str) -> None:
+    """The login is done: the site's login tab goes, so its web app does not keep refreshing the token behind the
+    app's back (Vinted: one holder, vinted_messaging)."""
+    page = sess.site_pages.pop(pid, None) if getattr(sess, "site_pages", None) else None
+    if page is not None:
+        try:
+            await page.close()
+        except Exception:  # noqa: BLE001 - already gone
+            pass
 
 
 async def check_job() -> None:

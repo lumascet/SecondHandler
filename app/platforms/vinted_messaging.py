@@ -8,11 +8,15 @@ Everything the old live/sync browser tabs did is done here with curl_cffi and th
               events ({message_type: refresh_inbox | refresh_conversation, data:{conversation_id}}) drive the reads.
   * refresh – POST www.vinted.at/web/api/auth/refresh to renew the access token, since no tab keeps it alive.
 
-The cookies are an owned jar: seeded from the browser's Playwright context (the Vinted login lives there), kept fresh
-by the refresh call, and PERSISTED to disk (data/vinted-native.json, like willhaben-native.json) so the rotated
-refresh token survives a restart — on start the jar is loaded from disk, not re-seeded from the (by then stale)
-browser cookie. A successful call re-asserts the login flag; a 401 that neither refresh nor a browser re-seed can fix
-falls back to the browser tab and leaves re-login to site_accounts. The browser is touched only for login.
+The login has ONE holder at a time: this jar. Vinted rotates the refresh token on every refresh and refuses (HTTP 400)
+one that was used already – the session is then gone for everybody. While the browser's Vinted pages refreshed the
+same token on their own, whoever came second killed the login (every login lasted a few hours, 11-01/02). So the jar
+owns it: it alone refreshes, it is PERSISTED to disk (data/vinted-native.json) so the rotated token survives a
+restart, and the browser only borrows it: every page the app opens on Vinted (sending a reply, a listing, an offer,
+the login check, a fallback read) runs inside browser_turn(), which gives the browser the jar's current cookies
+first, takes back what the page left (its web app may have refreshed them meanwhile) and keeps the jar from
+refreshing during the turn. The jar is seeded from the browser only when it has no login (right after the owner
+logged in there). A 401 the refresh cannot fix is a logout (pushed by the watchdog); the owner logs in again.
 """
 from __future__ import annotations
 
@@ -21,7 +25,8 @@ import contextlib
 import json
 import logging
 import os
-from typing import Any, Callable
+from contextvars import ContextVar
+from typing import Any, AsyncIterator, Callable
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +41,55 @@ READ_IDLE_S = 40                           # heartbeats arrive ~every 12s; no da
 _jar: dict[str, str] = {}                 # the owned cookie jar (name -> value), the single source of truth
 _anon: str | None = None
 _loaded = False                           # whether the on-disk jar has been read this process
+_owner: asyncio.Lock | None = None         # held by a refresh and by a browser turn: never both at once
+_turn: ContextVar[bool] = ContextVar("vinted_browser_turn", default=False)
+
+
+def _lock() -> asyncio.Lock:
+    global _owner
+    if _owner is None:
+        _owner = asyncio.Lock()
+    return _owner
+
+
+@contextlib.asynccontextmanager
+async def browser_turn(sess: Any) -> AsyncIterator[None]:
+    """The browser's turn with the Vinted login: the jar's cookies go into the browser before the page loads, the
+    page's cookies come back into the jar after (the web app may have refreshed the token), and no refresh of the jar
+    runs in between. Every Vinted page the app opens goes through here; nested turns share the outer one."""
+    if _turn.get() or getattr(sess, "context", None) is None:
+        yield
+        return
+    async with _lock():
+        tok = _turn.set(True)
+        try:
+            await _push_to_browser(sess)
+            yield
+        finally:
+            try:
+                await seed_from_browser(sess)       # what the page left: a refreshed token, a new datadome cookie
+            finally:
+                _turn.reset(tok)
+
+
+async def _push_to_browser(sess: Any) -> None:
+    """The jar's values into the browser's Vinted cookies (only when the jar holds a login: an empty jar must not
+    overwrite a login the owner just made in the browser)."""
+    from app.platforms.vinted import MSG_API
+
+    _load_once()
+    if not _logged_in():
+        return
+    try:
+        have = await sess.context.cookies([MSG_API, WEB])
+        names = {c["name"] for c in have}
+        put = [{**c, "value": _jar[c["name"]]} for c in have if c["name"] in _jar and c.get("value") != _jar[c["name"]]]
+        put += [{"name": k, "value": v, "domain": ".vinted.at", "path": "/", "secure": True}
+                for k, v in _jar.items() if k in AUTH_COOKIES and k not in names]
+        if put:
+            await sess.context.add_cookies(put)
+    except Exception as e:  # noqa: BLE001 - no browser: the page loads with what it has
+        log.info("vinted: cookies not handed to the browser (%s)", type(e).__name__)
 
 
 def _cookie_header() -> str:
@@ -116,18 +170,26 @@ async def seed_from_browser(sess: Any) -> bool:
     return True
 
 
-async def _ensure(sess: Any) -> bool:
-    """A usable jar: in memory, else the one persisted last run (its rotated token is current), else the browser."""
+def _load_once() -> None:
+    """The jar persisted last run (its rotated token is the current one), once per process."""
     global _anon, _loaded
+    if _loaded or _logged_in():
+        _loaded = True
+        return
+    _loaded = True
+    st = _load_persisted()
+    jar = st.get("jar")
+    if isinstance(jar, dict) and any(k in jar for k in AUTH_COOKIES):
+        _jar.update(jar)
+        _anon = st.get("anon")
+
+
+async def _ensure(sess: Any) -> bool:
+    """A usable jar: in memory, else the one persisted last run, else (no login held yet: the owner just logged in)
+    the browser's."""
+    _load_once()
     if _logged_in():
         return True
-    if not _loaded:
-        _loaded = True
-        jar = _load_persisted().get("jar")
-        if isinstance(jar, dict) and any(k in jar for k in AUTH_COOKIES):
-            _jar.update(jar)
-            _anon = _load_persisted().get("anon")
-            return True
     return await seed_from_browser(sess)
 
 
@@ -135,6 +197,15 @@ async def _refresh(sess: Any) -> bool | None:
     """Renew the access token over HTTP and merge the new cookies into the jar. Tri-state: True = refreshed; False =
     the refresh token was genuinely rejected (4xx: the caller may re-seed from the browser); None = a transient
     failure (exception or 5xx) — keep the (still-good) persisted token, do NOT re-seed."""
+    if not _jar:
+        return False
+    if _turn.get():
+        return None                                    # the browser holds the login right now: not a second refresh
+    async with _lock():                                # never while a browser page has the login
+        return await _refresh_locked()
+
+
+async def _refresh_locked() -> bool | None:
     if not _jar:
         return False
     from curl_cffi.requests import AsyncSession
@@ -163,21 +234,31 @@ async def _refresh(sess: Any) -> bool | None:
 
 
 async def _renew(sess: Any) -> bool | None:
-    """A 401: renew the access token. The refresh first (the jar's rotated refresh token is the current one), the
-    browser only when the refresh was rejected, and only a token different from the refused one counts — the browser
-    handing back the same stale cookie made every retry 401 again and the refresh never ran (logged out for nothing).
-    True = renewed, None = a transient refresh failure (keep the token), False = could not renew."""
+    """A 401: the jar refreshes its token (it is the only holder). Rejected: the jar's login is dead – only a login the
+    owner made in the browser since (another token) can replace it. True = renewed, None = a transient refresh
+    failure (keep the token), False = logged out."""
+    before = _jar.get("access_token_web")
     rr = await _refresh(sess)
     if rr is not False:
         return rr
-    before = _jar.get("access_token_web")
-    if await seed_from_browser(sess) and _jar.get("access_token_web") != before:
+    _jar.clear()                                       # dead: not handed to the browser, not taken back
+    if await seed_from_browser(sess) and _jar.get("access_token_web") not in (None, before):
         return True
     return False
 
 
+async def _fresh_datadome(sess: Any) -> None:
+    """A 403 is the bot protection's cookie: a Vinted page in the browser (a turn: it gets the login and gives the
+    new datadome cookie back)."""
+    if getattr(sess, "context", None) is None:
+        return
+    from app.services import site_accounts
+    await site_accounts.check("vinted")
+
+
 async def _mark_logged_out(sess: Any) -> None:
     _jar.clear()
+    _persist()                                        # on disk too: the live stream then waits for a new login
     try:
         from app.services import site_accounts
 
@@ -200,9 +281,9 @@ async def _get(sess: Any, path: str) -> dict[str, Any] | None:
             r = await vinted.get_client().messaging_get(path, _cookie_header(), _anon)
         except Blocked:
             # a 403/429 bot-protection refusal: the limiter now pauses Vinted, so an in-call retry cannot go out.
-            # Re-seed the datadome cookie from the logged-in browser (home IP) so the NEXT attempt gets through; the
-            # SSE stream, which does not use this limiter, reconnects at once with the same fresh jar.
-            await seed_from_browser(sess)
+            # A fresh datadome cookie from a browser page (home IP) for the NEXT attempt; the SSE stream, which does
+            # not use this limiter, reconnects at once with it.
+            await _fresh_datadome(sess)
             return None
         except Exception as e:  # noqa: BLE001 - network/transport
             log.info("vinted api %s failed (%s)", path, type(e).__name__)
@@ -279,10 +360,12 @@ async def subscribe(sess: Any, on_event: Callable[[str], Any], *, open_cb: Calla
                     if r.status_code == 401 and attempt == 0 and await _renew(sess) is True:
                         continue                       # an expired token: refreshed (or a new one from the browser)
                     if r.status_code == 403 and attempt == 0:
-                        # 403 is the bot-protection cookie (datadome), not a dead token: re-seed from the logged-in
-                        # browser first (fresh datadome from the home IP), fall back to the token refresh
-                        if await seed_from_browser(sess) or await _refresh(sess) is True:
-                            continue                   # re-seeded or refreshed: reconnect
+                        # 403 is the bot-protection cookie (datadome), not a dead token: a fresh one from a browser
+                        # page (home IP), else the token refresh
+                        before = _jar.get("datadome")
+                        await _fresh_datadome(sess)
+                        if _jar.get("datadome") != before or await _refresh(sess) is True:
+                            continue                   # a new datadome cookie or token: reconnect
                         # the browser is logged out and the refresh was transient: back off and retry later
                     if open_cb:
                         await _maybe_await(open_cb(r.status_code))

@@ -562,6 +562,9 @@ class BrowserSession:
         self.ui_page = page
         self.touch_ui()
         await page.bring_to_front()
+        if pid == "vinted":           # the app's current login (it holds it: vinted_messaging), not a stale copy
+            from app.platforms import vinted_messaging
+            await vinted_messaging._push_to_browser(self)
         await page.goto(url, wait_until="domcontentloaded")
 
     def site_of(self, url: str) -> str | None:

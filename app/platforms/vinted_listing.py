@@ -353,12 +353,20 @@ class Upload:
     async def __aenter__(self) -> Upload:
         from app.willhaben.session import get_session
 
+        from app.platforms import vinted_messaging
+
         sess = get_session()
         sess._require()
+        # the page borrows the login from the app's jar and gives back what it leaves (vinted_messaging.browser_turn)
+        self._turn = vinted_messaging.browser_turn(sess)
+        await self._turn.__aenter__()
         ui = sess.ui_page
         sess._creating_internal = True
         try:
             self.page = await sess.context.new_page()
+        except BaseException:
+            await self._end_turn()
+            raise
         finally:
             sess._creating_internal = False
             sess.ui_page = ui
@@ -399,6 +407,12 @@ class Upload:
             except Exception:  # noqa: BLE001 - already gone
                 pass
             self.page = None
+        await self._end_turn()
+
+    async def _end_turn(self) -> None:
+        turn, self._turn = getattr(self, "_turn", None), None
+        if turn is not None:
+            await turn.__aexit__(None, None, None)
 
     async def call(self, method: str, url: str, body: Any = None) -> tuple[int, Any, str]:
         res = await self.page.evaluate(_JS_CALL, [method, url, body])
