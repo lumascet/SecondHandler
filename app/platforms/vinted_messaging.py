@@ -162,6 +162,20 @@ async def _refresh(sess: Any) -> bool | None:
     return True
 
 
+async def _renew(sess: Any) -> bool | None:
+    """A 401: renew the access token. The refresh first (the jar's rotated refresh token is the current one), the
+    browser only when the refresh was rejected, and only a token different from the refused one counts — the browser
+    handing back the same stale cookie made every retry 401 again and the refresh never ran (logged out for nothing).
+    True = renewed, None = a transient refresh failure (keep the token), False = could not renew."""
+    rr = await _refresh(sess)
+    if rr is not False:
+        return rr
+    before = _jar.get("access_token_web")
+    if await seed_from_browser(sess) and _jar.get("access_token_web") != before:
+        return True
+    return False
+
+
 async def _mark_logged_out(sess: Any) -> None:
     _jar.clear()
     try:
@@ -173,8 +187,8 @@ async def _mark_logged_out(sess: Any) -> None:
 
 
 async def _get(sess: Any, path: str) -> dict[str, Any] | None:
-    """A messaging GET with the owned jar; on a 401/403 re-seed from the browser (fresh token and datadome from the
-    home IP) and retry, then None (caller falls back)."""
+    """A messaging GET with the owned jar; a 401 renews the token (_renew) and retries, a 403 re-seeds the datadome
+    cookie from the browser for the next attempt; else None (the caller falls back)."""
     if not await _ensure(sess):
         return None
     from app.platforms import vinted
@@ -201,12 +215,10 @@ async def _get(sess: Any, path: str) -> dict[str, Any] | None:
                 return None
             return data if isinstance(data, dict) else None
         if r.status_code == 401 and attempt < 2:       # the access token expired (a 401 does not pause the limiter)
-            if await seed_from_browser(sess):
-                continue                               # a fresh token from the logged-in browser: retry
-            rr = await _refresh(sess)
-            if rr is True:
+            renewed = await _renew(sess)
+            if renewed is True:
                 continue
-            if rr is None:
+            if renewed is None:
                 return None                            # transient refresh failure: keep the token, just fail this call
         log.info("vinted api %s -> HTTP %s", path, r.status_code)
         if r.status_code == 401:
@@ -264,7 +276,9 @@ async def subscribe(sess: Any, on_event: Callable[[str], Any], *, open_cb: Calla
                     log.info("vinted sse: connect failed (%s)", type(e).__name__)
                     return 0
                 try:
-                    if r.status_code in (401, 403) and attempt == 0:
+                    if r.status_code == 401 and attempt == 0 and await _renew(sess) is True:
+                        continue                       # an expired token: refreshed (or a new one from the browser)
+                    if r.status_code == 403 and attempt == 0:
                         # 403 is the bot-protection cookie (datadome), not a dead token: re-seed from the logged-in
                         # browser first (fresh datadome from the home IP), fall back to the token refresh
                         if await seed_from_browser(sess) or await _refresh(sess) is True:

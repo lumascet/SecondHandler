@@ -205,3 +205,48 @@ async def test_chat_keeps_its_own_connection_apart_from_the_search():
     assert c._live.transport is search and not search.closed     # the search keeps its connection
     assert search.cleared == 0                                    # and its cookies
     assert c._authed_v.transport is not None and c._authed_v.transport is not search
+
+
+async def test_a_401_refreshes_before_asking_the_browser(monkeypatch):
+    """An expired access token: the jar's refresh token renews it. The browser's cookie used to be taken first; it
+    was the same stale token, every retry 401'd again, the refresh never ran and the chat logged itself out."""
+    order = []
+
+    async def refresh(sess):
+        order.append("refresh")
+        vm._jar["access_token_web"] = "fresh"
+        return True
+
+    async def reseed(sess):
+        order.append("browser")
+        return True
+    monkeypatch.setattr(vm, "_refresh", refresh)
+    monkeypatch.setattr(vm, "seed_from_browser", reseed)
+    vm._jar.update({"access_token_web": "stale"})
+    c = vi.VintedClient(transport=Queue([(401, b""), (200, b'{"conversations":[]}')]))
+    c.limiter = RateLimiter(0, name="Vinted")
+    vi.set_client(c)
+    assert await vm.inbox(_sess([{"name": "access_token_web", "value": "stale"}])) == {"conversations": []}
+    assert order == ["refresh"]
+
+
+async def test_the_browsers_same_stale_token_is_no_renewal(monkeypatch):
+    async def rejected(sess):
+        return False
+
+    async def same(sess):
+        vm._jar["access_token_web"] = "stale"          # the browser holds the very token that was refused
+        return True
+    logged_out = []
+
+    async def mark(sess):
+        logged_out.append(1)
+    monkeypatch.setattr(vm, "_refresh", rejected)
+    monkeypatch.setattr(vm, "seed_from_browser", same)
+    monkeypatch.setattr(vm, "_mark_logged_out", mark)
+    vm._jar.update({"access_token_web": "stale"})
+    c = vi.VintedClient(transport=Queue([(401, b""), (401, b""), (401, b"")]))
+    c.limiter = RateLimiter(0, name="Vinted")
+    vi.set_client(c)
+    assert await vm.inbox(_sess([{"name": "access_token_web", "value": "stale"}])) is None
+    assert len(c._transport.calls) == 1 and logged_out == [1]   # one try, no loop on the same token
