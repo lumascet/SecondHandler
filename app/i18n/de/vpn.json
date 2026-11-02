@@ -217,5 +217,7 @@
  "The product search runs a site's searches over this many VPN servers at once, each paced on its own – for the sites with their VPN switch on. Extra servers start for the search and stop after 5 idle minutes; a server a site refuses drops out.": "Die Produktsuche verteilt die Suchen einer Seite auf so viele VPN-Server gleichzeitig, jeder mit eigenem Tempo – für die Seiten mit eingeschaltetem VPN. Zusätzliche Server starten für die Suche und stoppen nach 5 Minuten ohne Nutzung; ein Server, den eine Seite ablehnt, fällt heraus.",
  "Needs a collection of configs (one dedicated profile is one server).": "Braucht eine Sammlung von Configs (ein einzelnes Profil ist ein Server).",
  "{name}: this VPN server is out of the search ({reason})": "{name}: Dieser VPN-Server ist aus der Suche raus ({reason})",
- "{name}: the VPN server stopped": "{name}: Der VPN-Server wurde gestoppt"
+ "{name}: the VPN server stopped": "{name}: Der VPN-Server wurde gestoppt",
+ "VPN: the provider gave no handshake lately – no new server tried for {m} min": "VPN: der Anbieter gab zuletzt keinen Handshake – {m} Min. lang wird kein neuer Server versucht",
+ "VPN: {n} new servers in {m} min already – the next in {s} s": "VPN: schon {n} neue Server in {m} Min. – der nächste in {s} s"
 }

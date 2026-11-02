@@ -818,6 +818,10 @@ class _Walk:
     async def loop(self) -> None:
         sh = self.sh
         while True:
+            if vpn.guard.paused_s() > 0:              # no handshake anywhere lately: stop asking the provider
+                log.warning("VPN search: handshakes paused (%d min) – the search stops and runs again after",
+                            vpn.guard.paused_s() // 60)
+                raise _Offline
             tgs = _refresh(sh)
             if not tgs:
                 return
@@ -1152,6 +1156,9 @@ async def _start_slot(slot: _Slot, host: str, pid: str | None) -> None:
     srv = slot.srv
     try:
         slot.route, reached = await vpn.conn.start_search(srv.name, host)
+    except vpn.HandshakePause:                     # the provider refuses handshakes: not this server's fault
+        srv.status = "done"
+        return
     except vpn.Unreachable as e:
         srv.problem, srv.detail = "dead", e.detail
     except OSError as e:
@@ -1371,10 +1378,10 @@ def _offline(sh: Search, gone: set[str] = frozenset()) -> None:
         st = vpn.conn_state()
     sh.status, sh.reason = "failed", "offline"
     sh.plan = {"servers": vpn.live_servers(st), "assign": dict(st.get("assign") or {}), "uncovered": []}
-    vpn.update_conn(pending={"at": time.time() + OFFLINE_RETRY_S, "trigger": sh.trigger, "by": sh.by,
+    again = max(OFFLINE_RETRY_S, vpn.guard.paused_s() or vpn.guard.outage())   # no tunnel before the pause ends
+    vpn.update_conn(pending={"at": time.time() + again, "trigger": sh.trigger, "by": sh.by,
                              "why": sh.why, "detail": sh.detail})
-    log.warning("VPN search: the network seems down (no handshake, the live server does not answer either); "
-                "nothing marked, again in %d s", OFFLINE_RETRY_S)
+    log.warning("VPN search: no handshake (the network or the provider), nothing marked, again in %d s", again)
 
 
 async def _test_profile(sh: Search, job: jobs.Job) -> None:

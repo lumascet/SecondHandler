@@ -46,6 +46,7 @@ VpnWait), `Tunnel.ensure()` raises; nothing falls back to the home IP.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import ctypes
 import io
 import json
@@ -87,6 +88,15 @@ CONFIRM_SPAN_S = 90            # ... and refusals (403, bot checks) count only w
                                # refuses every other request for half a minute at a time. Not a 429 ("rate"): the site
                                # says outright it wants fewer requests from that IP (Geizhals' limit per server)
 STANDBY_TRIES = 3              # standby servers a site tries (start + reach its host) before it waits for a search
+# Handshakes are what the provider counts. A search that started 66 tunnels in 20 min (11-02 20:20) was followed by no
+# handshake anywhere for an hour, and the standby failovers and searches kept asking through it, a dozen new tunnels a
+# minute. So every new tunnel (search, standby, live restart) passes one guard: at most HANDSHAKES_PER_WINDOW in
+# HANDSHAKE_WINDOW_S, and once the search found no handshake anywhere (its breaker: not even the live server gets
+# through) no new server is tried for a pause that grows (OUTAGE_PAUSES_S) – only the live one may start again, within
+# the budget, so requests come back with the network; a handshake that works ends the series.
+HANDSHAKES_PER_WINDOW = 15
+HANDSHAKE_WINDOW_S = 600
+OUTAGE_PAUSES_S = (300, 600, 1200, 1800, 3600)
 PAUSED_RETRY_S = 120           # a paused site tries the standby servers again this often while its search waits
 SEARCH_TUNNELS = 8             # servers the search starts at the same time at most (no site request to start one)
 DRAIN_S = 15                   # a server switched away from stops once its requests in flight ended, or after this
@@ -521,6 +531,69 @@ def _die_with_parent() -> None:     # runs in the child between fork and exec: n
         _libc.prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG: wireproxy never outlives a crashed app
 
 
+class HandshakePause(PlatformError):
+    """No new tunnel now: the handshake budget is used up, or the provider gave no handshake anywhere lately
+    (HandshakeGuard). Nothing about a server: it is not marked."""
+
+    def __init__(self, msg: str, left_s: float) -> None:
+        super().__init__(msg)
+        self.left_s = left_s
+
+
+class HandshakeGuard:
+    """The budget and the outage pause for new tunnels (the module's HANDSHAKE* and OUTAGE* settings)."""
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.starts: deque[float] = deque()
+        self.level = 0                     # outages in a row (no handshake after the last pause either)
+        self.pause_until = 0.0
+
+    def paused_s(self) -> float:
+        return max(0.0, self.pause_until - time.monotonic())
+
+    def _budget_wait(self, now: float) -> float:
+        while self.starts and now - self.starts[0] >= HANDSHAKE_WINDOW_S:
+            self.starts.popleft()
+        return 0.0 if len(self.starts) < HANDSHAKES_PER_WINDOW else self.starts[0] + HANDSHAKE_WINDOW_S - now
+
+    async def admit(self, max_wait_s: float, in_pause: bool = False) -> None:
+        """Room for one new tunnel: waits up to `max_wait_s` for the budget, else HandshakePause; in a pause at once
+        (unless `in_pause`: the live server's restart)."""
+        while True:
+            if not in_pause and (left := self.paused_s()) > 0:
+                raise HandshakePause(t("VPN: the provider gave no handshake lately – no new server tried for {m} min",
+                                       m=f"{left / 60:.0f}"), left)
+            now = time.monotonic()
+            wait = self._budget_wait(now)
+            if wait <= 0:
+                self.starts.append(now)
+                return
+            if wait > max_wait_s:
+                raise HandshakePause(t("VPN: {n} new servers in {m} min already – the next in {s} s",
+                                       n=HANDSHAKES_PER_WINDOW, m=HANDSHAKE_WINDOW_S // 60, s=f"{wait:.0f}"), wait)
+            await asyncio.sleep(min(wait, 30))
+
+    def result(self, handshake: bool) -> None:
+        if handshake and self.level:
+            log.info("VPN: handshakes work again")
+            self.level = 0
+
+    def outage(self) -> float:
+        """No handshake anywhere (the search's breaker): no new tunnel for the next pause of the series; its length."""
+        pause = OUTAGE_PAUSES_S[min(self.level, len(OUTAGE_PAUSES_S) - 1)]
+        self.pause_until = time.monotonic() + pause
+        self.level += 1
+        log.warning("VPN: no handshake anywhere – no new tunnel for %d min (the provider is not asked meanwhile)",
+                    pause // 60)
+        return pause
+
+
+guard = HandshakeGuard()
+
+
 def _port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -766,13 +839,15 @@ class Connection:
         return p is not None and p[0].alive and await runner.reach(p[0].port, host)
 
     # ---- starts and stops
-    async def _start(self, name: str, host: str, need_host: bool = True) -> tuple[_Proc, bool]:
+    async def _start(self, name: str, host: str, need_host: bool = True, wait_s: float = 20,
+                     in_pause: bool = False) -> tuple[_Proc, bool]:
         """Start `name`: a WireGuard handshake within HANDSHAKE_S, then a CONNECT to `host` (no HTTP request).
         Returns the process and whether `host` answered. OSError: it does not start; Unreachable: no handshake, or
         `host` unreachable when `need_host` (stopped again; a search tunnel stays: only that site cannot use it).
         Cancelled meanwhile: stopped."""
         if self.closing:
             raise PlatformError(t("The app is shutting down"))
+        await guard.admit(wait_s, in_pause)   # the provider's handshake budget (HandshakePause: not now, no mark)
         port = _free_port(self._ports | {p.port for p in self._procs()})
         self._ports.add(port)
         try:
@@ -782,6 +857,7 @@ class Connection:
             except BaseException:
                 await runner.stop(handle)
                 raise
+            guard.result(reached != "handshake")
             if reached == "handshake" or reached and need_host:
                 await runner.stop(handle)
                 raise Unreachable(host, handshake=reached == "handshake")
@@ -819,7 +895,7 @@ class Connection:
             if probe is not None:
                 await self._stop(probe[0])
             await self._evict(name)
-            proc, _ = await self._start(name, host)
+            proc, _ = await self._start(name, host, in_pause=True)    # the server in use: back with the network
             self.live[name] = (proc, self._route(proc))
             log.info("VPN: server %s started", name)
             return self.live[name][1]
@@ -835,7 +911,7 @@ class Connection:
                 raise RuntimeError(f"{name} runs already")
             self._starting.add(name)
         try:
-            proc, reached = await self._start(name, host, need_host=False)
+            proc, reached = await self._start(name, host, need_host=False, wait_s=HANDSHAKE_WINDOW_S)   # waits its turn
         finally:
             self._starting.discard(name)
         if self.closing:
@@ -1148,7 +1224,7 @@ async def failover(pid: str, host: str, label: str = "") -> str | None:
     budget, and its switch-over at the end takes the site along anyway. A server that does
     not start or reach the host is marked for the site. Shown as a quiet job (lane "vpn": an open settings page
     refreshes)."""
-    if conn.closing:
+    if conn.closing or guard.paused_s() > 0:         # no handshake anywhere lately: no server to blame or try
         return None
     async with _lock("failover"):
         _retried[pid] = time.monotonic()
@@ -1174,6 +1250,9 @@ async def failover(pid: str, host: str, label: str = "") -> str | None:
                 async with _jobs_track(t("VPN: {site} moves to {server}", site=label or pid, server=name)) as job:
                     await switch(servers, new, {name: host})
                     job.result = t("{site} now through {server}", site=label or pid, server=name)
+            except HandshakePause as e:              # the provider is refusing handshakes: no server is at fault
+                log.info("VPN %s: no standby server tried now: %s", pid, e)
+                return None
             except Unreachable as e:
                 log.warning("VPN %s: standby server %s %s", pid, name, e)
                 mark(pid, name, "unreachable")       # not "dead": that one a search confirms on its own
@@ -1420,6 +1499,7 @@ def reset() -> None:
     _tunnels.clear()
     _strikes.clear()
     _retried.clear()
+    guard.reset()
     conn = Connection()
     _locks_ = None
 

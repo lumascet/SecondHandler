@@ -116,6 +116,13 @@ def fake_claude_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_handshake_budget(monkeypatch):
+    """Tests start fake tunnels by the dozen within milliseconds: no budget wait (test_vpn_guard.py checks it)."""
+    from app.platforms import vpn
+    monkeypatch.setattr(vpn, "HANDSHAKES_PER_WINDOW", 10_000)
+
+
+@pytest.fixture(autouse=True)
 def quick_refusals(monkeypatch):
     """A run of refusals counts at once (tests send them within milliseconds); tests/test_vpn.py checks the span."""
     from app.platforms import vpn
