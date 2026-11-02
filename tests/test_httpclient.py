@@ -664,3 +664,14 @@ async def test_a_refused_lane_is_lost_and_its_server_marked(monkeypatch):
     with httpclient.lane(gone), pytest.raises(httpclient.LaneLost):
         await c._get("https://fake.example/d")                          # its server stopped: never another route
     assert gone.lost == "gone"
+
+
+async def test_refusals_that_do_not_count_yet_stop_after_a_few_sends(monkeypatch):
+    """Refusals within the span count for nothing yet (vpn.CONFIRM_SPAN_S): the request stops after a few sends to
+    that server instead of up to VPN_TRIES within seconds; a later request asks again."""
+    from app.platforms import httpclient
+    tunnel = FakeTunnel(confirm=99)                           # nothing counts
+    c, transports, built = _vpn_client({"http://exit1": [(403, b"")] * 8}, tunnel)
+    with pytest.raises(Blocked):
+        await c._get("https://fake.example/api")
+    assert len(transports["http://exit1"].calls) == httpclient.VPN_SAME_SERVER_TRIES

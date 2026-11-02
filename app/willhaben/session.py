@@ -27,7 +27,8 @@ from app.config import get_settings
 from app.db import utcnow
 from app.i18n import t
 from app.willhaben import access_log, native, recorder, replay
-from app.willhaben.public import WEB_CLIENT, Blocked, willhaben_limiter
+from app.platforms.ratelimit import RateLimiter
+from app.willhaben.public import WEB_CLIENT, Blocked, account_limiter
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class ApiResponse:
 class BrowserSession:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.limiter = willhaben_limiter()   # shared with the anonymous client: same IP
+        self._limiter_override: RateLimiter | None = None   # tests
         self._pw = None
         self.context = None
         self.ui_page = None
@@ -110,6 +111,15 @@ class BrowserSession:
     @property
     def started(self) -> bool:
         return self.context is not None
+
+    @property
+    def limiter(self) -> RateLimiter:
+        """The account's limiter (public.account_limiter): the anonymous one while both use the home IP."""
+        return self._limiter_override or account_limiter()
+
+    @limiter.setter
+    def limiter(self, value: RateLimiter) -> None:
+        self._limiter_override = value
 
     async def _launch_chrome(self) -> bool:
         """Google Chrome through patchright (Playwright without the automation traces): what bot protections such as
@@ -415,8 +425,10 @@ class BrowserSession:
         """Profile of the logged-in user, or None: through the app API when it is logged in (api() routes it), else
         the browser's. Anonymous browser requests get HTTP 204 with no body."""
         r = await self.api("GET", ME_PATH)
-        if r.status != 200 or not r.text:
-            return None
+        if r.status in (204, 401, 403) or (r.status == 200 and not r.text):
+            return None                       # willhaben says: not logged in
+        if r.status != 200:                   # 5xx, 429, a block page: says nothing about the login
+            raise RuntimeError(t("login check: willhaben answered HTTP {status}", status=r.status))
         try:
             data = r.json()
         except ValueError:
@@ -429,11 +441,15 @@ class BrowserSession:
         if not app and not self.started:
             self.logged_in = None
             return False
-        data = await self._me()
-        # browser only: web session gone but maybe the (longer-lived) SSO session is not – a silent re-login,
-        # except when we already know we are logged out
-        if data is None and not app and self.logged_in is not False and await self.refresh_sso():
+        try:
             data = await self._me()
+            # browser only: web session gone but maybe the (longer-lived) SSO session is not – a silent re-login,
+            # except when we already know we are logged out
+            if data is None and not app and self.logged_in is not False and await self.refresh_sso():
+                data = await self._me()
+        except RuntimeError as e:             # willhaben had a problem, not the login: keep what we knew
+            log.info("willhaben login check inconclusive: %s", e)
+            return bool(self.logged_in)
         self.last_check = utcnow()
         if data:
             self.user = data

@@ -37,7 +37,8 @@ DEAL_RANK = {"great": 3, "good": 2, "fair": 1, "unknown": 1, "overpriced": 0}
 MIN_RANK = {"match": 0, "fair": 1, "good": 2}
 _transport: httpx.AsyncBaseTransport | None = None   # tests inject a mock transport
 THIN_BODY_CHARS = 80               # an ad text this short probably hides its specs in a photo: worth an OCR pass
-OCR_CONCURRENCY = 3                # hits whose photos are read at once (each site's limiter paces its own requests)
+OCR_CONCURRENCY = 3
+PHOTO_CONCURRENCY = 4      # the screening's photo downloads at once                # hits whose photos are read at once (each site's limiter paces its own requests)
 
 
 def _thin_text(hit: Hit) -> bool:
@@ -238,8 +239,15 @@ async def ask(agent: SearchAgent, hits: list[Hit], check: list[int],
     with tempfile.TemporaryDirectory(prefix="wh-screen-") as tmp:
         images: list[Path] = []
         items = []
+        gate = asyncio.Semaphore(PHOTO_CONCURRENCY)
+
+        async def fetch(nr: int, h: Hit) -> Path | None:
+            async with gate:
+                return await _download(h.image_url, Path(tmp), f"hit{nr}", h.platform)
+        # the photos side by side, not one after the other (ten hits: ten round trips through the VPN)
+        photos = await asyncio.gather(*(fetch(nr, h) for nr, h in enumerate(hits, 1)), return_exceptions=True)
         for nr, h in enumerate(hits, 1):
-            img = await _download(h.image_url, Path(tmp), f"hit{nr}", h.platform)
+            img = photos[nr - 1] if isinstance(photos[nr - 1], Path) else None
             if img:
                 images.append(img)
             items.append({"nr": nr, "title": h.heading, "price": h.price_display or (f"{h.price:g} €" if h.price else None),

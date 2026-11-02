@@ -317,13 +317,25 @@ def test_viewer_counts_unscreened_hits():
 
 
 def test_scam_context_leaves_out_rejected_page_ads():
+    """From the database only the agent's recent, not rejected hits count; the page's ads Claude rejected before
+    (their hits are on this page) stay out of the median."""
     from types import SimpleNamespace as NS
 
-    from app.services.search_agents import _scam_context
-    hits = [NS(ad_id=f"10000006{i:02d}", price=900.0, screen_relevant=None, first_seen_at=None) for i in range(8)]
-    hits += [NS(ad_id=f"10000007{i:02d}", price=20.0, screen_relevant=False, first_seen_at=None) for i in range(8)]
-    ads = [NS(ad_id=f"10000007{i:02d}", price=20.0) for i in range(8)] + [NS(ad_id="1000000800", price=950.0)]
-    ctx = _scam_context(hits, ads)
+    from app.services.search_agents import _hits_of_ads, _scam_context
+    with dbmod.session() as db:
+        a = dbmod.SearchAgent(name="Rad", source_url="https://www.willhaben.at/iad/x", webapi_url="/x")
+        db.add(a)
+        db.commit()
+        db.refresh(a)
+        for i in range(8):
+            db.add(dbmod.Hit(agent_id=a.id, ad_id=f"10000006{i:02d}", heading="Rad", url="https://x", price=900.0))
+            db.add(dbmod.Hit(agent_id=a.id, ad_id=f"10000007{i:02d}", heading="Pedal", url="https://x", price=20.0,
+                             screen_relevant=False))
+        db.commit()
+        ads = [NS(ad_id=f"10000007{i:02d}", price=20.0) for i in range(8)] + [NS(ad_id="1000000800", price=950.0)]
+        page_hits = _hits_of_ads(db, a.id, [ad.ad_id for ad in ads], chunk=3)        # in chunks, all found
+        assert len(page_hits) == 8
+        ctx = _scam_context(db, a.id, page_hits, ads)
     assert ctx["count"] == 9 and ctx["median"] == 900.0
 
 

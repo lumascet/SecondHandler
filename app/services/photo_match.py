@@ -44,13 +44,20 @@ def distance(a: str, b: str) -> int:
     return (int(a, 16) ^ int(b, 16)).bit_count()
 
 
-async def _fetch(client: httpx.AsyncClient, url: str) -> bytes | None:
+async def _fetch(url: str, platform: str | None) -> bytes | None:
+    """The photo through ad_images.download, as every other photo of a hit: the site's VPN when it is on (never the
+    home IP then), counted as the site's access, https and an image only, at most MAX_IMAGE_BYTES."""
+    import tempfile
+    from pathlib import Path
+
+    from app.services import ad_images
     try:
-        r = await client.get(url)
-    except httpx.HTTPError as e:
+        with tempfile.TemporaryDirectory(prefix="wh-photo-") as tmp:
+            path = await ad_images.download(url, Path(tmp), "p", platform=platform)
+            return path.read_bytes() if path is not None else None
+    except (httpx.HTTPError, OSError) as e:
         log.info("photo %s not loaded: %s", url, e)
         return None
-    return r.content if r.status_code == 200 and r.content else None
 
 
 def _flag(h: Hit, other: Hit) -> dict[str, Any]:
@@ -86,13 +93,11 @@ async def photo_job() -> None:
     if not todo:
         match(flagged)                   # re-judged by the current rule
         return
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True,
-                                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"}) as client:
-        hashed = []
-        for h in todo:
-            data = await _fetch(client, h.image_url)
-            h.photo_hash = (dhash(data) if data else None) or "-"       # "-": not loadable, not asked again
-            hashed.append(h)
+    hashed = []
+    for h in todo:
+        data = await _fetch(h.image_url, h.platform)
+        h.photo_hash = (dhash(data) if data else None) or "-"       # "-": not loadable, not asked again
+        hashed.append(h)
     with session() as db:
         for h in hashed:
             row = db.get(Hit, h.id)

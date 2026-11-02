@@ -79,8 +79,10 @@ async def tg_home(request: Request):
         agents = list(db.exec(select(SearchAgent)))
         myads = len(list(db.exec(select(MyAd.ad_id).where(MyAd.status == "active", col(MyAd.hidden).is_not(True)))))
         buys = len(list(db.exec(select(Purchase.id).where(col(Purchase.status).not_in(("done", "cancelled", "failed"))))))
+    from app.services import health
+    problems = [st for st in health.collect() if st.state == "problem"]   # as the dashboard's connection tiles
     return _render(request, "home.html", counts=counts, saved=saved, agents=agents, myads=myads, buys=buys,
-                   chats_shown=len(o["shown"]))
+                   chats_shown=len(o["shown"]), problems=problems)
 
 
 # ------------------------------------------------------------------ hits

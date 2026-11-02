@@ -237,6 +237,8 @@ def test_the_debug_login_only_straight_from_the_home_network(pw, monkeypatch):
         assert c.get("/myads", headers=ok).status_code == 200
         assert c.get("/myads").status_code == 401
         assert c.get("/myads", headers={**ok, "x-forwarded-for": "203.0.113.9"}).status_code == 401
+        assert c.post("/settings/language", headers=ok, data={"lang": "de"}).status_code == 401   # reading only
+        assert "frame-ancestors 'self'" in c.get("/myads", headers=ok).headers["content-security-policy"]
 
 
 def test_wrong_basic_passwords_count_toward_the_lockout(pw, monkeypatch):

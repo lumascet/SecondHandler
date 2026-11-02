@@ -86,7 +86,7 @@
       <div class="flex flex-wrap gap-1.5">
         {% if sim.status == 'done' and changed %}<form method="post" action="/agent-sim/{{ sim.id }}/apply" onsubmit='return confirm({{ _("Take these settings over for the agent?")|tojson }})'><button class="btn btn-primary btn-sm" data-apply>{{ _("Apply these settings to the agent") }}</button></form>{% endif %}
         {% if sim.status != 'running' %}<form method="post" action="/agent-sim/{{ sim.id }}/again"><button class="btn btn-sm">{{ ui.icon('refresh', 13) }}{{ _("Run again") }}</button></form>{% endif %}
-        <form method="post" action="/agent-sim/{{ sim.id }}/delete"><button class="btn btn-ghost btn-sm text-error">{{ _("Delete") }}</button></form>
+        <form method="post" action="/agent-sim/{{ sim.id }}/delete" onsubmit="return confirm({{ _('Delete this simulation run?')|tojson|forceescape }})"><button class="btn btn-ghost btn-sm text-error">{{ _("Delete") }}</button></form>
       </div>
     </div>
 

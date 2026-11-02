@@ -185,7 +185,8 @@ class DashboardAuth(BaseHTTPMiddleware):
             return await call_next(request)
         if basic is None:
             return JSONResponse({"detail": "too many wrong passwords, try again later"}, status_code=429)
-        if auth.debug_login(request.headers, request.client.host if request.client else None):
+        if request.method in ("GET", "HEAD") \
+                and auth.debug_login(request.headers, request.client.host if request.client else None):
             log.info("debug login: %s %s", request.method, request.url.path)
             return await call_next(request)
         target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
@@ -204,10 +205,11 @@ app.add_middleware(DashboardAuth)
 
 @app.middleware("http")
 async def tg_frames(request: Request, call_next):
-    """The Mini App's pages may be framed only by Telegram's web client (and the app itself)."""
+    """Every page may be framed only by the app itself and Telegram's web client (the Mini App, and the dashboard
+    pages it opens inside Telegram): no other site can put the dashboard in a frame and trick a click (clickjacking;
+    the Telegram login's cookie is SameSite=None)."""
     response = await call_next(request)
-    if request.url.path.startswith("/tg"):
-        response.headers["Content-Security-Policy"] = "frame-ancestors 'self' https://*.telegram.org"
+    response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self' https://*.telegram.org")
     return response
 
 
@@ -3348,7 +3350,8 @@ async def settings_search_index():
 
 INBOX_KINDS = {"hit": "New hit", "price_drop": "Price drop", "saved": "Saved ad", "message": "New message", "auto_reply": "Answered automatically",
                "auto_reply_pending": "Reply waiting for you", "ad_expiring": "Ad expiring soon", "ad_expired": "Ad expired",
-               "ad_renewed": "Ad renewed", "paylivery": "Pay now!", "purchase": "Purchase order", "health": "Connections", "test": "Test"}
+               "ad_renewed": "Ad renewed", "paylivery": "Pay now!", "purchase": "Purchase order", "health": "Connections", "test": "Test",
+               "digest": "Your week", "meetup": "Appointment", "shipping": "Shipping"}
 
 
 def event_link(e: EventLog) -> dict[str, Any] | None:
@@ -3576,7 +3579,8 @@ async def settings_section(request: Request, section: str, msg: str | None = Non
                   claude_source=token_source(), claude_login=get_login(),
                   purposes=[(p, label, hint, _alias(model_for(p))) for p, (_, label, hint) in PURPOSES.items()],
                   llm_usage=llm_usage.summary(), purpose_labels={p: label for p, (_, label, _h) in PURPOSES.items()},
-                  ha=await ha_auth.status(), ha_url=ha_auth.ha_url(), ha_source=ha_auth.token_source(),
+                  # the live HA call (up to 8 s) only where its result is shown: every other section opened slowly
+                  ha=await ha_auth.status() if section == "ha" else {"ok": None, "services": []}, ha_url=ha_auth.ha_url(), ha_source=ha_auth.token_source(),
                   ha_service=ha_auth.notify_service(), quiet=quiet_hours.state(), quiet_cfg=quiet_hours.config(),
                   tg=telegram.status(), tg_kinds=telegram.kinds(), tg_qr=telegram.bot_qr_svg(), **(await _gcal_ctx() if section == "calendar" else {}),
                   ship=shipping.config(), pickup_max_km=_geo.pickup_radius(),
@@ -3968,8 +3972,9 @@ async def settings_save(request: Request):
         set_setting("reply_fast_min_s", str(fast_lo))
         set_setting("reply_fast_max_s", str(min(max(fast_lo, num("reply_fast_max_s", 20)), 600)))
     if "expiry_warn_days" in todo:
-        set_setting("expiry_warn_days", str(max(0, num("expiry_warn_days", 3))))
-        set_setting("myads_expired_days", str(max(0, num("myads_expired_days", 30))))
+        # the same bounds as Settings' API (services/settings_api.py): 0–365 and 0–3650 days
+        set_setting("expiry_warn_days", str(min(max(0, num("expiry_warn_days", 3)), 365)))
+        set_setting("myads_expired_days", str(min(max(0, num("myads_expired_days", 30)), 3650)))
     if "sell_handover" in todo:
         selling.save(form)
     if request.headers.get("x-autosave"):          # saved as you change it (x-data="autosave"): no reload

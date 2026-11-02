@@ -180,7 +180,8 @@ UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 def debug_login(headers: Any, client: str | None) -> bool:
-    """The debug login (DEBUG_TOKEN): the X-Debug-Token header with that token, sent straight from the home network.
+    """The debug login (DEBUG_TOKEN): the X-Debug-Token header with that token, sent straight from the home network,
+    for reading only (the middleware lets it open GET and HEAD requests, never a change).
     A request the reverse proxy forwarded (X-Forwarded-*: it may come from the internet) never counts, nor one from a
     public address."""
     token = get_settings().debug_token

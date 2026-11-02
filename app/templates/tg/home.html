@@ -9,6 +9,7 @@
     <span class="sub">{{ _("{n} new hits", n=counts.hits) }} · {{ _("{n} unread", n=counts.chats) }}</span>
   </div>
 
+  {% if problems %}<div class="sec" data-connection-problems>{% for st in problems %}<a class="cell" href="{{ st.href or '/settings' }}" style="background: var(--t-warn-bg); color: var(--t-warn)"><span class="body" style="flex-direction: column; align-items: stretch; gap: 2px"><strong style="font-size: 14px">{{ st.label }}</strong><span style="font-size: 13px">{{ st.reason }}</span></span></a>{% endfor %}</div>{% endif %}
   <div class="sh">{{ _("Overview") }}</div>
   <div class="sec">
     <a class="cell" href="/tg/hits" data-cell="hits"><span class="ico" style="background: #F2994A">{{ ui.icon('target', 18, 2) }}</span>

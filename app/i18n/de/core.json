@@ -24,5 +24,6 @@
  "More": "Mehr",
  "Navigation": "Navigation",
  "not logged in to willhaben": "nicht bei willhaben eingeloggt",
- "willhaben requests in the last hour": "willhaben-Anfragen in der letzten Stunde"
+ "willhaben requests in the last hour": "willhaben-Anfragen in der letzten Stunde",
+ "login check: willhaben answered HTTP {status}": "Login-Prüfung: willhaben antwortete mit HTTP {status}"
 }

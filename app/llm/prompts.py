@@ -537,7 +537,8 @@ def platform_rule(platform: str | None) -> str:
 
 
 def _eur(v: float) -> str:
-    return f"{v:g} €" if v == int(v) else f"{v:.2f} €".replace(".", ",")
+    # whole euros without decimals; never :g, which writes 1000000 as "1e+06"
+    return f"{v:.0f} €" if v == int(v) else f"{v:.2f} €".replace(".", ",")
 
 
 def price_floor(min_price: float, asking_price: str | None) -> str:

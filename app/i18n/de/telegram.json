@@ -92,5 +92,7 @@
  "code {code}": "Code {code}",
  "Start purchase order": "Kaufauftrag starten",
  "Purchase order #{id} started": "Kaufauftrag #{id} gestartet",
- "Purchase order #{id}": "Kaufauftrag #{id}"
+ "Purchase order #{id}": "Kaufauftrag #{id}",
+ "Appointment": "Termin",
+ "Connections: all OK": "Verbindungen: alles OK"
 }

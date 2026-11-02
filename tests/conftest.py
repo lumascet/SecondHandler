@@ -166,6 +166,7 @@ def fresh_db():
     for mod in (public, ebay, kleinanzeigen, preisjaeger, shpock, vinted, geizhals):
         if mod._limiter is not None:     # module-wide: one test's block (429 -> pause) must not pause the next test
             mod._limiter.reset()
+    public._account_limiter = None   # the account's own (willhaben's VPN on): fresh per test
     jobs.reset()                # background jobs are per event loop
     from app.willhaben import access_log
     access_log.reset()          # unflushed request counts of the previous test (counted toward the next one's)
@@ -179,6 +180,7 @@ def fresh_db():
     product_search._backfill_tried.clear()
     deals._slow_until.clear()
     deals._identities.clear()
+    deals._picks.clear()
     from app.platforms import vinted_inbox
     vinted_inbox._pushed.clear()             # the Vinted message and order event last pushed, per chat
     vinted_inbox._pushed_events.clear()

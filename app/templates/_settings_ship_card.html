@@ -16,7 +16,7 @@
     <div><button class="btn">{{ _("Save") }}</button></div>
   </form>
   {% if card.stored %}
-  <form method="post" action="/settings/shipping/card/delete">
+  <form method="post" action="/settings/shipping/card/delete" onsubmit="return confirm({{ _('Remove the stored payment card?')|tojson|forceescape }})">
     <button class="btn btn-outline btn-error">{{ _("Remove card") }}</button>
   </form>
   {% endif %}
@@ -28,7 +28,7 @@
       <strong>{{ pb.name }}</strong>
       {% if pb.learned %}
         <small class="text-[12.5px] text-muted">{{ _("learned") }} {{ pb.learned_at|replace("T", " ") }} · {{ pb.steps }} {{ _("steps") }} · {{ _("last success") }} {{ (pb.last_success_at or "–")|replace("T", " ") }}</small>
-        <form method="post" action="/settings/shipping/playbook/{{ key }}/reset"><button class="btn btn-outline btn-sm">{{ _("Reset playbook") }}</button></form>
+        <form method="post" action="/settings/shipping/playbook/{{ key }}/reset" onsubmit="return confirm({{ _('Reset the learned steps of this carrier?')|tojson|forceescape }})"><button class="btn btn-outline btn-sm">{{ _("Reset playbook") }}</button></form>
       {% else %}
         <small class="text-[12.5px] text-muted">{{ _("not learned yet") }}</small>
       {% endif %}

@@ -61,9 +61,33 @@ def test_old_files_go(monkeypatch, tmp_path):
     old = d / "20260101-00.jsonl"
     old.write_text("{}\n")
     os.utime(old, (time.time() - 8 * 86400,) * 2)
+    done = d / "20260101-01.jsonl"                             # a finished hour of today's kind
+    done.write_text('{"a": 1}\n')
     monkeypatch.setattr(record_all, "_pruned_hour", "")
+    monkeypatch.setattr("threading.Thread", _Inline)
     record_all._write({"x": 1})
-    assert not old.exists() and record_all.stats()["files"] == 1
+    assert not old.exists() and not done.exists() and (d / "20260101-01.jsonl.gz").exists()
+    assert record_all.stats()["files"] == 2                    # the gzipped hour and the current one
+
+
+class _Inline:
+    """threading.Thread that runs at once (the tidy-up in the test's own thread)."""
+    def __init__(self, target, args=(), **kw):
+        self.target, self.args = target, args
+
+    def start(self):
+        self.target(*self.args)
+
+
+def test_the_oldest_go_beyond_the_size_cap(monkeypatch, tmp_path):
+    monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
+    monkeypatch.setattr(record_all, "MAX_BYTES", 10)
+    d = tmp_path / "captures" / "all"
+    d.mkdir(parents=True)
+    for h in ("20261101-01", "20261101-02"):
+        (d / f"{h}.jsonl.gz").write_bytes(b"x" * 8)
+    record_all._tidy("20261101-03")
+    assert sorted(p.name for p in d.iterdir()) == ["20261101-02.jsonl.gz"]
 
 
 def test_the_switch_on_the_session_page():

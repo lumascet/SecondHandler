@@ -78,5 +78,6 @@
  "hit": "Treffer",
  "would be a hit": "wird Treffer",
  "would buy · {price}": "würde kaufen · {price}",
- "not bought: {why}": "kein Kauf: {why}"
+ "not bought: {why}": "kein Kauf: {why}",
+ "Delete this simulation run?": "Diesen Simulationslauf löschen?"
 }

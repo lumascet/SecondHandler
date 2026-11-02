@@ -52,6 +52,27 @@ def willhaben_limiter() -> RateLimiter:
     return _limiter
 
 
+_account_limiter: RateLimiter | None = None
+
+
+def account_limiter() -> RateLimiter:
+    """The logged-in account's requests (the browser, the app API with the account), always from the home IP. While
+    willhaben's VPN switch is on, the anonymous requests leave through the VPN – another IP – so the account paces on
+    its own limiter (same pacing and budget from Settings, its own block pause): a block of the VPN server no longer
+    pauses chat sending. With the VPN off both come from the home IP and share willhaben_limiter()."""
+    global _account_limiter
+    from app.platforms import vpn
+
+    base = willhaben_limiter()
+    if not vpn.enabled("willhaben"):
+        return base
+    if _account_limiter is None:
+        _account_limiter = RateLimiter(base.min_gap_s, base.per_hour, base.max_wait_s, name="willhaben",
+                                       persist="willhaben_account")
+    _account_limiter.min_gap_s, _account_limiter.per_hour = base.min_gap_s, base.per_hour   # Settings changes
+    return _account_limiter
+
+
 NOT_FOUND_CACHE_S = httpclient.NOT_FOUND_CACHE_S
 ANON_SESSION_S = httpclient.ANON_SESSION_S
 

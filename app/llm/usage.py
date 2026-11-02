@@ -15,6 +15,7 @@ from sqlmodel import col, func, select
 from app.db import LLMCall, get_setting, session, set_setting, utcnow
 
 log = logging.getLogger(__name__)
+_tasks: set = set()   # notify tasks still running (asyncio.Task)
 
 
 def _rows_from(data: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -203,10 +204,12 @@ def _limit_reached_push() -> None:
             "haiku": t("All tasks use Haiku until usage drops below the limit."),
             "notify": t("Nothing is throttled.")}[st["mode"]]
     try:
-        asyncio.get_running_loop().create_task(notify(
+        task = asyncio.get_running_loop().create_task(notify(
             "health", t("Claude token limit reached"), t("{used} M of {limit} M tokens in the last {n} days.",
                                                          used=f"{st['used'] / 1e6:.1f}", limit=f"{st['limit'] / 1e6:g}",
                                                          n=st["days"]) + " " + text, url="/settings/claude"))
+        _tasks.add(task)                  # a reference until it ran: an unreferenced task can be collected unsent
+        task.add_done_callback(_tasks.discard)
     except RuntimeError:
         pass    # no event loop (scripts, tests): the dashboard meter still shows it
 

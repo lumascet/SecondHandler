@@ -86,6 +86,7 @@ def kinds() -> dict[str, str]:
         "shipping": t("Shipping addresses and labels"),
         "paylivery": t("PayLivery steps (offers, payment, delivery)"),
         "purchase": t("Purchases (negotiation, pay now)"),
+        "digest": t("Weekly summary"),
     }
 
 
@@ -932,8 +933,13 @@ async def _cmd_status() -> None:
         new_hits = db.exec(select(func.count()).select_from(Hit).where(Hit.state == "new")).one()
         unread, drafts = chats.summary_counts(db)       # as the chat list counts them
     login = t("logged in") if st.get("logged_in") else t("NOT logged in")
-    await _say("\n".join([f"willhaben: <b>{login}</b>", t("New hits: {n}", n=new_hits),
-                          t("Unread messages: {n}", n=unread), t("Open drafts: {n}", n=drafts)]))
+    from app.services import health
+    problems = [s for s in health.collect() if s.state == "problem"]   # the home page's connection tiles
+    lines = [f"willhaben: <b>{login}</b>", t("New hits: {n}", n=new_hits),
+             t("Unread messages: {n}", n=unread), t("Open drafts: {n}", n=drafts)]
+    lines += ([""] + [f"⚠️ {html.escape(s.label)}: {html.escape(s.reason)}" for s in problems]) if problems \
+        else [t("Connections: all OK")]
+    await _say("\n".join(lines))
 
 
 # ------------------------------------------------------------------ polling

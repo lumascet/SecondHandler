@@ -18,6 +18,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30        # a hanging test (a forgotten fake, a task left waiting) fails instead of running 6 h
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -95,6 +96,27 @@ jobs:
             type=semver,pattern={{version}},value=${{ needs.version.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
             type=sha,format=short
+
+      # the image must start and answer before anything is pushed as :latest (a missing package, a broken entrypoint
+      # passed the tests and reached every pull)
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: secondhandler:smoke
+          cache-from: type=gha
+
+      - name: Smoke test (the app starts and answers /healthz)
+        run: |
+          docker run -d --name smoke -p 8000:8000 -e BROWSER_ENABLED=0 secondhandler:smoke
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8000/healthz; then echo; docker rm -f smoke > /dev/null; exit 0; fi
+            sleep 2
+          done
+          docker logs smoke 2>&1 | tail -80
+          exit 1
 
       - name: Build and push
         uses: docker/build-push-action@v6

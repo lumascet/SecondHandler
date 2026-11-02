@@ -127,5 +127,6 @@
  "Vinted ad {id}: the page could not be read": "Vinted-Anzeige {id}: Seite nicht lesbar",
  "Shpock ad {id}: the page could not be read": "Shpock-Anzeige {id}: Seite nicht lesbar",
  "willhaben answered the search without a result list": "willhaben hat die Suche ohne Ergebnisliste beantwortet",
- "Kleinanzeigen answered the search without a result list": "Kleinanzeigen hat die Suche ohne Ergebnisliste beantwortet"
+ "Kleinanzeigen answered the search without a result list": "Kleinanzeigen hat die Suche ohne Ergebnisliste beantwortet",
+ "Kleinanzeigen: the place {place} could not be looked up (HTTP {status})": "Kleinanzeigen: der Ort {place} konnte nicht nachgeschlagen werden (HTTP {status})"
 }

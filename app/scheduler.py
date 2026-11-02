@@ -1,6 +1,7 @@
 """Background jobs (APScheduler, asyncio)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 
@@ -20,7 +21,11 @@ from app.willhaben.session import get_session
 
 log = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler(timezone="Europe/Vienna")
+# misfire grace: a job whose time came while the event loop was busy (a long page, a VACUUM) still runs within 5 min
+# instead of being dropped (the default is 1 s: a daily or weekly job just did not happen that day)
+scheduler = AsyncIOScheduler(timezone="Europe/Vienna", job_defaults={"misfire_grace_time": 300, "coalesce": True})
+AGENT_DEADLINE_S = 30 * 60   # a scheduled check that hangs (a request, Claude) is cut off: max_instances=1 would
+                             # otherwise hold every later check of the agent behind it
 
 
 def _agent_job(agent_id: int) -> str:
@@ -46,7 +51,10 @@ async def _run_agent_job(agent_id: int) -> None:
         log.info("agent %s: a check is still running, skipped", agent_id)
         return
     with timeline.fresh(actor="scheduler"):
-        await run_agent(agent_id)
+        try:
+            await asyncio.wait_for(run_agent(agent_id), AGENT_DEADLINE_S)
+        except asyncio.TimeoutError:
+            log.warning("agent %s: the check took over %d min, cut off", agent_id, AGENT_DEADLINE_S // 60)
 
 
 def schedule_agent(agent: SearchAgent, run_soon: bool = True) -> None:

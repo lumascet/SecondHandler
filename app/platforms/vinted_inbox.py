@@ -817,6 +817,7 @@ async def _live_loop() -> None:
     from app.services import site_accounts
     from app.willhaben.session import get_session
 
+    fails = 0                                    # connect errors in a row: the wait grows, up to LIVE_BACKOFF_S
     while True:
         try:
             if not platforms.enabled("vinted"):
@@ -839,10 +840,16 @@ async def _live_loop() -> None:
                     log.info("vinted live: stream refused (%s)", status)
 
             status = await vinted_messaging.subscribe(sess, lambda d: _live_spawn(_on_sse(d)), open_cb=opened)
-            if status in (200, 0):               # clean stream end or a transient connect error: reconnect soon
+            if status == 200:                    # the stream ran and ended: reconnect soon
+                fails = 0
                 if live.get("state") == "connected":
                     live.update(state="reconnecting", since=utcnow())
                 await asyncio.sleep(RECONNECT_S)
+            elif status == 0:                    # a connect error: soon at first, then less and less often
+                fails += 1
+                if live.get("state") == "connected":
+                    live.update(state="reconnecting", since=utcnow())
+                await asyncio.sleep(min(RECONNECT_S * 2 ** min(fails - 1, 10), LIVE_BACKOFF_S))
             else:                                 # 401/403/404/5xx: a refusing or missing endpoint — back off, don't hammer
                 live.update(state=f"refused {status}", since=utcnow())
                 await asyncio.sleep(LIVE_BACKOFF_S)

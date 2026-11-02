@@ -488,3 +488,43 @@ async def test_hit_starts_a_purchase_order(tg, monkeypatch):
     await telegram.handle_update(_press(b["🛒 Start purchase order"], markup=markup))
     assert tg[-1][0] == "answerCallbackQuery" and "already an open purchase" in tg[-1][1]["text"]
     set_setting("purchase_enabled", "0")
+
+
+def _button_row(verb, ref, token):
+    from app.db import TelegramAction
+    with session() as db:
+        db.add(TelegramAction(token=token, verb=verb, ref=ref))
+        db.commit()
+
+
+async def test_the_money_buttons_reach_their_actions(tg, monkeypatch):
+    """The buttons that buy, cancel or pay: each one goes to its signed action (ha_actions) for its draft, and the
+    auto-buy countdown's Cancel takes the queued purchase back."""
+    await _linked(tg)
+    handled = []
+
+    async def handle(event):
+        handled.append(event)
+        return "ok"
+    monkeypatch.setattr(ha_actions, "handle", handle)
+    for verb in ("D_BUY", "D_CANCEL", "D_DECL", "D_PAID"):
+        _button_row(verb, "11", f"tok-{verb}")
+        await telegram.handle_update(_press(f"t:tok-{verb}"))
+    assert [e["action"] for e in handled] == [ha_actions.action_id(v, 11) for v in ("BUY", "CANCEL", "DECL", "PAID")]
+    _button_row("D_ALT", "11|Bei 45 € bleiben|Beim Preis bleiben.", "tok-alt")
+    await telegram.handle_update(_press("t:tok-alt"))
+    assert handled[-1] == {"action": ha_actions.action_id("REVISE", 11), "reply_text": "Beim Preis bleiben.",
+                           "chosen": True}
+
+    from app.services import jobs
+    stopped = []
+    monkeypatch.setattr(jobs, "cancel_key", lambda key: stopped.append(key) or True)
+    _button_row("AB_STOP", "5", "tok-stop")
+    await telegram.handle_update(_press("t:tok-stop"))
+    assert stopped == ["purchase:5"]
+    assert any(m == "answerCallbackQuery" and "cancelled" in (b.get("text") or "").lower() for m, b in tg)
+    monkeypatch.setattr(jobs, "cancel_key", lambda key: False)                 # too late: the buy runs
+    _button_row("AB_STOP", "6", "tok-late")
+    await telegram.handle_update(_press("t:tok-late"))
+    assert "too late" in (tg[-1][1].get("text") or "").lower() or any(
+        "too late" in (b.get("text") or "").lower() for m, b in tg if m == "answerCallbackQuery")

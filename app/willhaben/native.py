@@ -47,7 +47,8 @@ import httpx
 from app.config import get_settings
 from app.i18n import t
 from app.willhaben import access_log, recorder
-from app.willhaben.public import willhaben_limiter
+from app.platforms.ratelimit import RateLimiter
+from app.willhaben.public import account_limiter, willhaben_limiter
 
 log = logging.getLogger(__name__)
 
@@ -347,7 +348,19 @@ class NativeClient:
         self._transport = transport
         self._lock = asyncio.Lock()
         self.pending: Pending | None = None
-        self.limiter = willhaben_limiter()      # same home IP as the browser and the anonymous visitor
+        self._limiter_override: RateLimiter | None = None   # tests
+
+    @property
+    def limiter(self) -> RateLimiter:
+        """The account's limiter for the account's identity (public.account_limiter, home IP); the anonymous one for
+        an anonymous identity."""
+        if self._limiter_override is not None:
+            return self._limiter_override
+        return account_limiter() if self.channel == "account" else willhaben_limiter()
+
+    @limiter.setter
+    def limiter(self, value: RateLimiter) -> None:
+        self._limiter_override = value
 
     def _client(self, **kw: Any) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=TIMEOUT_S, transport=self._transport, proxy=self.proxy, **kw)

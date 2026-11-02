@@ -1580,6 +1580,9 @@ def sold_candidates(query: str | None, exclude: tuple[str, str] = ("", "")) -> l
 COMPARE_SETTING = "compare_claude"           # "0": the rules only
 IDENTITY_TTL_S = 7 * 86400
 _identities: dict[str, tuple[float, dict[str, Any]]] = {}
+_picks: dict[str, tuple[float, set[int]]] = {}    # the exact pick prompt -> Claude's numbers (PICK_TTL_S)
+PICK_TTL_S = 24 * 3600                             # the same product and the same listings: the same answer
+PICK_CACHE_MAX = 2000
 PICK_MAX = 80                                # titles shown to Claude at most (the closest by price first)
 
 COMPARE_IDENTITY_SYSTEM = """\
@@ -1662,12 +1665,24 @@ async def pick_same(ident: dict[str, Any], ads: list[dict[str, Any]], price: flo
     listing = [f"{i}. {one_line(a.get('title') or '')} · {a['price']:g} €" for i, a in enumerate(shown, 1)]
     prompt = "\n".join([f"Produkt: {ident['product']}", f"Variante: {ident.get('variant') or '–'}", "",
                         "Gefundene Anzeigen:", *listing, "", "Aufgabe: Welche sind vergleichbar?"])
-    try:
-        out = await get_backend("compare").complete(system=COMPARE_PICK_SYSTEM, prompt=prompt, schema=COMPARE_PICK_SCHEMA)
-    except LLMError as e:
-        log.info("similar ads by Claude failed for %r: %s", ident.get("product"), e)
-        return None
-    picked = {n for n in out.data.get("same") or [] if isinstance(n, int) and 1 <= n <= len(shown)}
+    import hashlib
+    key = hashlib.sha256(prompt.encode()).hexdigest()
+    hit = _picks.get(key)
+    if hit and time.time() - hit[0] < PICK_TTL_S:      # an agent's check runs every few minutes over the same ads
+        picked = hit[1]
+    else:
+        try:
+            out = await get_backend("compare").complete(system=COMPARE_PICK_SYSTEM, prompt=prompt,
+                                                        schema=COMPARE_PICK_SCHEMA)
+        except LLMError as e:
+            log.info("similar ads by Claude failed for %r: %s", ident.get("product"), e)
+            return None
+        picked = {n for n in out.data.get("same") or [] if isinstance(n, int) and 1 <= n <= len(shown)}
+        if len(_picks) >= PICK_CACHE_MAX:
+            now = time.time()
+            for k in [k for k, (at, _) in _picks.items() if now - at >= PICK_TTL_S] or list(_picks)[:PICK_CACHE_MAX // 4]:
+                _picks.pop(k, None)
+        _picks[key] = (time.time(), picked)
     return [a for i, a in enumerate(shown, 1) if i in picked]
 
 

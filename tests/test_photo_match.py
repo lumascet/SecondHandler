@@ -39,7 +39,7 @@ def test_dhash_tells_the_same_photo_apart_from_another():
 def photos(monkeypatch):
     pics = {}
 
-    async def fetch(client, url):
+    async def fetch(url, platform):
         return pics.get(url)
     monkeypatch.setattr(photo_match, "_fetch", fetch)
     return pics

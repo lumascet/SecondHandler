@@ -2,8 +2,9 @@
 engineering the sites' web apps: every request of every site with its answer, and the WebSocket frames.
 
 Switched on the session page (setting browser_record_all); the listeners stay attached and read the switch on every
-request, so it applies at once. Lines go to data/captures/all/<YYYYMMDD-HH>.jsonl (local, like every capture: they
-hold chat content), files older than KEEP_DAYS are deleted. Never kept: cookies, CSRF tokens and authorization headers
+request (cached ON_CACHE_S), so it applies at once. Lines go to data/captures/all/<YYYYMMDD-HH>.jsonl (local, like
+every capture: they hold chat content); a finished hour is gzipped (.jsonl.gz, a tenth of the size), files older than
+KEEP_DAYS go, and so do the oldest once all of them together pass MAX_BYTES. Never kept: cookies, CSRF tokens and authorization headers
 (recorder.redact_headers), passwords, card numbers, PINs and tokens in request bodies (redact_body), and images,
 fonts, style sheets and media (no use for the API, only size).
 """
@@ -25,6 +26,8 @@ log = logging.getLogger(__name__)
 
 SETTING = "browser_record_all"
 KEEP_DAYS = 7
+MAX_BYTES = 2_000_000_000     # all kept files together (gzipped hours mostly): the oldest go first beyond this
+ON_CACHE_S = 5                # the switch, read for every request of the browser: not a database query each time
 SKIP_TYPES = {"image", "font", "stylesheet", "media", "texttrack", "manifest"}
 DOC_LIMIT, BODY_LIMIT, FRAME_LIMIT, POST_LIMIT = 3_000_000, 300_000, 20_000, 100_000
 # a field whose name has one of these as a whole part ("password", "card_number", "accessToken"; not "shipping")
@@ -36,12 +39,19 @@ _tasks: set[asyncio.Task] = set()
 _pruned_hour = ""
 
 
+_on_cache: list[float | bool] = [0.0, False]
+
+
 def on() -> bool:
-    return get_setting(SETTING) != "0"           # on unless switched off (asked for: record everything)
+    now = time.monotonic()
+    if now - float(_on_cache[0]) > ON_CACHE_S:
+        _on_cache[:] = [now, get_setting(SETTING) != "0"]   # on unless switched off (asked for: record everything)
+    return bool(_on_cache[1])
 
 
 def set_on(value: bool) -> None:
     set_setting(SETTING, "1" if value else "0")
+    _on_cache[:] = [time.monotonic(), value]
 
 
 def folder() -> Path:
@@ -50,7 +60,7 @@ def folder() -> Path:
 
 def stats() -> dict[str, Any]:
     """{files, bytes} of the kept recordings (the session page)."""
-    files = sorted(folder().glob("*.jsonl")) if folder().is_dir() else []
+    files = _files()
     return {"files": len(files), "bytes": sum(f.stat().st_size for f in files),
             "newest": files[-1].name if files else None}
 
@@ -62,6 +72,44 @@ def redact_body(text: str | None) -> str | None:
     return _FORM_SECRET.sub(r"\1***", _JSON_SECRET.sub(r'\1"***"', text))
 
 
+def _files() -> list[Path]:
+    d = folder()
+    return sorted([*d.glob("*.jsonl"), *d.glob("*.jsonl.gz")], key=lambda p: p.name) if d.is_dir() else []
+
+
+def _tidy(current: str) -> None:
+    """Gzip the finished hours, then drop what is older than KEEP_DAYS and the oldest beyond MAX_BYTES. Runs in a
+    thread: an hour's file is tens of MB."""
+    import gzip
+    import shutil
+
+    import os
+
+    d = folder()
+    cutoff = time.time() - KEEP_DAYS * 86400
+    for p in _files():                           # first the old ones (a gzipped copy would look new)
+        if p.stat().st_mtime < cutoff:
+            p.unlink(missing_ok=True)
+    for p in d.glob("*.jsonl"):
+        if p.name != f"{current}.jsonl":
+            try:
+                st = p.stat()
+                gz = p.with_name(p.name + ".gz")
+                with open(p, "rb") as src, gzip.open(gz, "wb", compresslevel=6) as dst:
+                    shutil.copyfileobj(src, dst)
+                os.utime(gz, (st.st_atime, st.st_mtime))   # its age stays the hour's
+                p.unlink()
+            except OSError as e:
+                log.info("record_all: %s not compressed: %s", p.name, e)
+    files = [p for p in _files() if p.name != f"{current}.jsonl"]
+    total = sum(p.stat().st_size for p in files)
+    for p in files:                              # oldest first (the names sort by hour)
+        if total <= MAX_BYTES:
+            break
+        total -= p.stat().st_size
+        p.unlink(missing_ok=True)
+
+
 def _write(entry: dict[str, Any]) -> None:
     global _pruned_hour
     now = utcnow()
@@ -70,12 +118,10 @@ def _write(entry: dict[str, Any]) -> None:
     d.mkdir(parents=True, exist_ok=True)
     with open(d / f"{hour}.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
-    if hour != _pruned_hour:                     # once an hour: drop what is older than KEEP_DAYS
+    if hour != _pruned_hour:                     # once an hour: compress the last one, drop the old ones
         _pruned_hour = hour
-        cutoff = time.time() - KEEP_DAYS * 86400
-        for p in d.glob("*.jsonl"):
-            if p.stat().st_mtime < cutoff:
-                p.unlink(missing_ok=True)
+        import threading
+        threading.Thread(target=_tidy, args=(hour,), daemon=True, name="record-all-tidy").start()
 
 
 def _spawn(coro) -> None:

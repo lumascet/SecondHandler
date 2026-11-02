@@ -301,7 +301,14 @@ class KleinanzeigenClient(HttpPlatformClient):
             return hit[1]
         r = await self._get(f"{API}/locations.json", params={"q": key.replace("-", " ")}, headers=self.headers,
                             kind="other", cache_s=3600)
-        found = parse_locations(r.json()) if r.status_code == 200 else []
+        if r.status_code != 200:   # a failed lookup is no "unknown place": not kept, and the search must not run
+            raise PlatformError(t("Kleinanzeigen: the place {place} could not be looked up (HTTP {status})",
+                                  place=place, status=r.status_code))   # nationwide in its place
+        try:
+            found = parse_locations(r.json())
+        except ValueError as e:
+            raise PlatformError(t("Kleinanzeigen: the place {place} could not be looked up (HTTP {status})",
+                                  place=place, status=r.status_code)) from e
         lid = found[0][0] if found else None
         _locations[key] = (time.monotonic(), lid)
         return lid

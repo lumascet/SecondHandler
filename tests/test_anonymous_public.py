@@ -110,3 +110,19 @@ def test_price_from_display():
     assert _price_from_display("€ 2.400") == 2400
     assert _price_from_display("€ 1.234,50") == 1234.5
     assert _price_from_display("VB") is None and _price_from_display(None) is None
+
+
+def test_the_account_paces_apart_from_the_vpn_searches(monkeypatch):
+    """willhaben's VPN on: the anonymous searches leave from another IP, so a block of the VPN server must not pause
+    the logged-in account (chat sending). VPN off: one home IP, one limiter."""
+    from app.platforms import vpn
+    from app.willhaben import public
+    from app.willhaben.session import BrowserSession
+
+    s = BrowserSession()
+    monkeypatch.setattr(vpn, "enabled", lambda pid: False)
+    assert s.limiter is public.willhaben_limiter()
+    monkeypatch.setattr(vpn, "enabled", lambda pid: pid == "willhaben")
+    assert s.limiter is not public.willhaben_limiter()
+    public.willhaben_limiter().penalize()                          # the VPN server got a 429
+    assert s.limiter.cooling_down_s == 0                           # the account is not paused by it

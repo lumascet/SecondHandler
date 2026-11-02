@@ -90,7 +90,15 @@ _sources: list[Callable[[], dict[str, list[dict[str, Any]]]]] = []
 
 
 def reset() -> None:
-    """Forget everything (tests: every test has its own event loop)."""
+    """Forget everything (tests: every test has its own event loop). A task still running on the previous test's loop
+    is cancelled, so it does not wake up later on a closed loop ("Event loop is closed")."""
+    for j in list(_active):
+        task = getattr(j, "task", None)
+        if task is not None and not task.done():
+            try:
+                task.cancel()
+            except RuntimeError:          # its loop is closed already: nothing left to cancel
+                pass
     _locks.clear()
     _active.clear()
     _finished.clear()

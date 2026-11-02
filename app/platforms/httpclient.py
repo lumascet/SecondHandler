@@ -44,6 +44,7 @@ ANON_SESSION_S = 6 * 3600   # fresh anonymous visitor every 6 h
 TIMEOUT_S = 30
 VPN_ATTEMPTS = 3            # exits one request may use before it gives up (each one through the limiter)
 VPN_TRIES = 8               # ... and sends at most (a refusal is asked again until it counts: vpn.CONFIRM)
+VPN_SAME_SERVER_TRIES = 3  # ... refused by one server (vpn.CONFIRM: enough for them to count when they can)
 TRIAL_TIMEOUT_S = 10        # a test request of the VPN search: a server that does not answer by then is out
 
 
@@ -597,11 +598,15 @@ class HttpPlatformClient:
             return await self._send_lane(tunnel, ln, full, kind, headers, valid)
         last: PlatformError | None = None
         exits: set[Route] = set()
+        refusals: dict[Route, int] = {}                   # per server within this request
         for _ in range(VPN_TRIES):
             route = await tunnel.ensure()                 # PlatformError when there is no route (fail closed)
             exits.add(route)
             if len(exits) > VPN_ATTEMPTS:
                 break
+            if refusals.get(route, 0) >= VPN_SAME_SERVER_TRIES:
+                break       # it keeps refusing, the refusals do not count yet (vpn.CONFIRM_SPAN_S): a later request
+                            # asks again, this one does not hammer it up to VPN_TRIES times within seconds
             try:
                 r = await self._send_once(full, kind, headers, route)
             except ExitMoved as e:                        # switched over while it waited: the new route
@@ -622,6 +627,7 @@ class HttpPlatformClient:
                 if r.status_code not in (403, 429):      # not eBay's warm-up 403 either: an answer the site accepted
                     tunnel.answered(route)
                 return r
+            refusals[route] = refusals.get(route, 0) + 1
             if await tunnel.refused(route, reason, detail=f"HTTP {r.status_code}"):
                 self.new_anonymous_session()             # it counted: the next server gets a new visitor
             last = Blocked(t("{name} refused the VPN server (HTTP {status})", name=self.name, status=r.status_code)

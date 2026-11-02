@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
@@ -9,6 +10,8 @@ from sqlalchemy import JSON, Column, Index, LargeBinary, String, UniqueConstrain
 from sqlmodel import Field, Session, SQLModel, col, create_engine, select
 
 from app.config import get_settings
+
+log = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
@@ -60,7 +63,8 @@ class SearchAgent(SQLModel, table=True):
 
 
 class Hit(SQLModel, table=True):
-    __table_args__ = (UniqueConstraint("agent_id", "ad_id"),)
+    # (agent, state): the hits pages, the backlogs and each check filter by both (an agent has thousands of hits)
+    __table_args__ = (UniqueConstraint("agent_id", "ad_id"), Index("ix_hit_agent_state", "agent_id", "state"))
     id: int | None = Field(default=None, primary_key=True)
     agent_id: int = Field(foreign_key="searchagent.id", index=True)
     platform: str = Field(default="willhaben", sa_column=_platform_column())
@@ -702,6 +706,8 @@ def _add_missing_columns(engine) -> None:
                 elif col_.server_default is not None:
                     default = str(col_.server_default.arg).replace("'", "''")
                     conn.execute(text(f"{ddl} NOT NULL DEFAULT '{default}'"))
+                else:                    # SQLite cannot add it to existing rows: the model needs a server default
+                    log.warning("db: column %s.%s not added (NOT NULL without a server default)", table.name, col_.name)
         for table in SQLModel.metadata.sorted_tables:
             if insp.has_table(table.name):
                 for index in table.indexes:

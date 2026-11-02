@@ -61,6 +61,7 @@ class RunResult:
     # the first check's hits (and a new search's) of an agent that judges: checked like new ones, but never pushed;
     # they end in "seen" or "filtered"
     quiet: list[Hit] = field(default_factory=list)
+    held: str | None = None     # every search waited for the VPN (why): nothing was searched, so not "nothing new"
 
 
 def _interval(platform: platforms.Platform, interval_s: int | None) -> int:
@@ -620,6 +621,8 @@ def enqueue_run(agent_id: int) -> bool:
 
 
 def _run_summary(res: RunResult) -> str:
+    if res.held:                # nothing went out: say so instead of "nothing new"
+        return t("not searched: waiting for the VPN ({why})", why=res.held)
     parts = [t("{n} new", n=len(res.new))] if res.new else []
     if res.price_drops:
         parts.append(t("{n} price drops", n=len(res.price_drops)))
@@ -669,6 +672,7 @@ async def _run_agent(agent_id: int) -> RunResult:
     found, rows_found, errors, first_exc, ok, held = await _search_all(usable, widen, older)
     if not ok and not errors:                # the VPN held every search: no error, the next check runs as planned
         log.info("agent %s: every search waits for the VPN (%s)", agent_id, held[0])
+        res.held = str(held[0])
         return res
     if not ok:
         return _fail(str(first_exc))         # every search failed (one search: its error)
@@ -678,9 +682,11 @@ async def _run_agent(agent_id: int) -> RunResult:
     res.baseline = baseline
     with session() as db:
         agent = db.get(SearchAgent, agent_id)
-        existing = {((h.platform or "willhaben"), h.ad_id): h for h in db.exec(select(Hit).where(Hit.agent_id == agent_id))}
-        id_site = {ad_id: pid for pid, ad_id in existing}     # Hit is unique per (agent, ad id), whatever the site
-        scam_ctx = _scam_context(existing.values(), [ad for ad, _ in found])
+        # only the hits of the ads on these pages (an agent has thousands): Hit is unique per (agent, ad id)
+        page_ids = list(dict.fromkeys(ad.ad_id for ad, _ in found if ad.ad_id))
+        existing = {((h.platform or "willhaben"), h.ad_id): h for h in _hits_of_ads(db, agent_id, page_ids)}
+        id_site = {ad_id: pid for pid, ad_id in existing}     # whatever the site
+        scam_ctx = _scam_context(db, agent_id, existing.values(), [ad for ad, _ in found])
         known = _known_conditions(db, [ad for ad, _ in found if ad.ad_id and not ad.item_condition
                                        and (ad.platform, ad.ad_id) not in existing])
         for ad, query in found:
@@ -1228,12 +1234,23 @@ def _known_conditions(db, ads: list[Listing]) -> dict[tuple[str, str], tuple[str
     return {((pid or "willhaben"), ad_id): (cond, label) for pid, ad_id, cond, label in rows}
 
 
-def _scam_context(hits, ads) -> dict:
-    """Agent price median for the scam check: recent stored hits plus this page (newest price per ad)."""
-    since = (utcnow() - timedelta(days=scam.CONTEXT_DAYS)).replace(tzinfo=None)   # SQLite gives naive UTC
-    prices = {h.ad_id: h.price for h in hits if h.screen_relevant is not False
-              and (h.first_seen_at is None or h.first_seen_at.replace(tzinfo=None) >= since)}
-    rejected = {h.ad_id for h in hits if h.screen_relevant is False}
+def _hits_of_ads(db, agent_id: int, ad_ids: list[str], chunk: int = 500) -> list[Hit]:
+    """The agent's hits of these ads (in chunks: SQLite's limit on bound parameters)."""
+    out: list[Hit] = []
+    for i in range(0, len(ad_ids), chunk):
+        out += db.exec(select(Hit).where(Hit.agent_id == agent_id, col(Hit.ad_id).in_(ad_ids[i:i + chunk]))).all()
+    return out
+
+
+def _scam_context(db, agent_id: int, page_hits, ads) -> dict:
+    """Agent price median for the scam check: recent stored hits plus this page (newest price per ad). Reads only
+    the recent hits' prices, not every hit of the agent."""
+    since = utcnow() - timedelta(days=scam.CONTEXT_DAYS)
+    recent = db.exec(select(Hit.ad_id, Hit.price).where(
+        Hit.agent_id == agent_id, or_(col(Hit.screen_relevant).is_(None), Hit.screen_relevant == True),  # noqa: E712
+        or_(col(Hit.first_seen_at).is_(None), Hit.first_seen_at >= since))).all()
+    prices = {ad_id: price for ad_id, price in recent}
+    rejected = {h.ad_id for h in page_hits if h.screen_relevant is False}
     prices.update({a.ad_id: a.price for a in ads if a.ad_id and a.ad_id not in rejected})
     return scam.median_context(list(prices.values()))
 

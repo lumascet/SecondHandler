@@ -57,6 +57,19 @@ async def _quiesce(app) -> None:
         tasks.append(chats._live["task"])
     tasks += list(chats._humanized.values())
     tasks += list(main._background)
+    # the jobs (agent checks, Claude calls, purchases: services/jobs) and the Vinted live stream write too
+    from app.services import jobs, vpn_check
+    tasks += [j.task for j in list(jobs._active) if getattr(j, "task", None) is not None]
+    try:
+        from app.platforms import vinted_inbox
+        if vinted_inbox._live.get("task") is not None:
+            tasks.append(vinted_inbox._live["task"])
+    except ImportError:  # pragma: no cover
+        pass
+    try:
+        await vpn_check.shutdown()              # a running VPN search (its tunnels, its state in the settings)
+    except Exception as e:  # noqa: BLE001 - restore anyway
+        log.warning("VPN search stop before restore failed: %s", e)
     current = asyncio.current_task()
     tasks = [x for x in dict.fromkeys(tasks) if x is not current and not x.done()]
     for x in tasks:
