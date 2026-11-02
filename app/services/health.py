@@ -12,6 +12,8 @@ disk – it makes no calls to willhaben, Claude, HA, Telegram or Google itself:
   Calendar    gcal client + refresh token present (a revoked Google grant shows only when the calendar is used)
   Disk        free space of DATA_DIR
   VPN         the shared WireGuard connection has a server no site with its VPN switch on is paused on
+  Accounts    each other site's login in the browser (Kleinanzeigen, Vinted: site_accounts.state) once the owner
+              logged in there; a logout stops that site's messages, which otherwise nothing reported
 
 Each item is "ok", "problem", "off" (not set up / switched off) or "unknown" (no data yet, ignored).
 Optional services (Home Assistant, Telegram, Google Calendar) are "off" while they are not (fully) set up; they are a
@@ -167,7 +169,9 @@ def _live_chat() -> Status:
         st.state, st.reason = "off", t("Switched off")
         return st
     if not (sess.started and sess.logged_in):
-        st.state, st.reason = "off", t("Needs willhaben login")
+        # unknown, not off: the willhaben item reports the logout; the live chat keeps its last state, so a live chat
+        # that fails to connect after the owner logged in again is reported (off -> problem would stay silent)
+        st.state, st.reason = "unknown", t("Needs willhaben login")
         return st
     if not sess.chat_live_ok():
         st.state, st.reason = "problem", t("Not connected, polling instead")
@@ -218,15 +222,42 @@ def _vpn() -> Status:
     return Status("vpn", "VPN", state, reason, href="/settings/vpn")
 
 
-CHECKS = [_willhaben, _claude, _ha, _telegram, _live_chat, _gcal, _disk, _vpn]
+def _site_login(pid: str) -> Status:
+    """A site account's login (site_accounts): off while the site is off or the owner never logged in there; a
+    problem once a check (or a refused API call) found it logged out."""
+    from app import platforms
+    from app.services import site_accounts
+
+    site = site_accounts.SITES[pid]
+    st = Status(f"account_{pid}", site.name, "off", href=f"/settings/{pid}")
+    if not platforms.enabled(pid):
+        st.reason = t("Switched off")
+        return st
+    logged_in = site_accounts.state(pid)["logged_in"]
+    if logged_in is None:
+        st.reason = t("Not set up")
+    elif logged_in:
+        st.state, st.reason = "ok", t("Logged in")
+    else:
+        st.state, st.reason = "problem", t("Not logged in – messages from {site} do not arrive", site=site.name)
+    return st
+
+
+def _site_logins() -> list[Status]:
+    from app.services import site_accounts
+    return [_site_login(pid) for pid in site_accounts.SITES]
+
+
+CHECKS = [_willhaben, _claude, _ha, _telegram, _live_chat, _gcal, _disk, _vpn, _site_logins]
 
 
 def collect() -> list[Status]:
     """Current status of every item (cheap, no network): used by the job and the home page tiles."""
-    out = []
+    out: list[Status] = []
     for fn in CHECKS:
         try:
-            out.append(fn())
+            got = fn()
+            out.extend(got if isinstance(got, list) else [got])
         except Exception as e:  # noqa: BLE001 - one broken check must not hide the others
             log.warning("health check %s failed: %s", fn.__name__, e)
             out.append(Status(fn.__name__.strip("_"), fn.__name__.strip("_"), "unknown", str(e)[:100]))

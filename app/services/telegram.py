@@ -840,13 +840,11 @@ def _set_hit_state(ref: str, state: str) -> int:
         platform, ad_id = split_ref(ref)
     except InvalidRef:
         return 0
+    from app.services import owner_actions
     with session() as db:
-        hits = db.exec(select(Hit).where(Hit.ad_id == ad_id, Hit.platform == platform)).all()
-        for h in hits:
-            h.state = state
-            db.add(h)
-        db.commit()
-    return len(hits)
+        ids = list(db.exec(select(Hit.id).where(Hit.ad_id == ad_id, Hit.platform == platform)))
+    # as on the web (taste, push off the phone, photos); this message already lost its buttons
+    return len(owner_actions.set_hit_state(ids, state, settle=False))
 
 
 async def _start_purchase(cq_id: str | None, msg: dict[str, Any], pressed: str, ad_id: str) -> None:

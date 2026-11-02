@@ -62,7 +62,9 @@ def test_search_answer_becomes_listings():
     assert dealer.is_private is False and dealer.price_display == "60 €" and dealer.body == "Gewerblicher Verkauf mit Rechnung & Garantie."
     assert free.price == 0 and free.price_display == "Zu verschenken" and free.image_url is None
     assert novalue.price is None and novalue.price_display == "VB"
-    assert ka.parse_ads({}).rows_found == 0 and ka.parse_ads({"x": 1}).ads == []
+    assert ka.parse_ads({ka.ADS_NS: {}}).rows_found == 0 and ka.parse_ads({ka.ADS_NS: {"value": {}}}).ads == []
+    with pytest.raises(PlatformError, match="without a result list"):   # a changed answer: never "nothing new"
+        ka.parse_ads({"x": 1})
     single = {ka.ADS_NS: {"value": {"paging": {"numFound": "1"}, "ad": load("kleinanzeigen_ads.json")[ka.ADS_NS]["value"]["ad"][0]}}}
     assert len(ka.parse_ads(single).ads) == 1                            # one result comes as a dict, not a list
 

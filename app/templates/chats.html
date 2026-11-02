@@ -35,6 +35,7 @@
       </div>
     </div>
     {% if wh_on and not session_status.logged_in %}<div role="status" class="mb-2.5 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-warning">{{ _("Not logged in to willhaben.") }} <a class="font-semibold text-warning underline" href="/settings/willhaben">{{ _("Log in now") }}</a></div>{% endif %}
+    {% for name, st in site_logins() if st.logged_in is false %}<div role="status" class="mb-2.5 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-warning" data-site-logged-out>{{ _("Not logged in to {site} – its messages do not arrive.", site=name) }} <a class="font-semibold text-warning underline" href="/settings/{{ name|lower }}">{{ _("Log in now") }}</a></div>{% endfor %}
     {# live connection per site: its mark, green while live, red otherwise; the details only in the tooltip #}
     {% set vl = vinted_live() if has_vinted else none %}
     <div id="chat-live-state" class="mb-3 flex items-center gap-3{{ '' if (wh_on or has_vinted) else ' hidden' }}">

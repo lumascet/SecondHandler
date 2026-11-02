@@ -194,7 +194,7 @@ def shpock_limiter() -> RateLimiter:
     if _limiter is None:
         from app.db import platform_min_gap_s, platform_per_hour
 
-        _limiter = RateLimiter(platform_min_gap_s("shpock"), platform_per_hour("shpock"), name="Shpock")
+        _limiter = RateLimiter(platform_min_gap_s("shpock"), platform_per_hour("shpock"), name="Shpock", persist="shpock")
     return _limiter
 
 
@@ -232,7 +232,10 @@ class ShpockClient(HttpPlatformClient):
             return None
         if r.status_code != 200:
             raise PlatformError(t("Shpock ad {id}: HTTP {status}", id=ad_id, status=r.status_code))
-        return parse_item_page(r.text, ad_id)
+        d = parse_item_page(r.text, ad_id)
+        if d is None and not _apollo(r.text):   # no page state at all: a changed page or an interstitial, not a
+            raise PlatformError(t("Shpock ad {id}: the page could not be read", id=ad_id))   # deleted ad
+        return d
 
 
 _client: ShpockClient | None = None

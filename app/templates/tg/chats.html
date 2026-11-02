@@ -5,6 +5,8 @@
 <main data-back="/tg">
 {{ m.head(_("Chats")) }}
 <div class="wrap" id="tg-chats" hx-get="/tg/chats?show={{ show }}&role={{ role }}" hx-trigger="every 15s [!document.documentElement.classList.contains('selecting')]" hx-select="#tg-chats" hx-swap="outerHTML" hx-disinherit="*">
+  {% if session_status.logged_in is false %}<a class="sec" href="/settings/willhaben" style="display: block; padding: 10px 14px; background: var(--t-warn-bg); color: var(--t-warn); font-size: 14px" data-site-logged-out>{{ _("Not logged in to willhaben.") }}</a>{% endif %}
+  {% for name, st in site_logins() if st.logged_in is false %}<a class="sec" href="/settings/{{ name|lower }}" style="display: block; padding: 10px 14px; background: var(--t-warn-bg); color: var(--t-warn); font-size: 14px" data-site-logged-out>{{ _("Not logged in to {site} – its messages do not arrive.", site=name) }}</a>{% endfor %}
   {# the chat list's filters: selling or buying, and all / unread / awaiting my reply #}
   <nav class="seg" aria-label="{{ _('Role') }}">
     {% for v, label in [('', _("All")), ('seller', _("Selling")), ('buyer', _("Buying"))] %}

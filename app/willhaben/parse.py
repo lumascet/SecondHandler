@@ -118,6 +118,10 @@ def _coordinates(raw: str | None) -> dict[str, float]:
 
 
 def parse_search(data: dict[str, Any]) -> SearchPage:
+    if not isinstance(data, dict) or ("advertSummaryList" not in data and "rowsFound" not in data):
+        # not a result list at all (a changed answer, an error page as JSON): an error, never "nothing new"
+        from app.platforms.base import PlatformError
+        raise PlatformError(t("willhaben answered the search without a result list"))
     items = ((data.get("advertSummaryList") or {}).get("advertSummary")) or []
     return SearchPage(
         rows_found=int(data.get("rowsFound") or 0),

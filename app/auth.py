@@ -29,8 +29,10 @@ PUBLIC_PATHS = {"/healthz", "/login", "/login/telegram", "/lang", "/sw.js"}   # 
 PUBLIC_PREFIXES = ("/static/",)    # stylesheets: the login page needs them before any login
 
 MAX_FAILS, FAIL_WINDOW_S = 10, 15 * 60
+GLOBAL_MAX_FAILS = 50   # wrong passwords from all addresses together in the window: Basic auth then waits for everyone
 TELEGRAM_MAX_AGE_S = 24 * 3600   # Telegram's launch data older than this logs in no more (a Mini App opened yesterday)
 _fails: dict[str, deque[float]] = defaultdict(deque)
+_all_fails: deque[float] = deque()
 
 
 def enabled() -> bool:
@@ -138,7 +140,31 @@ def locked_out(client: str, now: float | None = None) -> bool:
 
 
 def record_failure(client: str, now: float | None = None) -> None:
-    _fails[client].append(now or time.time())
+    now = now or time.time()
+    _fails[client].append(now)
+    _all_fails.append(now)
+
+
+def locked_out_all(now: float | None = None) -> bool:
+    """Too many wrong passwords from all addresses together: a guess spread over many addresses. Only Basic auth (the
+    scripts' way in) waits for it; the login form keeps its per-address limit, so the owner is not locked out."""
+    now = now or time.time()
+    while _all_fails and _all_fails[0] < now - FAIL_WINDOW_S:
+        _all_fails.popleft()
+    return len(_all_fails) >= GLOBAL_MAX_FAILS
+
+
+def basic_login(header: str, client: str) -> bool | None:
+    """An `Authorization: Basic` login, counted like the form's: True valid, False wrong (recorded), None when the
+    this address (or everyone) is locked out – then not even the right password counts. No Basic header: False."""
+    if not header.startswith("Basic "):
+        return False
+    if locked_out(client) or locked_out_all():
+        return None
+    if valid_basic(header):
+        return True
+    record_failure(client)
+    return False
 
 
 def safe_next(target: str | None) -> str:

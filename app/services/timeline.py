@@ -639,8 +639,18 @@ def _recorder():
         return None
 
 
-def size() -> dict[str, Any]:
-    """Stored entries and their approximate size (long texts + willhaben bodies + rows)."""
+_size_cache: tuple[float, dict[str, Any]] | None = None
+SIZE_CACHE_S = 120          # the pages show a size this old: summing ~1 GB of texts for every view is too slow
+
+
+def size(fresh: bool = False) -> dict[str, Any]:
+    """Stored entries and their approximate size (long texts + willhaben bodies + rows), plus what the database
+    file takes and how much of it is free pages (left by pruning until a VACUUM). Cached SIZE_CACHE_S unless
+    `fresh` (the pruning's own loop). Reads the whole blob table: call it off the event loop."""
+    global _size_cache
+    import time as _time
+    if not fresh and _size_cache and _time.monotonic() - _size_cache[0] < SIZE_CACHE_S:
+        return _size_cache[1]
     with session() as db:
         events = int(db.exec(select(func.count()).select_from(TimelineEvent)).one())
         blob_bytes = int(db.exec(select(func.coalesce(func.sum(func.length(TimelineBlob.data)), 0))).one() or 0)
@@ -648,8 +658,42 @@ def size() -> dict[str, Any]:
     rec = _recorder()
     rec_bytes = rec.storage_size() if rec else 0
     total = blob_bytes + rec_bytes + events * EVENT_EST_BYTES
-    return {"events": events, "blob_bytes": blob_bytes, "recording_bytes": rec_bytes, "bytes": total,
-            "mb": round(total / 1_000_000, 1), "oldest": oldest}
+    out = {"events": events, "blob_bytes": blob_bytes, "recording_bytes": rec_bytes, "bytes": total,
+           "mb": round(total / 1_000_000, 1), "oldest": oldest, **_file_size()}
+    _size_cache = (_time.monotonic(), out)
+    return out
+
+
+def _file_size() -> dict[str, Any]:
+    """The database file: its size and its free pages (SQLite reuses them, the file only shrinks with a VACUUM)."""
+    try:
+        with session() as db:
+            conn = db.connection()
+            page, pages, free = (int(conn.exec_driver_sql(f"PRAGMA {p}").scalar() or 0)
+                                 for p in ("page_size", "page_count", "freelist_count"))
+    except Exception:  # noqa: BLE001 - an in-memory test database, a driver without PRAGMA rows
+        return {"file_mb": None, "free_mb": None}
+    return {"file_mb": round(page * pages / 1_000_000, 1), "free_mb": round(page * free / 1_000_000, 1)}
+
+
+VACUUM_FREE_MB = 100        # free pages worth giving back to the disk (at night, in the quiet hours)
+
+
+def compact(force: bool = False) -> bool:
+    """Give the free pages back (VACUUM) and shorten the WAL: only when at least VACUUM_FREE_MB are free (or
+    `force`). Locks the database while it runs (seconds for ~1 GB): the caller picks a quiet time, off the loop."""
+    info = _file_size()
+    if not force and (info["free_mb"] or 0) < VACUUM_FREE_MB:
+        return False
+    from app.db import get_engine
+    with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:   # VACUUM: no transaction
+        conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.exec_driver_sql("VACUUM")
+        conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+    global _size_cache
+    _size_cache = None
+    log.info("database compacted: %s MB were free", info["free_mb"])
+    return True
 
 
 def _delete_events(db, ids: list[int]) -> None:
@@ -679,7 +723,7 @@ def prune(days: int | None = None, max_mb: int | None = None, batch: int = 500) 
             deleted += len(ids)
     if max_mb:
         budget = max_mb * 1_000_000
-        while size()["bytes"] > budget:
+        while size(fresh=True)["bytes"] > budget:
             if rec and (n := rec.drop_oldest_bodies(200)):
                 bodies += n
                 continue
@@ -707,6 +751,13 @@ async def prune_job() -> None:
         return
     if res["deleted"] or res["bodies_dropped"]:
         log.info("timeline pruned: %s", res)
+    from app.services import quiet_hours
+    q = quiet_hours.state()
+    if q and q.active:                   # the night: nobody waits on the app while VACUUM holds the database
+        try:
+            await asyncio.to_thread(compact)
+        except Exception as e:  # noqa: BLE001 - keep the scheduler job alive
+            log.warning("database compaction failed: %s", e)
 
 
 def mark_interrupted() -> int:

@@ -99,7 +99,7 @@ async def test_no_product_no_price_and_failures_change_nothing(agent, monkeypatc
     monkeypatch.setattr(geizhals_check, "get_backend", lambda *a: fake)
     await geizhals_check.check(agent, [junk, wrong, failed])
     assert _stored(junk) == {"checked": True}                                # final: no specific product
-    assert _stored(wrong) == {} and len(fake.calls) == 1                     # no results: wrong price gone, asked again
+    assert _stored(wrong) == {"tries": 1} and len(fake.calls) == 1           # no results: wrong price gone, asked again
     assert _stored(failed) is None                                           # (and no pick call)
 
     other = _hit(agent, 6, "iPhone 16 Pro", {"name": "Apple iPhone 16 128GB", "url": "https://geizhals.at/i-a3.html",
@@ -122,7 +122,7 @@ async def test_searches_are_capped_and_stop_when_geizhals_blocks(agent, monkeypa
     monkeypatch.setattr(geizhals_check, "get_backend", lambda *a: Script({"results": verdicts}))
     await geizhals_check.check(agent, hits)
     assert calls == [["Produkt 0"]]                                          # stopped at the first block
-    assert all(_stored(h) == {} for h in hits)                               # not final: a later check asks again
+    assert all(_stored(h) == {"tries": 1} for h in hits)                     # not final: a later check asks again
     assert geizhals_check.MAX_SEARCHED == 3
 
 
@@ -150,11 +150,41 @@ async def test_later_checks_take_older_unchecked_hits_and_stuck_ones_once(agent,
     monkeypatch.setattr(geizhals_check, "_candidates", candidates)
     assert await geizhals_check.check(agent, []) == 2                        # no new hit, only the backlog
     assert _stored(stuck)["price_from"] == 146.12 and _stored(old)["price_from"] == 99.0
-    assert _stored(final) == {"checked": True, "name": "x"} and get_setting("geizhals_check_version") == "2"
+    assert _stored(final) == {"checked": True, "name": "x"} and get_setting("geizhals_check_version") == "3"
     prompt = fake.calls[0]["prompt"]
     assert prompt.index("[1] Ubiquiti Unifi switch USW Lite 8 PoE") < prompt.index("[2] Ubiquiti Unifi UAP-AC-pro")
     assert "Geizhals: Ubiquiti UniFiSwitch Flex Desktop 2.5G (neu ab 209 €)" in prompt and "Konvolut" not in prompt
     assert await geizhals_check.check(agent, []) == 0 and len(fake.calls) == 2   # nothing left: no Claude call
+
+
+async def test_a_wrong_product_is_asked_at_most_max_tries_times(agent, monkeypatch):
+    """A product Claude calls wrong and the searches cannot replace is not asked about on every run forever: after
+    MAX_TRIES checks it counts as not found (final), so the backlog and the screening leave it."""
+    h = _hit(agent, 30, "UniFi Switch 8 150W", {"name": "UniFi Switch Lite 8", "url": "https://geizhals.at/l-a2.html",
+                                                 "price_from": 120.0})
+
+    async def nothing(queries):
+        return []
+
+    monkeypatch.setattr(geizhals_check, "_candidates", nothing)
+    verdict = {"results": [{"nr": 1, "ok": False, "product": "UniFi Switch 8 150W", "queries": ["US-8-150W"]}]}
+    for n in range(1, geizhals_check.MAX_TRIES + 1):
+        monkeypatch.setattr(geizhals_check, "get_backend", lambda *a: Script(verdict))
+        await geizhals_check.check(agent, [h] if n == 1 else [])           # later runs: from the backlog
+    assert _stored(h)["checked"] is True and "price_from" not in _stored(h)
+    calls = []
+    monkeypatch.setattr(geizhals_check, "get_backend", lambda *a: calls.append(1) or Script(verdict))
+    assert await geizhals_check.check(agent, []) == 0 and not calls          # final: never asked again
+
+
+async def test_the_backlog_skips_hits_held_back_by_the_screening(agent):
+    h = _hit(agent, 31, "Konvolut", {})
+    with session() as db:
+        row = db.get(Hit, h.id)
+        row.state = "filtered"
+        db.add(row)
+        db.commit()
+    assert geizhals_check.backlog(agent, set()) == []
 
 
 async def test_candidates_stop_at_the_first_search_that_finds_something(monkeypatch):

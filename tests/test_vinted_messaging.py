@@ -6,6 +6,7 @@ import pytest
 
 from app.platforms import vinted as vi
 from app.platforms import vinted_messaging as vm
+from app.platforms.base import Blocked
 from app.platforms.ratelimit import RateLimiter
 from tests.test_kleinanzeigen import Queue
 
@@ -172,3 +173,35 @@ def test_sse_event_framing():
     assert vm.sse_events("\n\n", buf) == ["b"]
     buf = [""]
     assert vm.sse_events(":heartbeat\n\ndata: x\ndata: y\n\n", buf) == ["x\ny"]   # comment skipped, multiline joined
+
+
+async def test_chat_keeps_its_own_connection_apart_from_the_search():
+    """A chat GET must not take over (and close) the anonymous search's transport, nor land the account's cookies in
+    the anonymous jar; a chat 403 must not clear the search visitor's cookies."""
+    built = []
+
+    class T:
+        def __init__(self, proxy):
+            self.proxy, self.cleared, self.closed = proxy, 0, False
+            built.append(self)
+
+        async def send(self, method, url, *, params=None, headers=None):
+            from app.platforms.httpclient import FetchResponse
+            return FetchResponse(403 if "messaging" in url else 200, {}, b"{}", url)
+
+        def clear_cookies(self):
+            self.cleared += 1
+
+        async def aclose(self):
+            self.closed = True
+
+    c = vi.VintedClient()
+    c._factory = T
+    c._tunnel = lambda: None
+    c.limiter = RateLimiter(0, name="Vinted")
+    search = await c._use("socks://vpn")              # the anonymous search's transport, on the VPN route
+    with pytest.raises(Blocked):                       # the 403
+        await c.messaging_get("/messaging/main/inbox", "access_token_web=t")
+    assert c._live.transport is search and not search.closed     # the search keeps its connection
+    assert search.cleared == 0                                    # and its cookies
+    assert c._authed_v.transport is not None and c._authed_v.transport is not search

@@ -922,5 +922,33 @@ function splitResize(list, key) {
   post('web_app_setup_main_button', {is_visible: false});
 })();
 </script>
+<script>
+// a failed action says so: htmx swaps no 4xx/5xx answer, and nothing at all when none came (a deploy restarts the
+// app), so a click on Send or Save looked as if it had worked. The pages' own refreshes (every …, load) stay quiet.
+(() => {
+  const own = (e) => !/every|load|revealed/.test((e.detail.elt && e.detail.elt.getAttribute && e.detail.elt.getAttribute('hx-trigger')) || '');
+  const say = (text) => {
+    const box = document.getElementById('flash');
+    if (!box) return;
+    const el = document.createElement('div');
+    el.setAttribute('role', 'alert');
+    el.className = 'alert alert-error max-w-sm text-sm whitespace-pre-line shadow-lg';
+    el.textContent = text;
+    el.addEventListener('click', () => el.remove());
+    box.classList.remove('hidden');
+    box.appendChild(el);
+    setTimeout(() => el.remove(), 12000);
+  };
+  const detail = (xhr) => { try { return JSON.parse(xhr.responseText).detail || ''; } catch (_) { return ''; } };
+  document.addEventListener('htmx:responseError', (e) => {
+    if (!own(e)) return;
+    const x = e.detail.xhr, why = detail(x);
+    say({{ _("That did not work (HTTP {status}).")|tojson }}.replace('{status}', x.status) + (why && typeof why === 'string' ? ' ' + why : ''));
+  });
+  const gone = (e) => { if (own(e)) say({{ _("The app is not reachable right now (restarting?) – nothing was done, try again.")|tojson }}); };
+  document.addEventListener('htmx:sendError', gone);
+  document.addEventListener('htmx:timeout', gone);
+})();
+</script>
 </body>
 </html>

@@ -388,7 +388,7 @@ def test_willhaben_and_live_chat_checks(monkeypatch):
     assert health._willhaben().state == "unknown"
     fake.logged_in = False
     assert health._willhaben().state == "problem"
-    assert health._live_chat().state == "off"        # the willhaben tile already says why
+    assert health._live_chat().state == "unknown"    # the willhaben tile says why; the live chat keeps its last state
     monkeypatch.setattr(s, "browser_enabled", False)
     assert health._willhaben().state == "off"
 
@@ -470,3 +470,38 @@ def test_home_page_real_checks_render(client):  # noqa: F811
     html = client.get("/").text
     for key in ("willhaben", "claude", "ha", "telegram", "live_chat", "gcal", "disk"):
         assert f'data-health="{key}"' in html
+
+
+def test_a_site_account_logout_is_a_problem(monkeypatch):
+    """Kleinanzeigen / Vinted logged out in the browser: their messages stop, which nothing else reports."""
+    import json
+
+    from app import platforms
+    monkeypatch.setattr(platforms, "enabled", lambda pid: pid == "vinted")
+    assert health._site_login("kleinanzeigen").state == "off"             # the site is off
+    assert health._site_login("vinted").state == "off"                    # never logged in there
+    set_setting("account_vinted", json.dumps({"logged_in": True}))
+    assert health._site_login("vinted").state == "ok"
+    set_setting("account_vinted", json.dumps({"logged_in": False}))
+    st = health._site_login("vinted")
+    assert st.state == "problem" and st.href == "/settings/vinted" and "Vinted" in st.reason
+    assert {"account_vinted", "account_kleinanzeigen"} <= {s.key for s in health.collect()}
+
+
+async def test_a_vinted_logout_is_pushed(monkeypatch):
+    import json
+
+    from app import platforms
+    monkeypatch.setattr(platforms, "enabled", lambda pid: pid == "vinted")
+    monkeypatch.setattr(health, "CHECKS", [health._site_logins])
+    sent = []
+
+    async def fake_send(title, items, channel):
+        sent.append((title, [s.key for s in items]))
+    monkeypatch.setattr(health, "_send", fake_send)
+    set_setting("account_vinted", json.dumps({"logged_in": True}))
+    await health.check()                                                   # baseline
+    set_setting("account_vinted", json.dumps({"logged_in": False}))
+    await health.check()
+    await health.check()
+    assert sent == [("Connection problem", ["account_vinted"])]

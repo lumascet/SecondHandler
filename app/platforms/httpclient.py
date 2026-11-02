@@ -317,6 +317,7 @@ class HttpPlatformClient:
         self._factory = transport_factory
         self._tunnel: Callable[[], Tunnel | None] = tunnel or (lambda: None)
         self._live = _Visitor(transport_factory(None) if injected else None)   # else built on first use
+        self._authed_v = _Visitor()   # the logged-in session's own connections and cookie jar (direct requests)
 
     @property
     def limiter(self) -> RateLimiter:
@@ -344,8 +345,10 @@ class HttpPlatformClient:
         return ln if ln is not None and ln.pid == self.platform and _trial.get() is None else None
 
     def _visitor(self) -> _Visitor:
-        """The visitor this request belongs to: the Trial's own under the VPN search, a lane's own, else the live
-        one."""
+        """The visitor this request belongs to: the logged-in session's own for a direct request, the Trial's own under
+        the VPN search, a lane's own, else the live one."""
+        if _authed.get():
+            return self._authed_v       # never the anonymous search's transport or jar
         tr = _trial.get()
         if tr is not None:
             return tr.visitor(self)
@@ -399,14 +402,20 @@ class HttpPlatformClient:
         return access_log.classify(url)
 
     def new_anonymous_session(self) -> None:
-        """Forget the site's cookies; the next request starts as a new visitor."""
+        """Forget the site's cookies; the next request starts as a new visitor. Not for the logged-in session: its
+        jar is the account's, a bot-protection 403 there is healed by re-seeding, not by forgetting."""
+        if _authed.get():
+            return
         if self._transport is not None:
             self._transport.clear_cookies()
         self._jar_since = time.monotonic()
 
     async def aclose(self) -> None:
-        if self._live.transport is not None:
-            await self._live.transport.aclose()
+        done: set[int] = set()
+        for v in (self._live, self._authed_v):
+            if v.transport is not None and id(v.transport) not in done:   # an injected transport is shared
+                done.add(id(v.transport))
+                await v.transport.aclose()
 
     def _check_status(self, r: FetchResponse) -> None:
         """403/429 = the site throttles or blocks this IP: new visitor, back-off, Blocked. A site may treat some

@@ -172,7 +172,7 @@ def preisjaeger_limiter() -> RateLimiter:
     if _limiter is None:
         from app.db import platform_min_gap_s, platform_per_hour
 
-        _limiter = RateLimiter(platform_min_gap_s("preisjaeger"), platform_per_hour("preisjaeger"), name="Preisjäger")
+        _limiter = RateLimiter(platform_min_gap_s("preisjaeger"), platform_per_hour("preisjaeger"), name="Preisjäger", persist="preisjaeger")
     return _limiter
 
 

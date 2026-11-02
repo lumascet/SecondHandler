@@ -185,5 +185,6 @@
  "{n} entries deleted, {b} stored answers emptied.": "{n} Einträge gelöscht, {b} gespeicherte Antworten geleert.",
  "The whole entry with its steps, texts and the sites' answers as one file. It can contain chats and names.": "Der ganze Eintrag mit Schritten, Texten und den Antworten der Seiten als eine Datei. Sie kann Chats und Namen enthalten.",
  "Pieces changed": "Stückzahl geändert",
- "Sale undone": "Verkauf rückgängig gemacht"
+ "Sale undone": "Verkauf rückgängig gemacht",
+ "Database file {mb} MB, {free} MB of it free (given back at night).": "Datenbankdatei {mb} MB, davon {free} MB frei (wird nachts freigegeben)."
 }

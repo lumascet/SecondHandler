@@ -37,7 +37,7 @@
 {% else %}
 {% call ui.empty(_("Nothing recorded yet.") if not (filters.kind or filters.site or filters.errors or filters.q or filters.ids or filters.job) else _("No entries match these filters."), _("Claude calls, requests to the sites, your actions and background jobs show up here as they happen.")) %}{% endcall %}
 {% endif %}
-<p class="mt-4 text-[12.5px] text-muted">{{ _("{n} entries, about {mb} MB.", n=size.events, mb=size.mb) }}
+<p class="mt-4 text-[12.5px] text-muted">{{ _("{n} entries, about {mb} MB.", n=size.events, mb=size.mb) }}{% if size.file_mb %} {{ _("Database file {mb} MB, {free} MB of it free (given back at night).", mb=size.file_mb, free=size.free_mb) }}{% endif %}
   {% if cfg.enabled %}{{ _("Older entries are deleted automatically (Settings → Timeline).") }}{% else %}{{ _("Entries are kept until you switch on pruning in Settings → Timeline.") }}{% endif %}
   {{ _("Prompts and the sites' answers contain chat texts and addresses; they stay on this server and are never part of a bug report.") }}
   <a class="link link-primary" href="/api/timeline{{ request.url.query and '?' ~ request.url.query or '' }}">JSON</a></p>

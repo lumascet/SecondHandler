@@ -123,5 +123,9 @@
  "{site} cannot load a single ad": "{site} kann keine einzelne Anzeige laden",
  "Vinted member {id}: HTTP {status}": "Vinted-Mitglied {id}: HTTP {status}",
  "{site}: no ad details": "{site}: keine Anzeigendetails",
- "Profile: HTTP {status}": "Profil: HTTP {status}"
+ "Profile: HTTP {status}": "Profil: HTTP {status}",
+ "Vinted ad {id}: the page could not be read": "Vinted-Anzeige {id}: Seite nicht lesbar",
+ "Shpock ad {id}: the page could not be read": "Shpock-Anzeige {id}: Seite nicht lesbar",
+ "willhaben answered the search without a result list": "willhaben hat die Suche ohne Ergebnisliste beantwortet",
+ "Kleinanzeigen answered the search without a result list": "Kleinanzeigen hat die Suche ohne Ergebnisliste beantwortet"
 }

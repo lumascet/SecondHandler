@@ -186,9 +186,13 @@ async def buy(pid: int) -> str:
         conv.hidden_at, conv.removed, conv.last_message_at = utcnow(), True, utcnow()
         db.add(conv)
         db.commit()
-    purchase._change(pid, lambda r: (setattr(r, "conversation_id", cid), setattr(r, "agreed_price", d.price),
-                                     setattr(r, "agreed_total", total),
-                                     purchase._move(r, "pay_now", t("Buying automatically with PayLivery"))))
+    # only from "new", checked in the same transaction: a Cancel on the order page while the ad was read must win,
+    # not be overwritten by this move (the buy then went ahead)
+    row = purchase._change(pid, lambda r: r.status == "new" and (
+        setattr(r, "conversation_id", cid), setattr(r, "agreed_price", d.price), setattr(r, "agreed_total", total),
+        purchase._move(r, "pay_now", t("Buying automatically with PayLivery"))))
+    if row is None or row.status != "pay_now":
+        return t("Cancelled")
     try:
         result = await paylivery.run_action(cid, "buy", float(d.price))
     except paylivery.PayLiveryError as e:

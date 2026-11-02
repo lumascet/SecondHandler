@@ -280,5 +280,7 @@
  "Hit screening is paused until usage drops below the limit.": "Die Treffer-Prüfung pausiert, bis der Verbrauch wieder unter dem Limit liegt.",
  "All tasks use Haiku until usage drops below the limit.": "Alle Aufgaben laufen mit Haiku, bis der Verbrauch wieder unter dem Limit liegt.",
  "{used} M of {limit} M tokens in the last {n} days.": "{used} M von {limit} M Tokens in den letzten {n} Tagen.",
- "month (30 days)": "Monat (30 Tage)"
+ "month (30 days)": "Monat (30 Tage)",
+ "That did not work (HTTP {status}).": "Das hat nicht geklappt (HTTP {status}).",
+ "The app is not reachable right now (restarting?) – nothing was done, try again.": "Die App ist gerade nicht erreichbar (Neustart?) – nichts wurde ausgeführt, bitte nochmal versuchen."
 }

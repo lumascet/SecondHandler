@@ -339,3 +339,33 @@ def test_willhaben_switch_lives_in_its_own_card(client):
     assert timeline.config()["record_wh"] is False and timeline.config()["record"] is True
     client.post("/settings/timeline/recording", data={"record_wh": "on"})
     assert timeline.config()["record_wh"] is True
+
+
+def test_size_is_cached_and_compact_runs_vacuum(monkeypatch):
+    """The pages read a cached size (summing the texts is slow on a big database); the pruning asks fresh. Compacting
+    runs only with enough free pages, unless forced."""
+    a = timeline.size(fresh=True)
+    monkeypatch.setattr(timeline, "_file_size", lambda: {"file_mb": 1.0, "free_mb": 0.0})
+    assert timeline.size() is a or timeline.size()["events"] == a["events"]
+    assert timeline.compact() is False                                   # nothing worth giving back
+    ran = []
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *e):
+            return False
+
+        def execution_options(self, **kw):
+            assert kw == {"isolation_level": "AUTOCOMMIT"}
+            return self
+
+        def exec_driver_sql(self, sql):
+            ran.append(sql)
+
+    class Engine:
+        def connect(self):
+            return Conn()
+    monkeypatch.setattr("app.db.get_engine", lambda: Engine())
+    assert timeline.compact(force=True) is True and "VACUUM" in ran

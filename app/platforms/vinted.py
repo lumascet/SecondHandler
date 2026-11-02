@@ -286,7 +286,7 @@ def vinted_limiter() -> RateLimiter:
     if _limiter is None:
         from app.db import platform_min_gap_s, platform_per_hour
 
-        _limiter = RateLimiter(platform_min_gap_s("vinted"), platform_per_hour("vinted"), name="Vinted")
+        _limiter = RateLimiter(platform_min_gap_s("vinted"), platform_per_hour("vinted"), name="Vinted", persist="vinted")
     return _limiter
 
 
@@ -321,7 +321,10 @@ class VintedClient(HttpPlatformClient):
             return None
         if r.status_code != 200:
             raise PlatformError(t("Vinted ad {id}: HTTP {status}", id=ad_id, status=r.status_code))
-        return parse_item(r.text, ad_id, host)
+        d = parse_item(r.text, ad_id, host)
+        if d is None:   # a 200 without the item's data: a changed page or an interstitial, not a deleted ad (404/410)
+            raise PlatformError(t("Vinted ad {id}: the page could not be read", id=ad_id))
+        return d
 
     async def messaging_get(self, path: str, cookie: str, anon: str | None = None) -> FetchResponse:
         """A GET on the messaging API (api.vinted.at) with the logged-in session's cookie. Authenticated and

@@ -261,3 +261,25 @@ async def test_a_doubtful_seller_account_stops_it(agent, pushes, monkeypatch):
     assert "No PayLivery ratings yet" in str(purchase.get(pid).log[-1])
     set_setting(auto_buy.SETTING_TRUST, "0")                             # allowed: no check
     assert await auto_buy.seller_doubt(d) is None
+
+
+async def test_a_cancel_while_the_ad_is_read_stops_the_buy(agent, pushes, monkeypatch):
+    """The owner cancels on the order page while the ad is being read again: the cancel wins, nothing is bought (the
+    move to "pay now" used to overwrite it)."""
+    from app import platforms
+    from app.services import paylivery
+    calls = []
+    pid = None
+
+    async def detail(ad_id, url=None):
+        purchase.cancel(pid)                       # the web Cancel lands right now
+        return _detail(ad_id)
+
+    async def run_action(cid, action, amount=None, claimed=False):
+        calls.append(action)
+        return "ok"
+    monkeypatch.setattr(platforms.get("willhaben"), "detail", detail)
+    monkeypatch.setattr(paylivery, "run_action", run_action)
+    pid = await auto_buy.schedule(agent, _hit(agent))
+    assert await auto_buy.buy(pid) == "Cancelled"
+    assert calls == [] and purchase.get(pid).status == "cancelled"

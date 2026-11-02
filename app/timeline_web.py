@@ -252,7 +252,8 @@ async def timeline_page(request: Request):
     if f.job:
         chips.append((t("Run {id}", id=f.job), "/timeline" + _params(f, job=None)))
     return render(request, "timeline.html", **ctx, tabs=tabs, site_tabs=site_tabs, chips=chips,
-                  ranges=[(k, t(label)) for k, label in RANGE_LABELS], size=timeline.size(), cfg=timeline.config())
+                  ranges=[(k, t(label)) for k, label in RANGE_LABELS], size=await asyncio.to_thread(timeline.size),
+                  cfg=timeline.config())
 
 
 @router.get("/timeline/{event_id:int}", response_class=HTMLResponse)

@@ -30,5 +30,6 @@
  "Only {n} GB free": "Nur {n} GB frei",
  "{n} GB free": "{n} GB frei",
  "Connection problem": "Verbindungsproblem",
- "Connection restored": "Verbindung wieder da"
+ "Connection restored": "Verbindung wieder da",
+ "Not logged in – messages from {site} do not arrive": "Nicht eingeloggt – Nachrichten von {site} kommen nicht an"
 }

@@ -233,21 +233,11 @@ async def tg_hit_deal_part(request: Request, hit_id: int):
 
 @router.post("/tg/hits/{hit_id}/state")
 async def tg_hit_state(hit_id: int, state: str = Form(...)):
-    from app.services import search_agents
-    if state not in ("new", "seen", "saved", "ignored"):
+    from app.services import owner_actions
+    if state not in owner_actions.HIT_STATES:
         raise HTTPException(400)
-    with session() as db:
-        h = db.get(Hit, hit_id)
-        if h is None:
-            raise HTTPException(404)
-        h.state = state
-        db.add(h)
-        db.commit()
-        db.refresh(h)
-    if state != "new":
-        search_agents.pushes_seen([h])
-    if state == "saved":
-        search_agents.keep_image_later(hit_id, search_agents.shown_photos(hit_id))
+    if not owner_actions.set_hit_state([hit_id], state):     # as on the web: taste, push, photos, Telegram message
+        raise HTTPException(404)
     return _back(f"/tg/hits/{hit_id}")
 
 
@@ -295,8 +285,9 @@ async def tg_chat(request: Request, conversation_id: str):
     with session() as db:
         o = chats.overview(db)
     open_draft = next((d for d in drafts if d.status == "draft"), None)
+    from app.services import telegram
     return _render(request, "chat.html", conv=conv, messages=chats.messages_of(conversation_id),
-                   draft=open_draft, translating=bool(open_draft and open_draft.lang is None and translate.on()),
+                   draft=open_draft, draft_sendable=telegram.can_send(open_draft) if open_draft else True, translating=bool(open_draft and open_draft.lang is None and translate.on()),
                    sending=next((d for d in drafts if d.status == "sending"), None),
                    presence=chats.presence_of(conv), place=chats.partner_place(conv),
                    finished=conv.id in o["finished"], notes=_notes(conv, drafts),
@@ -349,12 +340,11 @@ async def tg_chat_revise(conversation_id: str, draft_id: int = Form(...), instru
 
 @router.post("/tg/chats/{conversation_id}/discard")
 async def tg_chat_discard(conversation_id: str, draft_id: int = Form(...)):
+    from app.services import owner_actions
     with session() as db:
         d = db.get(Draft, draft_id)
-        if d is not None and d.conversation_id == conversation_id and d.status == "draft":
-            d.status = "discarded"
-            db.add(d)
-            db.commit()
+    if d is not None and d.conversation_id == conversation_id and d.status == "draft":
+        owner_actions.discard_draft(draft_id)     # dismissed for good: the next sync writes no new answer for it
     return _back(f"/tg/chats/{conversation_id}")
 
 

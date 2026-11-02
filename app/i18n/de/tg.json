@@ -38,5 +38,7 @@
  "Held back": "Zurückgehalten",
  "The price check failed: {error}": "Die Preisprüfung ist fehlgeschlagen: {error}",
  "Checking the price… (up to half a minute)": "Prüfe den Preis … (bis zu einer halben Minute)",
- "That did not work (error {code})": "Das hat nicht geklappt (Fehler {code})"
+ "That did not work (error {code})": "Das hat nicht geklappt (Fehler {code})",
+ "The draft still has [placeholders] or looks like a scam. Send it anyway?": "Der Entwurf hat noch [Platzhalter] oder wirkt wie Betrug. Trotzdem senden?",
+ "Also runs the PayLivery step ({step}) on willhaben right away – neither can be taken back.": "Startet auch gleich den PayLivery-Schritt ({step}) auf willhaben – beides lässt sich nicht zurücknehmen."
 }

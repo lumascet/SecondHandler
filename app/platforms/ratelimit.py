@@ -104,7 +104,10 @@ class RateLimiter:
     those messages.
     """
 
-    def __init__(self, min_gap_s: float, per_hour: int = 0, max_wait_s: float = 45.0, *, name: str = "willhaben") -> None:
+    def __init__(self, min_gap_s: float, per_hour: int = 0, max_wait_s: float = 45.0, *, name: str = "willhaben",
+                 persist: str | None = None) -> None:
+        """`persist`: a site's own limiter keeps its cool-down after a block across a restart (setting
+        `limiter_pause_<persist>`), so an update right after a 403 does not hit the site again at once."""
         self.min_gap_s = min_gap_s
         self.per_hour = per_hour
         self.max_wait_s = max_wait_s
@@ -115,6 +118,36 @@ class RateLimiter:
         self._strikes = 0
         self._recent: deque[float] = deque()   # monotonic start times of the last hour
         self._urgent_waiting = 0               # urgent() requests waiting for the lock: the others let them go first
+        self.persist = persist
+        self._restored = persist is None
+
+    def _restore(self) -> None:
+        """Once, on first use: the cool-down a block set before the restart (wall clock -> this process's clock)."""
+        self._restored = True
+        try:
+            import json
+
+            from app.db import get_setting
+            data = json.loads(get_setting(f"limiter_pause_{self.persist}") or "{}")
+            left = float(data.get("until", 0)) - time.time()
+            if left > 0:
+                self._cooldown_until = max(self._cooldown_until, time.monotonic() + left)
+                self._strikes = max(self._strikes, int(data.get("strikes") or 0))
+        except Exception:  # noqa: BLE001 - no database yet, a broken value: start without a pause
+            pass
+
+    def _save_pause(self) -> None:
+        if self.persist is None:
+            return
+        try:
+            import json
+
+            from app.db import set_setting
+            left = max(0.0, self._cooldown_until - time.monotonic())
+            set_setting(f"limiter_pause_{self.persist}",
+                        json.dumps({"until": time.time() + left, "strikes": self._strikes}) if left else "")
+        except Exception:  # noqa: BLE001 - the pause still holds in memory
+            pass
 
     def _budget_wait(self, now: float) -> float:
         while self._recent and now - self._recent[0] >= 3600:
@@ -124,6 +157,8 @@ class RateLimiter:
         return self._recent[0] + 3600 - now
 
     async def __aenter__(self) -> None:
+        if not self._restored:
+            self._restore()
         urgent = _urgent.get()
         while True:
             if urgent:
@@ -169,9 +204,13 @@ class RateLimiter:
         self._strikes += 1
         delay = min(60 * 2 ** (self._strikes - 1), 3600)
         self._cooldown_until = time.monotonic() + delay
+        self._save_pause()
         return delay
 
     def reward(self) -> None:
+        if self._strikes and self.persist is not None:
+            self._strikes = 0
+            self._save_pause()
         self._strikes = 0
 
     def refund(self) -> None:
@@ -193,6 +232,7 @@ class RateLimiter:
         self._last = self._cooldown_until = 0.0
         self._strikes = 0
         self._recent.clear()
+        self._restored = self.persist is None or self._restored
 
     @property
     def cooling_down_s(self) -> float:

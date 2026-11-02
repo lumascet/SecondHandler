@@ -191,15 +191,32 @@
     const main = document.querySelector('main');
     if (history.length > 1) history.back(); else location.href = (main && main.dataset.back) || '/tg';
   });
+  // what a form asks before it goes (data-confirm; data-confirm-paylivery while its PayLivery step is ticked)
+  const question = (f) => [f.dataset.confirm, f.querySelector('[name=paylivery_step]:checked') && f.dataset.confirmPaylivery]
+    .filter(Boolean).join(' ');
   on('main_button_pressed', () => {
     if (!mainForm) return;
-    const main = document.querySelector('main');
-    const holder = main.dataset.main ? main : main.querySelector('[data-main][data-main-form]');
-    post('web_app_setup_main_button', {is_visible: true, is_active: false, is_progress_visible: true,
-                                       text: holder ? holder.dataset.main : ''});
-    post('web_app_trigger_haptic_feedback', {type: 'impact', impact_style: 'medium'});
-    mainForm.requestSubmit();
+    const form = mainForm;
+    const go = () => {
+      const main = document.querySelector('main');
+      const holder = main.dataset.main ? main : main.querySelector('[data-main][data-main-form]');
+      post('web_app_setup_main_button', {is_visible: true, is_active: false, is_progress_visible: true,
+                                         text: holder ? holder.dataset.main : ''});
+      post('web_app_trigger_haptic_feedback', {type: 'impact', impact_style: 'medium'});
+      form.dataset.asked = '1';
+      form.requestSubmit();
+    };
+    const q = question(form);
+    if (!q) return go();
+    confirming = go;
+    post('web_app_open_popup', {message: q.slice(0, 256), buttons: [{id: 'ok', type: 'ok'}, {id: 'no', type: 'cancel'}]});
   });
+  // outside Telegram (the form's own button): the browser's dialog
+  document.addEventListener('submit', (e) => {
+    const f = e.target, q = f && f.dataset && question(f);
+    if (f.dataset.asked) { delete f.dataset.asked; return; }
+    if (q && !confirm(q)) e.preventDefault();
+  }, true);
   document.addEventListener('click', (e) => {
     if (inTg && e.target.closest('button, .cell, .chip')) post('web_app_trigger_haptic_feedback', {type: 'selection_change'});
   });
@@ -225,6 +242,23 @@
     setTimeout(() => el.remove(), 6000);
   };
   document.addEventListener('htmx:afterSettle', toast);
+  // a failed action says so (htmx swaps no error answer, none at all while the app restarts) and Telegram's main
+  // button stops spinning
+  const fail = (text) => {
+    const el = document.createElement('div');
+    el.className = 'toast'; el.setAttribute('role', 'alert'); el.textContent = text;
+    el.onclick = () => el.remove();
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 8000);
+    setup();
+  };
+  const mine = (e) => !/every|load|revealed/.test((e.detail.elt && e.detail.elt.getAttribute && e.detail.elt.getAttribute('hx-trigger')) || '');
+  document.addEventListener('htmx:responseError', (e) => {
+    if (mine(e)) fail({{ _("That did not work (HTTP {status}).")|tojson }}.replace('{status}', e.detail.xhr.status));
+  });
+  const unreachable = (e) => { if (mine(e)) fail({{ _("The app is not reachable right now (restarting?) – nothing was done, try again.")|tojson }}); };
+  document.addEventListener('htmx:sendError', unreachable);
+  document.addEventListener('htmx:timeout', unreachable);
   toast();
   // ---- loading: what the owner started (a tap, a form) shows the bar at once and "Loading…" after a moment; the
   // pages' own refreshes (every …, load, revealed) stay quiet

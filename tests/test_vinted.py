@@ -136,7 +136,7 @@ def test_mentions_ignores_case_accents_spaces_and_punctuation():
 
 
 async def test_block_and_missing_items():
-    c = vi.VintedClient(transport=Queue([(403, b""), (500, b""), (404, b"")]))
+    c = vi.VintedClient(transport=Queue([(403, b""), (500, b""), (404, b""), (200, b"<html>consent</html>")]))
     c.limiter = RateLimiter(0, name="Vinted")
     with pytest.raises(Blocked):
         await c.catalog("https://www.vinted.at/catalog?search_text=x", "www.vinted.at")
@@ -144,6 +144,8 @@ async def test_block_and_missing_items():
     with pytest.raises(PlatformError, match="HTTP 500"):
         await c.catalog("https://www.vinted.at/catalog?search_text=x", "www.vinted.at")
     assert await c.item("1") is None
+    with pytest.raises(PlatformError, match="could not be read"):       # a 200 without the item: never "gone"
+        await c.item("2")
 
 
 async def test_agent_end_to_end(platform, client):

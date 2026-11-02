@@ -39,7 +39,7 @@ from app.llm.claude_login import claude_token, forget_token, get_login, token_so
 from app.services import access_stats, ad_batch, ai_rules, ad_creator, chat_sim, chats, my_ads, screening, sold
 from app.services import purchase as purchase_svc
 from app.services import gcal, geizhals, ha_auth, label_fill, meetups, quiet_hours, shipping, telegram
-from app.services import adaptive_pace, geo, health, human_pace, jobs, price_zones, site_accounts
+from app.services import adaptive_pace, geo, health, human_pace, jobs, owner_actions, price_zones, site_accounts
 from app.services import credentials as credentials_svc
 from app.services import deals as deals_svc
 from app.services import min_price as min_price_svc
@@ -125,12 +125,16 @@ async def lifespan(app: FastAPI):
         with suppress(asyncio.CancelledError):
             await task
     scheduler.shutdown()
+    access_log.flush()                            # the counts first: cheap, and lost when the stop runs out of time
+    try:
+        await get_session().stop()                # Chromium first: a clean close keeps the logged-in profile intact
+    except Exception as e:  # noqa: BLE001 - the cleanup below must run
+        log.warning("browser at shutdown: %s", e)
     try:
         await vpn_check.shutdown()                # a running VPN search, before its clients and tunnels close
     except Exception as e:  # noqa: BLE001 - the cleanup below must run
         log.warning("VPN search at shutdown: %s", e)
     try:
-        await get_session().stop()
         await get_public().aclose()
         await platforms.aclose_all()              # the other sites' clients
     finally:
@@ -172,9 +176,15 @@ class DashboardAuth(BaseHTTPMiddleware):
             return await call_next(request)
         mcp_path = request.url.path == "/mcp" or request.url.path.startswith("/mcp/")
         agent_path = mcp_path or request.url.path.startswith("/api/")
-        if auth.valid_token(request.cookies.get(auth.COOKIE)) or auth.valid_basic(request.headers.get("authorization", "")) \
-                or (agent_path and auth.valid_bearer(request.headers.get("authorization", ""))):
+        authz = request.headers.get("authorization", "")
+        if auth.valid_token(request.cookies.get(auth.COOKIE)) \
+                or (agent_path and auth.valid_bearer(authz)):
             return await call_next(request)           # the AI agent's bearer token opens the JSON API and /mcp only
+        basic = auth.basic_login(authz, request.client.host if request.client else "?")   # wrong ones count
+        if basic:
+            return await call_next(request)
+        if basic is None:
+            return JSONResponse({"detail": "too many wrong passwords, try again later"}, status_code=429)
         if auth.debug_login(request.headers, request.client.host if request.client else None):
             log.info("debug login: %s %s", request.method, request.url.path)
             return await call_next(request)
@@ -1275,42 +1285,16 @@ async def hit_ad_detail(request: Request, ad_id: str, hit: int | None = None):
     return await ad_fragment(request, platforms.get("willhaben"), ad_id, hit)
 
 
-def _settle_hits(hits: list[Hit], state: str) -> None:
-    """A hit kept or ignored here: its Telegram message says so and loses Keep / Ignore (services/telegram.settle)."""
-    from app.services import telegram
-    line = {"saved": "⭐ " + t("Kept in the app"), "ignored": "🚫 " + t("Ignored in the app")}.get(state)
-    if not line:
-        return
-    for h in hits[:50]:
-        telegram.settle_later([search_agents_svc.hit_tag(h)], line, h.url)
-
-
-def _settle_draft(d: Draft | None, line: str) -> None:
-    """A draft sent or discarded here: its Telegram message (the draft offer, or the chat's message it took over)
-    says so and loses Send / Revise / Discard."""
-    from app.services import ha_actions, telegram
-    if d is None:
-        return
-    url = f"{get_settings().public_url.rstrip('/')}/chats/{d.conversation_id}"
-    telegram.settle_later([ha_actions.tag_for(d.id), chats.message_tag(d.conversation_id)], line, url)
+_settle_hits = owner_actions.settle_hits      # shared with the Mini App and the bot (services/owner_actions.py)
+_settle_draft = owner_actions.settle_draft
 
 
 @app.post("/hits/{hit_id}/state", response_class=HTMLResponse)
 async def hit_state(request: Request, hit_id: int, state: str = Form(...)):
-    with session() as db:
-        h = db.get(Hit, hit_id)
-        h.state = state
-        db.add(h)
-        db.commit()
-        db.refresh(h)
-    if state in ("saved", "ignored"):     # the owner's taste, kept after the hit is cleared (services/taste.py)
-        from app.services import taste
-        taste.record(h, state == "saved")
-        _settle_hits([h], state)
-    if state != "new":                   # handled: its push goes off the phone
-        search_agents_svc.pushes_seen([h])
-    if state == "saved":                # its photos, before the site drops them (sold, deleted)
-        search_agents_svc.keep_image_later(hit_id, search_agents_svc.shown_photos(hit_id))
+    if state not in owner_actions.HIT_STATES:
+        raise HTTPException(400)
+    if not owner_actions.set_hit_state([hit_id], state):    # taste, push off the phone, photos, Telegram message
+        raise HTTPException(404)
     if request.headers.get("hx-request"):
         return HTMLResponse("")
     return back("/hits")
@@ -1332,22 +1316,11 @@ async def hits_swipe(request: Request, agent_id: int | None = None):
 @app.post("/hits/{hit_id}/vote")
 async def hit_vote(hit_id: int, liked: str = Form(...)):
     """A swipe: right saves the hit, left discards it (ignored); both are kept for the agent's taste."""
-    from app.services import taste
     like = liked in ("1", "true", "yes")
-    with session() as db:
-        h = db.get(Hit, hit_id)
-        if h is None:
-            raise HTTPException(404)
-        h.state = "saved" if like else "ignored"
-        db.add(h)
-        db.commit()
-        db.refresh(h)
-    taste.record(h, like)
-    _settle_hits([h], h.state)
-    search_agents_svc.pushes_seen([h])
-    if like:
-        search_agents_svc.keep_image_later(hit_id, search_agents_svc.shown_photos(hit_id))
-    return JSONResponse({"ok": True, "state": h.state})
+    hits = owner_actions.set_hit_state([hit_id], "saved" if like else "ignored")
+    if not hits:
+        raise HTTPException(404)
+    return JSONResponse({"ok": True, "state": hits[0].state})
 
 
 _SHIP_TTL_S = 6 * 3600
@@ -1475,12 +1448,8 @@ async def hits_bulk(request: Request):
         search_agents_svc.clear_hits(search_agents_svc.EXPIRING, ids=ids)
     elif ids and action in ("saved", "seen", "ignored"):
         with session() as db:
-            done = list(db.exec(select(Hit).where(col(Hit.id).in_(ids), Hit.state != search_agents_svc.CLEARED)))
-            for h in done:
-                h.state = action
-                db.add(h)
-            db.commit()
-        _settle_hits(done, action)
+            live = list(db.exec(select(Hit.id).where(col(Hit.id).in_(ids), Hit.state != search_agents_svc.CLEARED)))
+        owner_actions.set_hit_state(live, action)      # as one by one: taste, pushes, photos, Telegram messages
     return back(view.url())
 
 
@@ -2043,10 +2012,9 @@ async def draft_mark_sent(draft_id: int, text: str = Form("")):
 
 @app.post("/drafts/{draft_id}/discard")
 async def draft_discard(draft_id: int):
-    with session() as db:
-        d = db.get(Draft, draft_id)
-    chats.discard_draft(draft_id, by_owner=True)
-    _settle_draft(d, "🗑 " + t("Discarded in the app"))
+    d = owner_actions.discard_draft(draft_id)
+    if d is None:
+        raise HTTPException(404)
     return back(f"/chats/{d.conversation_id}")
 
 

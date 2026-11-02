@@ -38,8 +38,9 @@
 {# the composer: Claude's draft to edit, or my own text; Telegram's main button sends (the dashboard's endpoints) #}
 {# Telegram's Send button is declared here, not on <main>: while Claude writes, only this part is reloaded – declared
    on <main> it stayed off once the draft came, and "Sent manually" was the only button (10-27) #}
+{% set step = paylivery_step(draft, conv) if draft else none %}
 <div id="tg-composer" style="background: var(--section); border-top: 1px solid var(--sep); padding: 10px 14px calc(12px + env(safe-area-inset-bottom))"
-     {% if not conv.drafting and not sending %}data-main="{{ _('Send') }}" data-main-form="tg-send"{% endif %}
+     {% if not conv.drafting and not sending %}data-main="{{ _('Send + PayLivery') if step and not step.busy else _('Send') }}" data-main-form="tg-send"{% endif %}
      {% if conv.drafting or translating %}hx-get="/tg/chats/{{ conv.id }}" hx-trigger="every 4s" hx-select="#tg-composer" hx-swap="outerHTML" hx-disinherit="*"{% endif %}>
   <div style="max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px">
   {% if conv.drafting %}
@@ -57,14 +58,15 @@
       {% if contact_warn %}<br>{{ _("willhaben censors e-mail addresses and links – remove: {hits}", hits=contact_warn|join(', ')) }}{% endif %}</div>{% endif %}
     {% if draft.meetup %}<span class="sub">{{ ui.icon('calendar', 13, 2) }} {{ _("This answer fixes an appointment: {when}", when=draft.meetup.start.replace('T', ' ')) }}{% if draft.meetup.location %} · {{ draft.meetup.location }}{% endif %}</span>{% endif %}
     {% endif %}
-    <form method="post" action="{{ '/drafts/' ~ draft.id ~ '/send' if draft else '/chats/' ~ conv.id ~ '/send-direct' }}" id="tg-send" style="margin: 0; display: flex; flex-direction: column; gap: 8px">
-      {% if draft %}<input type="hidden" name="now" value="1">{% endif %}
+    <form method="post" action="{{ '/drafts/' ~ draft.id ~ '/send' if draft else '/chats/' ~ conv.id ~ '/send-direct' }}" id="tg-send" style="margin: 0; display: flex; flex-direction: column; gap: 8px"
+          {% if draft and not draft_sendable %}data-confirm="{{ _('The draft still has [placeholders] or looks like a scam. Send it anyway?') }}"{% endif %}
+          {% if step and not step.busy %}data-confirm-paylivery="{{ _('Also runs the PayLivery step ({step}) on willhaben right away – neither can be taken back.', step=step.label) }}"{% endif %}>
+      {# no "now": the answer waits a few seconds and can be taken back (with a PayLivery step it goes at once) #}
       <label for="tg-text" style="position: absolute; width: 1px; height: 1px; overflow: hidden">{{ _("Answer") }}</label>
       <textarea id="tg-text" name="{{ 'text' if draft else 'hint' }}" rows="2" placeholder="{{ _('Message') }}" style="width: 100%; border: 1px solid var(--sep); border-radius: 12px; background: var(--chip); padding: 9px 12px; font-size: 15px; resize: none; field-sizing: content; max-height: 40vh">{{ draft.text if draft else '' }}</textarea>
       {% if draft and draft.translation %}<span class="sub" style="border: 1px dashed var(--sep); border-radius: 10px; padding: 6px 10px" data-draft-translation><b style="font-size: 11px; text-transform: uppercase">{{ _("Translation of the draft") }}</b> {{ draft.translation }}</span>{% endif %}
       {% if draft and draft.error %}<span style="font-size: 13px; color: var(--destructive)">{{ draft.error }}</span>{% endif %}
       {# Claude's PayLivery step for the open offer: runs on willhaben together with Send #}
-      {% set step = paylivery_step(draft, conv) if draft else none %}
       {% if step and step.busy %}<span class="sub" style="color: var(--link)" data-paylivery-busy><b>PayLivery:</b> {{ _("{step} is running on willhaben…", step=step.busy) }}</span>
       {% elif step %}<label style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13.5px; background: rgba(31,116,186,.1); border-radius: 10px; padding: 8px 12px" data-paylivery-step>
         <input type="checkbox" name="paylivery_step" value="{{ step.action }}" checked><span><b>PayLivery:</b> {{ step.label }}{% if not step.input %} · {{ _("offer {amount}", amount=step.offer|eur) }}{% endif %}</span>

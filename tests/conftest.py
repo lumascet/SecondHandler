@@ -18,7 +18,15 @@ os.environ.update({
     "HA_NOTIFY_SERVICE": "",
     "CLAUDE_CODE_OAUTH_TOKEN": "",
     "DASHBOARD_PASSWORD": "",
+    "PUBLIC_URL": "",
+    "CLAUDE_BIN": "/nonexistent/claude",   # a test that forgot its fake backend fails at once, never a billed prompt
+    "LLM_BACKEND": "claude_cli",
 })
+
+from app import config as _config  # noqa: E402
+
+_config.Settings.model_config["env_file"] = None    # never the real .env (app keys, the web address) in tests
+_config.get_settings.cache_clear()
 
 import socket  # noqa: E402
 
@@ -58,6 +66,23 @@ def _connect_ex(self, address):
 
 socket.getaddrinfo, socket.socket.connect, socket.socket.connect_ex = _getaddrinfo, _connect, _connect_ex
 
+# curl_cffi opens its sockets in libcurl, past the guard above: refuse its requests to other hosts the same way
+try:
+    from urllib.parse import urlsplit as _urlsplit
+
+    from curl_cffi.requests import AsyncSession as _CurlSession
+except ImportError:  # pragma: no cover
+    _CurlSession = None
+if _CurlSession is not None:
+    _real_curl_request = _CurlSession.request
+
+    async def _curl_request(self, method, url, *args, **kwargs):
+        if not _local((_urlsplit(str(url)).hostname or "",)):
+            raise ConnectionRefusedError(f"tests must not reach the network ({url})")
+        return await _real_curl_request(self, method, url, *args, **kwargs)
+
+    _CurlSession.request = _curl_request
+
 
 def load(name: str):
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
@@ -81,6 +106,13 @@ async def finish_jobs() -> None:
     from app.services import jobs
     while jobs._active:
         await asyncio.gather(*(j.task for j in list(jobs._active)))
+
+
+@pytest.fixture(autouse=True)
+def fake_claude_env(monkeypatch):
+    """tests/fake_claude.py is steered by FAKE_CLAUDE_* variables: the CLI's environment allowlist lets them pass."""
+    from app.llm import claude_cli
+    monkeypatch.setattr(claude_cli, "_ENV_KEEP_PREFIXES", (*claude_cli._ENV_KEEP_PREFIXES, "FAKE_CLAUDE_"))
 
 
 @pytest.fixture(autouse=True)
@@ -135,6 +167,8 @@ def fresh_db():
         if mod._limiter is not None:     # module-wide: one test's block (429 -> pause) must not pause the next test
             mod._limiter.reset()
     jobs.reset()                # background jobs are per event loop
+    from app.willhaben import access_log
+    access_log.reset()          # unflushed request counts of the previous test (counted toward the next one's)
     chats.reset()               # failed automatic answers are per test
     adaptive_pace.reset()       # the learned hourly profiles belong to the test's hits
     from app.services import deals, product_search

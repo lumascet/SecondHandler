@@ -35,7 +35,9 @@ MAX_HITS = 10           # hits per check, as the screening
 MAX_SEARCHED = 3        # hits whose product Claude looks for per check (each up to three Geizhals requests)
 MAX_BACKLOG = 5         # older unchecked hits taken along per check
 BACKLOG_DAYS = 3        # ... still seen in the agent's results within this many days
-VERSION = "2"           # setting geizhals_check_version: once per version, stuck results are asked again (_reset)
+VERSION = "3"           # setting geizhals_check_version: once per version, stuck results are asked again (_reset)
+MAX_TRIES = 3           # checks without a final answer before a hit's product counts as not found (no endless re-asking)
+LISTED = ("new", "seen", "saved")   # hit states the backlog takes: not ignored, not held back by the screening
 
 # the check's three answers, also asked by the screening (as geizhals_ok, product, queries: SCREEN_RULES)
 RULES = """\
@@ -141,18 +143,34 @@ def pick_prompt(searched: list[tuple[int, Hit, str, list[geizhals.Hit]]]) -> str
 
 
 def _reset() -> None:
-    """Once per VERSION: results stuck as "no product" by checks that could not finish (version 1 marked them checked
-    anyway) are asked again – {"checked": True} without a product goes back to {} on the agents with the switch."""
-    if get_setting("geizhals_check_version") == VERSION:
+    """Once per VERSION. 2: results stuck as "no product" by checks that could not finish (version 1 marked them
+    checked anyway) were asked again. 3: hits stuck at {} (a wrong product asked again on every run, version 2) get one
+    last try when still listed, else count as not found."""
+    seen = get_setting("geizhals_check_version")
+    if seen == VERSION:
         return
     with session() as db:
-        agents = list(db.exec(select(SearchAgent.id).where(SearchAgent.geizhals_check == True)))  # noqa: E712
-        for h in db.exec(select(Hit).where(col(Hit.agent_id).in_(agents))) if agents else []:
-            if h.geizhals == {"checked": True}:
-                h.geizhals = {}
-                db.add(h)
+        if seen in (None, "1"):
+            agents = list(db.exec(select(SearchAgent.id).where(SearchAgent.geizhals_check == True)))  # noqa: E712
+            for h in db.exec(select(Hit).where(col(Hit.agent_id).in_(agents))) if agents else []:
+                if h.geizhals == {"checked": True}:
+                    h.geizhals = {}
+                    db.add(h)
+            db.flush()
+        for h in db.exec(select(Hit).where(col(Hit.geizhals).is_not(None))):
+            if h.geizhals != {}:
+                continue
+            h.geizhals = {"tries": MAX_TRIES - 1} if h.state in LISTED else {"checked": True}
+            db.add(h)
         db.commit()
     set_setting("geizhals_check_version", VERSION)
+
+
+def _not_final(gh: dict[str, Any] | None) -> dict[str, Any]:
+    """The result of a check that gave no final answer: no product (a wrong one's price is not used) and one more try
+    counted; after MAX_TRIES the product counts as not found, so no later check asks Claude about it again."""
+    tries = int((gh or {}).get("tries") or 0) + 1
+    return {"tries": tries} if tries < MAX_TRIES else {"checked": True, "tries": tries}
 
 
 def unchecked(gh: dict[str, Any] | None) -> bool:
@@ -168,7 +186,8 @@ def backlog(agent: SearchAgent, exclude: set[int], limit: int = MAX_BACKLOG) -> 
     """Older hits of the agent whose product was never checked (or not to the end) and that are still listed."""
     since = utcnow() - timedelta(days=BACKLOG_DAYS)
     with session() as db:
-        rows = db.exec(select(Hit).where(Hit.agent_id == agent.id, Hit.state != "ignored", Hit.last_seen_at >= since)
+        rows = db.exec(select(Hit).where(Hit.agent_id == agent.id, col(Hit.state).in_(LISTED),
+                                         Hit.last_seen_at >= since)
                        .order_by(col(Hit.last_seen_at).desc()).limit(200))
         return [h for h in rows if h.id not in exclude and _unchecked(h.geizhals)][:limit]
 
@@ -238,8 +257,6 @@ async def settle(agent: SearchAgent, hits: list[Hit], verdicts: dict[int, dict[s
                 res = await deals.parts_new_price(parts)
             except geizhals.GeizhalsError as e:          # blocked or down: unchecked, a later check asks again
                 log.info("Geizhals lookup of the parts failed: %s", e)
-                if auto:
-                    result[nr] = {}
                 continue
             result[nr] = {**res, "by": "claude", "checked": True} if res else {"checked": True}
             continue
@@ -248,8 +265,6 @@ async def settle(agent: SearchAgent, hits: list[Hit], verdicts: dict[int, dict[s
         if not product or not queries:
             result[nr] = {"checked": True}              # no specific product: final
             continue
-        if auto:
-            result[nr] = {}                             # wrong product: its price is not used until a later check
         if search and len(to_search) < MAX_SEARCHED:
             to_search.append((nr, h, product, queries[:deals.GH_FIND_SEARCHES]))
     searched: list[tuple[int, Hit, str, list[geizhals.Hit]]] = []
@@ -278,6 +293,9 @@ async def settle(agent: SearchAgent, hits: list[Hit], verdicts: dict[int, dict[s
                               "by": "claude", "checked": True}
             elif pick == 0:
                 result[nr] = {"checked": True}          # Claude saw the results: none is this product
+    for nr, h in enumerate(hits, 1):           # answered, but nothing final: one try used (wrong product not kept)
+        if verdicts.get(nr) is not None and not result.get(nr, {}).get("checked") and h.geizhals is not None:
+            result[nr] = _not_final(h.geizhals)
     with session() as db:
         for nr, gh in result.items():
             h = hits[nr - 1]

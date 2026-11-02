@@ -13,6 +13,7 @@ def pw(monkeypatch, tmp_path):
     monkeypatch.setattr(get_settings(), "dashboard_password", "geheim")
     monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
     monkeypatch.setattr(auth, "_fails", type(auth._fails)(auth._fails.default_factory))
+    monkeypatch.setattr(auth, "_all_fails", type(auth._all_fails)())
     monkeypatch.setattr("app.main.asyncio.sleep", _no_sleep)
 
 
@@ -187,6 +188,7 @@ def test_without_a_password_the_public_address_needs_the_telegram_login(monkeypa
     from app.db import SETTING_PUBLIC_URL, apply_public_url
     monkeypatch.setattr(get_settings(), "telegram_bot_token", "123:secret")
     monkeypatch.setattr(auth, "_fails", type(auth._fails)(auth._fails.default_factory))
+    monkeypatch.setattr(auth, "_all_fails", type(auth._all_fails)())
     monkeypatch.setattr("app.main.asyncio.sleep", _no_sleep)
     set_setting("telegram_chat_id", "4242")
     set_setting(SETTING_PUBLIC_URL, "https://agent.example")      # Settings → Web address (applied at startup)
@@ -235,3 +237,21 @@ def test_the_debug_login_only_straight_from_the_home_network(pw, monkeypatch):
         assert c.get("/myads", headers=ok).status_code == 200
         assert c.get("/myads").status_code == 401
         assert c.get("/myads", headers={**ok, "x-forwarded-for": "203.0.113.9"}).status_code == 401
+
+
+def test_wrong_basic_passwords_count_toward_the_lockout(pw, monkeypatch):
+    """Basic auth (scripts, /api) is no way around the form's lockout: wrong passwords there count, and once an
+    address is locked out not even the right password opens the API – nor for everyone after a spread-out guess."""
+    def basic(p):
+        return {"authorization": "Basic " + base64.b64encode(f"admin:{p}".encode()).decode()}
+
+    with TestClient(app) as c:
+        assert c.get("/api/agents", headers=basic("geheim")).status_code == 200
+        for _ in range(auth.MAX_FAILS):
+            assert c.get("/api/agents", headers=basic("falsch")).status_code == 401
+        assert c.get("/api/agents", headers=basic("geheim")).status_code == 429       # this address waits now
+    monkeypatch.setattr(auth, "_fails", type(auth._fails)(auth._fails.default_factory))
+    for i in range(auth.GLOBAL_MAX_FAILS):
+        auth.record_failure(f"10.9.{i // 200}.{i % 200}")                    # one guess from each of many addresses
+    assert auth.basic_login(basic("geheim")["authorization"], "10.0.1.50") is None
+    assert not auth.locked_out("10.0.1.50")                                   # the login form is not locked for it

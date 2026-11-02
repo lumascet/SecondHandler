@@ -427,7 +427,8 @@ def prune_before(cutoff: datetime) -> int:
 
 
 def drop_oldest_bodies(n: int = 200) -> int:
-    """Empty the bodies of the n oldest recordings that still have any (metadata stays). Returns how many."""
+    """Empty the bodies and headers of the n oldest recordings that still have any (method, URL, status and timing
+    stay). Returns how many. The headers went with them: kept, they were most of what pruning left behind."""
     from sqlalchemy import or_, update
     from sqlmodel import col, select
 
@@ -435,11 +436,14 @@ def drop_oldest_bodies(n: int = 200) -> int:
 
     with session() as db:
         ids = list(db.exec(select(WhRecording.id).where(or_(col(WhRecording.resp_body).is_not(None),
-                                                             col(WhRecording.req_body).is_not(None)))
+                                                             col(WhRecording.req_body).is_not(None),
+                                                             col(WhRecording.resp_headers).is_not(None),
+                                                             col(WhRecording.req_headers).is_not(None)))
                            .order_by(col(WhRecording.id)).limit(n)))
         if not ids:
             return 0
-        db.exec(update(WhRecording).where(col(WhRecording.id).in_(ids)).values(req_body=None, resp_body=None, pruned=True))
+        db.exec(update(WhRecording).where(col(WhRecording.id).in_(ids)).values(req_body=None, resp_body=None, req_headers=None,
+                                                                      resp_headers=None, pruned=True))
         db.commit()
     return len(ids)
 

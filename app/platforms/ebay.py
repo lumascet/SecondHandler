@@ -453,7 +453,7 @@ def ebay_limiter() -> RateLimiter:
     if _limiter is None:
         from app.db import platform_min_gap_s, platform_per_hour
 
-        _limiter = RateLimiter(platform_min_gap_s("ebay"), platform_per_hour("ebay"), name="eBay")
+        _limiter = RateLimiter(platform_min_gap_s("ebay"), platform_per_hour("ebay"), name="eBay", persist="ebay")
     return _limiter
 
 

@@ -48,7 +48,7 @@ def willhaben_limiter() -> RateLimiter:
     if _limiter is None:
         from app.db import platform_min_gap_s, platform_per_hour   # changed in Settings (own or all platforms)
 
-        _limiter = RateLimiter(platform_min_gap_s("willhaben"), platform_per_hour("willhaben"), name="willhaben")
+        _limiter = RateLimiter(platform_min_gap_s("willhaben"), platform_per_hour("willhaben"), name="willhaben", persist="willhaben")
     return _limiter
 
 

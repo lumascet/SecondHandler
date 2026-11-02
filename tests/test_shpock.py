@@ -93,14 +93,20 @@ async def test_search_is_one_graphql_get(platform, client):
 
 
 async def test_errors_and_missing_items():
-    c = sh.ShpockClient(transport=Queue([(429, b""), (500, b""), (200, b"<html>gone</html>"), (404, b"")]))
+    deleted = (b'<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"apolloState":'
+               b'{"ROOT_QUERY":{}}}}}</script>')
+    c = sh.ShpockClient(transport=Queue([(429, b""), (500, b""), (200, b"<html>consent</html>"), (200, deleted),
+                                         (404, b"")]))
     c.limiter = RateLimiter(0, name="Shpock")
     with pytest.raises(Blocked):
         await c.search_items({"q": "x"}, 5)
     c.limiter = RateLimiter(0, name="Shpock")
     with pytest.raises(PlatformError, match="HTTP 500"):
         await c.search_items({"q": "x"}, 5)
-    assert await c.item(ITEM) is None and await c.item("asGONE0000000000") is None
+    with pytest.raises(PlatformError, match="could not be read"):    # no page state: never "gone" for good
+        await c.item(ITEM)
+    assert await c.item("asDEL00000000000") is None                     # the page says it has no such item
+    assert await c.item("asGONE0000000000") is None
 
 
 def _decoy(n=3):

@@ -347,3 +347,32 @@ def test_the_send_button_comes_with_the_draft_that_was_being_written(client):
     composer = re.search(r'<div id="tg-composer"[^>]*>', page).group(0)    # what the reload swaps in
     assert 'data-main="Send"' in composer and 'data-main-form="tg-send"' in composer
     assert "mark-sent" not in page                                        # "Sent manually" is gone
+
+
+def test_mini_app_actions_do_what_the_web_does(client, monkeypatch):
+    """A draft discarded in the Mini App is dismissed for good (no new auto-draft for the same message), a hit kept
+    there reaches the taste model; the composer's Send waits for the take-back window (no "now")."""
+    from app.services import taste
+    _a, hit_id = _data()
+    liked = []
+    monkeypatch.setattr(taste, "record", lambda h, like: liked.append((h.id, like)))
+    page = client.get("/tg/chats/c1").text
+    assert 'name="now"' not in page
+    with session() as db:
+        draft_id = db.exec(select(Draft.id)).one()
+    client.post("/tg/chats/c1/discard", data={"draft_id": str(draft_id)})
+    with session() as db:
+        d = db.get(Draft, draft_id)
+        assert d.status == "discarded" and d.dismissed is True
+    client.post(f"/tg/hits/{hit_id}/state", data={"state": "saved"})
+    assert liked == [(hit_id, True)]
+
+
+def test_mini_app_send_asks_before_a_risky_draft(client):
+    _data()
+    with session() as db:
+        d = db.exec(select(Draft)).one()
+        d.text = "Abholung am [Tag] möglich."
+        db.add(d)
+        db.commit()
+    assert "data-confirm=" in client.get("/tg/chats/c1").text

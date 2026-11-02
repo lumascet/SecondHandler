@@ -314,7 +314,7 @@ def facebook_limiter() -> RateLimiter:
     if _limiter is None:
         from app.db import platform_min_gap_s, platform_per_hour
 
-        _limiter = RateLimiter(platform_min_gap_s("facebook"), platform_per_hour("facebook"), name="Facebook")
+        _limiter = RateLimiter(platform_min_gap_s("facebook"), platform_per_hour("facebook"), name="Facebook", persist="facebook")
     return _limiter
 
 

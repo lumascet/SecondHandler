@@ -8,6 +8,7 @@ the docs announce that `--bare` will become the default for `-p` in a future rel
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -25,6 +26,13 @@ from app.llm.claude_login import claude_token
 log = logging.getLogger(__name__)
 
 
+_ENV_KEEP = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LANGUAGE", "TZ", "TMPDIR",
+             "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "NODE_OPTIONS",
+             "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+             "DISABLE_AUTOUPDATER", "CLAUDE_CONFIG_DIR"}
+_ENV_KEEP_PREFIXES = ("LC_", "XDG_")
+
+
 class ClaudeCLI:
     def __init__(self, cmd: list[str] | None = None, model: str | None = None,
                  timeout_s: int | None = None, purpose: str | None = None) -> None:
@@ -36,10 +44,10 @@ class ClaudeCLI:
         self._token = claude_token()
 
     def _env(self) -> dict[str, str]:
-        env = dict(os.environ)
-        # An API key would take precedence over the subscription token and bill the Console org.
-        env.pop("ANTHROPIC_API_KEY", None)
-        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        # Only what the CLI needs, not the app's whole environment: the dashboard password, the Telegram and HA
+        # tokens, DEBUG_TOKEN … would otherwise be readable by a subprocess that reads ad and chat text. No API key
+        # either: it would take precedence over the subscription token and bill the Console org.
+        env = {k: v for k, v in os.environ.items() if k in _ENV_KEEP or k.startswith(_ENV_KEEP_PREFIXES)}
         if self._token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = self._token
         env.setdefault("DISABLE_AUTOUPDATER", "1")
@@ -118,6 +126,12 @@ class ClaudeCLI:
             except asyncio.TimeoutError as e:
                 proc.kill()
                 raise LLMError(t("claude CLI timed out after {n} s", n=self.timeout_s)) from e
+            except BaseException:                  # the task was cancelled (shutdown, a job taken back): no orphan
+                if proc.returncode is None:        # claude left running (and billing) behind it
+                    proc.kill()
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(proc.wait(), 5)
+                raise
         return self.parse_output(out, err, proc.returncode)
 
     def parse_output(self, out: bytes, err: bytes, returncode: int | None) -> LLMResult:

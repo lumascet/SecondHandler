@@ -156,7 +156,10 @@ def parse_listing(ad: dict[str, Any]) -> Listing:
 
 
 def parse_ads(data: dict[str, Any]) -> SearchPage:
-    block = _val((data or {}).get(ADS_NS)) or {}
+    if not isinstance(data, dict) or ADS_NS not in data:
+        # no ads element at all (a changed answer): an error, never an empty result that looks like "nothing new"
+        raise PlatformError(t("Kleinanzeigen answered the search without a result list"))
+    block = _val(data.get(ADS_NS)) or {}
     if not isinstance(block, dict):
         block = {}
     found = to_float(_val((block.get("paging") or {}).get("numFound")))
@@ -236,7 +239,7 @@ def kleinanzeigen_limiter() -> RateLimiter:
     if _limiter is None:
         from app.db import platform_min_gap_s, platform_per_hour
 
-        _limiter = RateLimiter(platform_min_gap_s("kleinanzeigen"), platform_per_hour("kleinanzeigen"), name="Kleinanzeigen")
+        _limiter = RateLimiter(platform_min_gap_s("kleinanzeigen"), platform_per_hour("kleinanzeigen"), name="Kleinanzeigen", persist="kleinanzeigen")
     return _limiter
 
 
