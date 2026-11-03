@@ -900,6 +900,9 @@ async def live_watchdog() -> None:
         try:
             if not platforms.enabled("vinted"):
                 continue
+            from app.services import credentials, site_accounts
+            if site_accounts.state("vinted")["logged_in"] is False:
+                credentials.auto_login_later("vinted")    # logged out: the stored details (at most hourly)
             task = _live.get("task")
             if (task is None or task.done()) and await start_live():   # logged out: nothing starts, nothing logged
                 log.info("vinted live: (re)started the stream")

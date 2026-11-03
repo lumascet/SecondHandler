@@ -3081,45 +3081,17 @@ async def save_credentials(site: str, user: str = Form(""), password: str = Form
 async def credentials_login(site: str):
     """"Log in automatically": the site's login page in the remote view, the stored details typed in and sent; the
     overlay stays open for whatever the site asks next (a captcha, a code)."""
-    from app.services import credentials, label_fill
+    from app.services import credentials
     if site not in credentials.SITES or credentials.get(site) is None:
         raise HTTPException(404)
-    sess = get_session()
     remote = "1" if site == "willhaben" else site
-
-    async def logged_in() -> bool:
-        if site == "willhaben":
-            return await sess.check_login()
-        return bool((await site_accounts.check(site))["logged_in"])
-
     try:
-        if site == "willhaben":
-            await sess.open_login()
-            page = sess.ui_page
-        else:
-            await sess.open_site(site, credentials.LOGIN_PAGES[site])
-            page = sess.site_pages[site]
-        try:
-            await label_fill.dismiss_consent(page)          # a cookie banner over the form
-        except Exception:  # noqa: BLE001 - no banner
-            pass
-        await credentials.type_in(page, site)
-        await page.wait_for_timeout(4000)
-        ok = await logged_in()
-        msg = t("Logged in") if ok else t("Sent – finish the login in the browser window if the site asks for more")
+        result = await credentials.login(site)
     except SessionUnavailable as e:
         return back(f"/settings/{site}?msg={quote(str(e), safe='')}")
-    except Exception as e:  # noqa: BLE001 - no login form: already logged in, or the page shows a captcha/something else
-        try:
-            already = await logged_in()
-        except Exception:  # noqa: BLE001 - check itself failed
-            already = False
-        if already:
-            log.info("automatic login on %s: already logged in, no form to fill", site)
-            msg = t("Already logged in")
-        else:
-            log.info("automatic login on %s stopped: %s", site, type(e).__name__)
-            msg = t("The login form was not found – log in in the browser window")
+    msg = {"ok": t("Logged in"), "already": t("Already logged in"),
+           "sent": t("Sent – finish the login in the browser window if the site asks for more"),
+           "no_form": t("The login form was not found – log in in the browser window")}[result]
     return back(f"/settings/{site}?remote={remote}&msg={quote(msg, safe='')}")
 
 

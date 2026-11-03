@@ -110,7 +110,9 @@ async def _session_check() -> None:
     if sess.started and not quiet_hours.holds(sess.last_check):
         try:
             with timeline.fresh(actor="scheduler"):
-                await sess.check_login()
+                if await sess.check_login() is False and sess.logged_in is False:
+                    from app.services import credentials
+                    credentials.auto_login_later("willhaben")   # logged out: the stored details (at most hourly)
         except Exception as e:  # noqa: BLE001
             log.warning("session check failed: %s", e)
 

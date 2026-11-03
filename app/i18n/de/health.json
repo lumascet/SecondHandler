@@ -31,5 +31,7 @@
  "{n} GB free": "{n} GB frei",
  "Connection problem": "Verbindungsproblem",
  "Connection restored": "Verbindung wieder da",
- "Not logged in – messages from {site} do not arrive": "Nicht eingeloggt – Nachrichten von {site} kommen nicht an"
+ "Not logged in – messages from {site} do not arrive": "Nicht eingeloggt – Nachrichten von {site} kommen nicht an",
+ "{site} needs you": "{site} braucht dich",
+ "{site} logged out and the automatic login did not finish (a captcha or a code?) – finish it in the browser window.": "{site} hat dich ausgeloggt und die automatische Anmeldung kam nicht durch (Captcha oder Code?) – schließ sie im Browserfenster ab."
 }

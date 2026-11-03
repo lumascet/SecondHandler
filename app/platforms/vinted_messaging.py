@@ -282,7 +282,9 @@ async def _mark_logged_out(sess: Any) -> None:
     try:
         from app.services import site_accounts
 
-        site_accounts._save("vinted", False)          # the normal browser re-login takes over and re-seeds the jar
+        site_accounts._save("vinted", False)
+        from app.services import credentials
+        credentials.auto_login_later("vinted")        # the stored details log in again (at most hourly)
     except Exception:  # noqa: BLE001
         pass
 
