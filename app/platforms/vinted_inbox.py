@@ -901,9 +901,8 @@ async def live_watchdog() -> None:
             if not platforms.enabled("vinted"):
                 continue
             task = _live.get("task")
-            if task is None or task.done():
-                log.info("vinted live: (re)starting the stream")
-                await start_live()
+            if (task is None or task.done()) and await start_live():   # logged out: nothing starts, nothing logged
+                log.info("vinted live: (re)started the stream")
         except Exception as e:  # noqa: BLE001 - next minute again
             log.info("vinted live watchdog: %s", e)
 
