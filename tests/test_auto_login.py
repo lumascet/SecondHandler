@@ -49,3 +49,37 @@ async def test_switched_off_or_without_details_nothing_happens(creds, monkeypatc
     set_setting("auto_login_vinted", "")
     credentials.forget("vinted")
     assert await credentials.auto_login("vinted") is None
+
+
+async def test_an_attempt_that_sent_nothing_tries_again_soon(creds, monkeypatch):
+    """No login form (the page showed something else): nothing reached the site, so no lock-out risk – again after
+    AUTO_RETRY_UNSENT_S, not an hour."""
+    import time as _time
+    results = iter(["no_form", "ok"])
+
+    async def login(site):
+        return next(results)
+    monkeypatch.setattr(credentials, "login", login)
+    assert await credentials.auto_login("vinted") == "no_form"
+    assert await credentials.auto_login("vinted") is None                      # not at once
+    now = _time.time()
+    monkeypatch.setattr(credentials.time, "time", lambda: now + credentials.AUTO_RETRY_UNSENT_S + 1)
+    assert await credentials.auto_login("vinted") == "ok"
+
+
+async def test_the_dead_vinted_login_cookies_go_before_a_login(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.platforms import vinted_messaging as vm
+    cleared = []
+
+    class Ctx:
+        async def clear_cookies(self, name=None, domain=None):
+            cleared.append(name)
+    monkeypatch.setattr(vm, "_alive", False)
+    await credentials._drop_dead_vinted_login(SimpleNamespace(context=Ctx()))
+    assert "access_token_web" in cleared and "refresh_token_web" in cleared and "datadome" not in cleared
+    cleared.clear()
+    monkeypatch.setattr(vm, "_alive", True)                                   # a working login stays
+    await credentials._drop_dead_vinted_login(SimpleNamespace(context=Ctx()))
+    assert cleared == []

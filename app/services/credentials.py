@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 
 SITES = ("willhaben", "vinted")
 AUTO_LOGIN_EVERY_S = 3600          # automatic logins per site at most this often
+AUTO_RETRY_UNSENT_S = 300          # ... but one that sent nothing (no form, no browser) may try again this soon
 _auto_lock = asyncio.Lock()
 _tasks: set = set()                # automatic logins started in the background (asyncio.Task)
 # where each site asks for them (seen 2026-10-21: Vinted's e-mail login page, then POST /web/api/auth/oauth)
@@ -128,6 +129,8 @@ async def login(site: str) -> str:
             await sess.open_login()
             page = sess.ui_page
         else:
+            if site == "vinted":
+                await _drop_dead_vinted_login(sess)
             await sess.open_site(site, LOGIN_PAGES[site])
             page = sess.site_pages[site]
         try:
@@ -151,6 +154,22 @@ async def login(site: str) -> str:
         return "no_form"
 
 
+async def _drop_dead_vinted_login(sess) -> None:
+    """The browser still has the refused session: Vinted then sends even its login page to /session-refresh, which
+    cannot renew it and never shows the form (11-03). Its login cookies go before a login; the bot protection's
+    (datadome) stays. Not while the app's own login works (it is not refused: nothing to replace)."""
+    import re as _re
+
+    from app.platforms import vinted_messaging as vm
+    if vm._alive or getattr(sess, "context", None) is None:
+        return
+    for name in (*vm.AUTH_COOKIES, "refresh_token_web"):
+        try:
+            await sess.context.clear_cookies(name=name, domain=_re.compile(r"vinted\."))
+        except Exception as e:  # noqa: BLE001 - an older browser: the login page may still work
+            log.info("vinted: old login cookie %s not cleared (%s)", name, type(e).__name__)
+
+
 def auto_login_on(site: str) -> bool:
     from app.db import get_setting
     return get(site) is not None and get_setting(f"auto_login_{site}") != "0"
@@ -169,7 +188,8 @@ async def auto_login(site: str) -> str | None:
         last = float(get_setting(f"auto_login_{site}_at") or 0)
     except ValueError:
         last = 0.0
-    if time.time() - last < AUTO_LOGIN_EVERY_S:
+    unsent = get_setting(f"auto_login_{site}_result") in ("", "no_form", "error")   # nothing reached the site
+    if time.time() - last < (AUTO_RETRY_UNSENT_S if unsent else AUTO_LOGIN_EVERY_S):
         return None
     async with _auto_lock:
         set_setting(f"auto_login_{site}_at", str(time.time()))      # before trying: a crash does not loop
@@ -180,6 +200,7 @@ async def auto_login(site: str) -> str | None:
             log.info("automatic login on %s not possible: %s", site, e)
             result = "error"
         log.warning("automatic login on %s: %s", site, result)
+        set_setting(f"auto_login_{site}_result", result)
         if result not in ("ok", "already"):
             from app.services.notify import notify
             await notify("health", t("{site} needs you", site=name),
