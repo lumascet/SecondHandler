@@ -44,6 +44,9 @@ async def test_check_reads_the_redirect(monkeypatch):
     assert (await site_accounts.check("vinted"))["logged_in"] is False
     sess.text = "Posteingang"
     assert (await site_accounts.check("vinted"))["logged_in"] is True
+    sess.final, sess.text = "https://www.vinted.at/session-refresh?ref_url=%2Finbox", ""   # could not renew: out
+    assert (await site_accounts.check("vinted"))["logged_in"] is False
+    sess.final, sess.text = "https://www.vinted.at/inbox", "Posteingang"
     sess.final = TimeoutError("slow")
     st = await site_accounts.check("vinted")
     assert st["logged_in"] is None and "slow" in st["error"]

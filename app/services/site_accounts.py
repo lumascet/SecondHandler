@@ -48,7 +48,9 @@ SITES: dict[str, SiteAccount] = {
         ("kleinanzeigen.de",)),
     "vinted": SiteAccount(
         "vinted", "Vinted", "https://www.vinted.at/member/signup/select_type?ref_url=%2Finbox",
-        "https://www.vinted.at/inbox", ("/member/signup", "/member/login", "/auth/"),
+        # /session-refresh: the inbox sends there to renew the token and back; a page still there after it settled
+        # could not renew it – logged out (it counted as logged in, 11-02)
+        "https://www.vinted.at/inbox", ("/member/signup", "/member/login", "/auth/", "/session-refresh"),
         ("vinted.at", "vinted.de", "vinted.com"), r"Registrieren\s*\|\s*Einloggen|Weiter mit Google"),
 }
 
