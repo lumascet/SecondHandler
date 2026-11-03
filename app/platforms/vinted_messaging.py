@@ -42,6 +42,9 @@ _jar: dict[str, str] = {}                 # the owned cookie jar (name -> value)
 _anon: str | None = None
 _loaded = False                           # whether the on-disk jar has been read this process
 _owner: asyncio.Lock | None = None         # held by a refresh and by a browser turn: never both at once
+_alive = False                            # the jar's login worked lately (an answer, a refresh): only then it is
+                                          # handed to the browser – a dead one would overwrite a new login there
+_dead: set[str] = set()                   # token values Vinted refused: never taken back from the browser's old cookies
 _turn: ContextVar[bool] = ContextVar("vinted_browser_turn", default=False)
 
 
@@ -78,7 +81,7 @@ async def _push_to_browser(sess: Any) -> None:
     from app.platforms.vinted import MSG_API
 
     _load_once()
-    if not _logged_in():
+    if not _logged_in() or not _alive:            # nothing (or a login that stopped working): the browser's stays
         return
     try:
         have = await sess.context.cookies([MSG_API, WEB])
@@ -115,7 +118,7 @@ def _persist() -> None:
         tmp = p.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"jar": _jar, "anon": _anon}, f)
+            json.dump({"jar": _jar, "anon": _anon, "dead": sorted(_dead)[-20:]}, f)
         os.replace(tmp, p)
     except OSError as e:  # noqa: BLE001
         log.info("vinted api: could not persist the jar (%s)", type(e).__name__)
@@ -163,6 +166,8 @@ async def seed_from_browser(sess: Any) -> bool:
     jar = {c["name"]: c["value"] for c in cookies if c.get("name") and c.get("value") is not None}
     if not any(k in jar for k in AUTH_COOKIES):
         return False
+    if _dead & {jar.get("access_token_web"), jar.get("refresh_token_web")} - {None}:
+        return False                                   # the browser still has the refused login: not taken again
     _jar.clear()
     _jar.update(jar)
     _anon = jar.get("anon_id")
@@ -173,11 +178,13 @@ async def seed_from_browser(sess: Any) -> bool:
 def _load_once() -> None:
     """The jar persisted last run (its rotated token is the current one), once per process."""
     global _anon, _loaded
-    if _loaded or _logged_in():
-        _loaded = True
+    if _loaded:
         return
     _loaded = True
     st = _load_persisted()
+    _dead.update(x for x in st.get("dead") or [] if isinstance(x, str))
+    if _logged_in():
+        return
     jar = st.get("jar")
     if isinstance(jar, dict) and any(k in jar for k in AUTH_COOKIES):
         _jar.update(jar)
@@ -224,13 +231,25 @@ async def _refresh_locked() -> bool | None:
         return None
     if r.status_code // 100 != 2:
         log.info("vinted api: refresh -> HTTP %s (rejected)", r.status_code)
+        _bury()
         return False
+    global _alive
+    _alive = True
     got = {c.name: c.value for c in r.cookies.jar}
     if got:
         _jar.update(got)
         _persist()                                     # keep the rotated token across restarts
         log.info("vinted api: token refreshed (%d cookies)", len(got))
     return True
+
+
+def _bury() -> None:
+    """The jar's login was refused for good: its tokens are remembered as dead (the browser keeps the same old cookies
+    until the owner logs in again), and it is no longer handed to the browser."""
+    global _alive
+    _alive = False
+    _dead.update(v for v in (_jar.get("access_token_web"), _jar.get("refresh_token_web")) if v)
+    _persist()
 
 
 async def _renew(sess: Any) -> bool | None:
@@ -257,6 +276,7 @@ async def _fresh_datadome(sess: Any) -> None:
 
 
 async def _mark_logged_out(sess: Any) -> None:
+    _bury()
     _jar.clear()
     _persist()                                        # on disk too: the live stream then waits for a new login
     try:
@@ -270,6 +290,7 @@ async def _mark_logged_out(sess: Any) -> None:
 async def _get(sess: Any, path: str) -> dict[str, Any] | None:
     """A messaging GET with the owned jar; a 401 renews the token (_renew) and retries, a 403 re-seeds the datadome
     cookie from the browser for the next attempt; else None (the caller falls back)."""
+    global _alive
     if not await _ensure(sess):
         return None
     from app.platforms import vinted
@@ -289,6 +310,7 @@ async def _get(sess: Any, path: str) -> dict[str, Any] | None:
             log.info("vinted api %s failed (%s)", path, type(e).__name__)
             return None
         if r.status_code == 200:
+            _alive = True
             _assert_logged_in()
             try:
                 data = json.loads(r.text)
@@ -337,6 +359,7 @@ def sse_events(chunk: str, buf: list[str]) -> list[str]:
 async def subscribe(sess: Any, on_event: Callable[[str], Any], *, open_cb: Callable[[int], Any] | None = None) -> int:
     """Open the SSE stream once and dispatch each event's data to `on_event`. Returns the HTTP status (200 while it
     streamed, or the refusal). Raises nothing: network errors return 0."""
+    global _alive
     from curl_cffi.requests import AsyncSession
 
     if not await _ensure(sess):
@@ -371,6 +394,7 @@ async def subscribe(sess: Any, on_event: Callable[[str], Any], *, open_cb: Calla
                         await _maybe_await(open_cb(r.status_code))
                     if r.status_code != 200:
                         return r.status_code
+                    _alive = True                  # the stream opened with the jar: its login works
                     it = r.aiter_content()
                     while True:
                         try:

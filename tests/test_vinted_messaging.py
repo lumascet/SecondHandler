@@ -28,6 +28,8 @@ def _reset():
     vm._jar.clear()
     vm._anon = None
     vm._loaded = True          # skip the on-disk jar load; tests drive seed_from_browser directly
+    vm._alive = True           # a working login unless a test says otherwise
+    vm._dead.clear()
     yield
     vm._jar.clear()
     vm._anon = None
@@ -286,3 +288,29 @@ async def test_the_browsers_same_stale_token_is_no_renewal(monkeypatch):
     vi.set_client(c)
     assert await vm.inbox(_sess([{"name": "access_token_web", "value": "stale"}])) is None
     assert len(c._transport.calls) == 1 and logged_out == [1]   # one try, no loop on the same token
+
+
+async def test_a_dead_login_does_not_overwrite_a_new_one_in_the_browser(monkeypatch, tmp_path):
+    """The owner logged in again in the browser while the jar still held the refused login: the turn must not hand the
+    dead tokens over (it overwrote the new login, 11-02 23:58), and takes the new one back."""
+    monkeypatch.setattr(vm, "_state_path", lambda: tmp_path / "v.json")
+    vm._jar.update({"access_token_web": "dead", "refresh_token_web": "r-dead"})
+    vm._bury()                                                     # Vinted refused it
+    ctx = TurnCtx([{"name": "access_token_web", "value": "new", "domain": ".vinted.at", "path": "/"},
+                   {"name": "refresh_token_web", "value": "r-new", "domain": ".vinted.at", "path": "/"}])
+    async with vm.browser_turn(SimpleNamespace(context=ctx)):
+        assert ctx.store["access_token_web"]["value"] == "new"     # left alone
+    assert vm._jar["access_token_web"] == "new"
+
+
+async def test_refused_tokens_are_not_taken_back_from_the_browser(monkeypatch, tmp_path):
+    """After a logout the browser keeps the same old cookies: re-reading them only meant another refused refresh every
+    few minutes. The new login (other tokens) is taken."""
+    monkeypatch.setattr(vm, "_state_path", lambda: tmp_path / "v.json")
+    vm._jar.update({"access_token_web": "dead", "refresh_token_web": "r-dead"})
+    vm._bury()
+    vm._jar.clear()
+    old = _sess([{"name": "access_token_web", "value": "dead"}, {"name": "refresh_token_web", "value": "r-dead"}])
+    assert await vm.seed_from_browser(old) is False and vm._jar == {}
+    new = _sess([{"name": "access_token_web", "value": "fresh"}, {"name": "refresh_token_web", "value": "r-fresh"}])
+    assert await vm.seed_from_browser(new) is True and vm._jar["access_token_web"] == "fresh"
