@@ -22,12 +22,14 @@ from app.db import utcnow
 log = logging.getLogger(__name__)
 
 PLATFORM = "kleinanzeigen"
-SYNC_EVERY_S = 600            # the inbox at most every 10 minutes (a hidden tab each time)
+SYNC_EVERY_S = 600            # the full inbox at most every 10 minutes unless something changed (watch())
+WATCH_S = 60                  # the inbox's state (unread count, last change) asked this often, from one open tab
+WATCH_BACKOFF_S = 5 * 60      # ... after a failure or while logged out
 MAX_DETAILS = 5               # conversations read per sync (those with something new)
 _last_sync = [0.0]
 # the chat list's mark (online / offline): no stream on Kleinanzeigen, so the inbox read decides – its last result
 _state: dict[str, Any] = {"state": "off", "since": None, "last_ok": None}
-STALE_S = 3 * SYNC_EVERY_S + 120      # no read that worked for this long (the job stopped, the reads fail): offline
+STALE_S = 5 * WATCH_S + 120          # no check that worked for this long (the watch stopped, they fail): offline
 
 
 def _note(state: str) -> None:
@@ -351,3 +353,49 @@ async def _push_incoming(cids: list[str]) -> None:
                          data={"conversation_id": cid, "platform": PLATFORM}, tag=f"wh-msg-{cid}")
         except Exception as e:  # noqa: BLE001 - a failed push never stops the sync
             log.warning("kleinanzeigen message push failed: %s", e)
+
+
+async def watch() -> None:
+    """As near to live as the web gets: every WATCH_S the inbox's state (unread count, last change) from one tab that
+    stays open – the page's own poll, one small call –, the inbox and its changed conversations read at once when it
+    changed. Logged out or failing: every WATCH_BACKOFF_S. Runs as long as the app (main.lifespan)."""
+    import asyncio
+
+    from app.platforms import kleinanzeigen_messaging as km
+
+    box: km.Box | None = None
+    last: tuple[Any, Any] | None = None
+    try:
+        while True:
+            wait = WATCH_S
+            try:
+                if _usable() is not None:
+                    if box is not None:
+                        await box.close()
+                        box = None
+                    wait = WATCH_BACKOFF_S
+                else:
+                    if box is None or not box.open():
+                        box = await km.Box().__aenter__()
+                    m = await box.meta()
+                    now = (m.get("lastModified"), m.get("numUnread"))
+                    _note("connected")
+                    if last is not None and now != last:
+                        await sync(force=True)          # something came: the list and the changed chats now
+                    elif last is None:
+                        await sync()                    # at the start: as due (every SYNC_EVERY_S)
+                    last = now
+            except km.LoggedOut as e:
+                _logged_out(e)
+                _note("logged out")
+                wait = WATCH_BACKOFF_S
+            except Exception as e:  # noqa: BLE001 - a closed tab, a refused call: a new tab next time
+                log.info("kleinanzeigen watch: %s", e)
+                _note("error")
+                if box is not None:
+                    await box.close()
+                box, wait = None, WATCH_BACKOFF_S
+            await asyncio.sleep(wait)
+    finally:
+        if box is not None:
+            await box.close()

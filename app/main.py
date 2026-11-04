@@ -118,6 +118,9 @@ async def lifespan(app: FastAPI):
         except Exception as e:  # noqa: BLE001 - the chat list's Sync still works
             log.warning("vinted live not started: %s", e)
         tasks.append(asyncio.create_task(vinted_inbox.live_watchdog()))
+    if sess.started and platforms.enabled("kleinanzeigen"):   # Kleinanzeigen: its inbox state every minute
+        from app.platforms import kleinanzeigen_inbox
+        tasks.append(asyncio.create_task(kleinanzeigen_inbox.watch()))
     app.state.listener_tasks = tasks             # Settings → Backup stops them before a restore
     async with mcp_http.running():               # the MCP server at /mcp lives as long as the app
         yield

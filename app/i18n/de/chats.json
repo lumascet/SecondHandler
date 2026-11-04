@@ -249,8 +249,8 @@
  "Kleinanzeigen did not confirm the message: {error}": "Kleinanzeigen hat die Nachricht nicht bestätigt: {error}",
  "Kleinanzeigen refused: HTTP {status}": "Kleinanzeigen hat abgelehnt: HTTP {status}",
  "Kleinanzeigen: message from {name}": "Kleinanzeigen: Nachricht von {name}",
- "read every 10 min, last {time}": "alle 10 Min. gelesen, zuletzt {time}",
  "not read yet": "noch nicht gelesen",
  "not read lately": "länger nicht gelesen",
- "the last read failed": "das letzte Lesen schlug fehl"
+ "the last read failed": "das letzte Lesen schlug fehl",
+ "checked every minute, last {time}": "jede Minute geprüft, zuletzt {time}"
 }

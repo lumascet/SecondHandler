@@ -8,6 +8,9 @@ The inbox page (m-nachrichten.html, its bundle messagebox-web) works on two call
   GET  gateway.kleinanzeigen.de/messagebox/api/users/<uid>/conversations?page=0&size=N   the inbox
   GET  .../conversations/<cid>?contentWarnings=true  one conversation with its messages
   POST .../conversations/<cid>  {"message": text}    a reply (the bundle's MessageboxApi.sendReply)
+  GET  .../conversations?include=_meta               {_meta: {numUnread, lastModified}}: what the page polls to know
+                                                     whether to read the list again (every 2 s while used, backing
+                                                     off to 20 min) – there is no push on the web (no socket)
 
 with the token as Authorization and X-ECG-USER-AGENT: messagebox-1. The calls run as the page's own fetch() in a tab
 of the app's browser (Box): Kleinanzeigen's bot protection lets the real browser through, the login stays in the
@@ -131,6 +134,16 @@ class Box:
         except ValueError:
             data = None
         return status, data
+
+    async def meta(self) -> dict[str, Any]:
+        """{numUnread, lastModified}: whether anything changed, without the list (the page's own poll)."""
+        status, data = await self.call("GET", f"/messagebox/api/users/{self.user_id}/conversations?include=_meta")
+        if status != 200 or not isinstance(data, dict):
+            raise MessagingError(f"Kleinanzeigen inbox state: HTTP {status}")
+        return data.get("_meta") or {}
+
+    def open(self) -> bool:
+        return self.page is not None and not self.page.is_closed()
 
     async def inbox(self, size: int = INBOX_SIZE) -> dict[str, Any]:
         status, data = await self.call("GET", f"/messagebox/api/users/{self.user_id}/conversations?page=0&size={size}")

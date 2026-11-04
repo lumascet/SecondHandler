@@ -154,3 +154,52 @@ def test_the_chat_list_shows_the_kleinanzeigen_mark(monkeypatch):
     with TestClient(app) as c:
         html = c.get("/chats").text
     assert 'data-live-site="kleinanzeigen" data-live="1"' in html
+
+
+async def test_the_watch_reads_the_inbox_when_its_state_changes(box, monkeypatch):
+    """Every minute the inbox's state from one open tab; a change (a new message) reads the inbox at once, an unchanged
+    state reads nothing. A logout waits longer."""
+    states = iter([{"lastModified": "t1", "numUnread": 0}, {"lastModified": "t1", "numUnread": 0},
+                   {"lastModified": "t2", "numUnread": 1}, "logout"])
+    opened, synced, waits = [], [], []
+
+    class WatchBox(FakeBox):
+        page = object()
+
+        def open(self):
+            return True
+
+        async def close(self):
+            pass
+
+        async def meta(self):
+            s = next(states)
+            if s == "logout":
+                raise km.LoggedOut("refused")
+            return s
+
+    async def aenter(self):
+        opened.append(1)
+        return self
+    WatchBox.__aenter__ = aenter
+    monkeypatch.setattr(km, "Box", WatchBox)
+
+    async def fake_sync(force=False):
+        synced.append(force)
+        return {}
+    monkeypatch.setattr(ki, "sync", fake_sync)
+
+    class Stop(Exception):
+        pass
+
+    async def sleep(s):
+        waits.append(s)
+        if len(waits) == 4:
+            raise Stop
+    monkeypatch.setattr("asyncio.sleep", sleep)
+    with pytest.raises(Stop):
+        await ki.watch()
+    assert opened == [1]                                     # one tab for all the checks
+    assert synced == [False, True]                           # as due at the start, then at once on the change
+    assert waits == [ki.WATCH_S, ki.WATCH_S, ki.WATCH_S, ki.WATCH_BACKOFF_S]
+    assert ki.live()["state"] == "logged out"
