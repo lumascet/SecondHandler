@@ -260,6 +260,8 @@ def seed() -> None:
     init_db()
     set_setting("ship_sender", '{"name": "Max Muster", "street": "Musterstraße", "house_no": "1", "zip": "1070", "city": "Wien", "country": "AT"}')
     set_setting("purchase_enabled", "1")
+    set_setting("platform_kleinanzeigen_enabled", "1")              # its chats in the list, with their online mark
+    set_setting("account_kleinanzeigen", '{"logged_in": true, "checked_at": null, "error": null}')
     set_setting("ship_sender_geo", '{"addr": "Musterstraße 1, 1070 Wien, AT", "lat": 48.2017, "lon": 16.3497}')
     with session() as db:
         agents = []
@@ -324,6 +326,17 @@ def seed() -> None:
                      intent="logistics", model="claude-sonnet-5-5", created_at=ago(minutes=5),
                      alternatives=[{"label": "Sonntag vorschlagen", "instruction": "Schlag Sonntag 11 Uhr vor"},
                                    {"label": "Nur Versand", "instruction": "Biete Versand an"}]))
+        # a Kleinanzeigen chat (0.5.5): I am the buyer there
+        db.add(Conversation(id="ka:demo:c5", platform="kleinanzeigen", ad_id="3100000005", role="buyer",
+                            ad_title="Rennrad Cube Attain, 56 cm", partner_name="Jonas B.", unread_count=1,
+                            last_message_text="Ja, gerne – Sonntag passt mir auch.", last_message_at=ago(minutes=12),
+                            ad_context={"title": "Rennrad Cube Attain, 56 cm", "price": 420.0, "platform": "kleinanzeigen",
+                                        "url": "https://www.kleinanzeigen.de/s-anzeige/3100000005"},
+                            ad_context_at=ago(minutes=1), synced_at=ago(minutes=1), messages_synced_at=ago(minutes=1)))
+        for k, (d, text, mins) in enumerate([("out", "Hallo, ist das Rennrad noch zu haben? Ich könnte Sonntag vorbeikommen.", 20),
+                                             ("in", "Ja, gerne – Sonntag passt mir auch.", 12)]):
+            db.add(Message(conversation_id="ka:demo:c5", ext_id=f"ka-m{k}", direction=d, text=text,
+                           created_at=ago(minutes=mins)))
         db.add(Draft(conversation_id="c3", text="Hallo Sabine, 220 € ist mir zu wenig – 245 € inklusive der beiden Spiele "
                      "wäre für mich in Ordnung.", intent="price_negotiation", model="claude-sonnet-5-5", created_at=ago(minutes=119),
                      suggested_price=245))
@@ -432,6 +445,8 @@ def patch() -> None:
     s.context = object()                                # "started": the sidebar shows the willhaben state
     s.logged_in, s.user = True, {"nickname": "Max Muster", "email": "max@example.invalid"}
     s.chat_live.update(state="connected", since=ago(hours=3))
+    from app.platforms import kleinanzeigen_inbox
+    kleinanzeigen_inbox.live = lambda: {"state": "connected", "since": ago(hours=3), "last_ok": utcnow()}   # checked just now
     s.check_login = lambda *a, **k: asyncio.sleep(0, True)
 
     async def detail(ad_id, url=None):
