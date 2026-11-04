@@ -252,5 +252,6 @@
  "not read yet": "noch nicht gelesen",
  "not read lately": "länger nicht gelesen",
  "the last read failed": "das letzte Lesen schlug fehl",
- "checked every 20 s, last {time}": "alle 20 s geprüft, zuletzt {time}"
+ "checked every 20 s, last {time}": "alle 20 s geprüft, zuletzt {time}",
+ "paused in the quiet hours": "in der Ruhezeit pausiert"
 }

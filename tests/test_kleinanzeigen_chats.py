@@ -203,3 +203,51 @@ async def test_the_watch_reads_the_inbox_when_its_state_changes(box, monkeypatch
     assert synced == [False, True]                           # as due at the start, then at once on the change
     assert waits == [ki.WATCH_S, ki.WATCH_S, ki.WATCH_S, ki.WATCH_BACKOFF_S]
     assert ki.live()["state"] == "logged out"
+
+
+async def test_no_checks_in_the_quiet_hours_and_a_full_read_after(box, monkeypatch):
+    """Quiet hours: no check at all (no tab); once they end, everything that came meanwhile is read at once."""
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from app.services import quiet_hours
+    quiet = iter([True, True, False])
+    end = ki.utcnow() + timedelta(minutes=30)
+    monkeypatch.setattr(quiet_hours, "state", lambda *a, **k: SimpleNamespace(active=next(quiet), end=end))
+    metas, synced, waits = [], [], []
+
+    class WatchBox(FakeBox):
+        page = object()
+
+        def open(self):
+            return True
+
+        async def close(self):
+            pass
+
+        async def meta(self):
+            metas.append(1)
+            return {"lastModified": "t1", "numUnread": 0}
+
+    async def aenter(self):
+        return self
+    WatchBox.__aenter__ = aenter
+    monkeypatch.setattr(km, "Box", WatchBox)
+
+    async def fake_sync(force=False):
+        synced.append(force)
+        return {}
+    monkeypatch.setattr(ki, "sync", fake_sync)
+
+    class Stop(Exception):
+        pass
+
+    async def sleep(s):
+        waits.append(s)
+        if ki.live()["state"] != "quiet" and len(waits) >= 3:
+            raise Stop
+    monkeypatch.setattr("asyncio.sleep", sleep)
+    with pytest.raises(Stop):
+        await ki.watch()
+    assert waits[:2] == [ki.QUIET_LOOK_S, ki.QUIET_LOOK_S] and metas == [1]   # nothing asked in the quiet hours
+    assert synced == [True]                                                    # then all of it at once

@@ -26,6 +26,7 @@ SYNC_EVERY_S = 600            # the full inbox at most every 10 minutes unless s
 WATCH_S = 20                  # the inbox's state (unread count, last change) asked this often, from one open tab
                               # (the page itself asks every 2 s while it is used)
 WATCH_BACKOFF_S = 5 * 60      # ... after a failure or while logged out
+QUIET_LOOK_S = 5 * 60         # in the quiet hours (Settings → Quiet hours) no checks: the time is looked at this often
 MAX_DETAILS = 5               # conversations read per sync (those with something new)
 _last_sync = [0.0]
 # the chat list's mark (online / offline): no stream on Kleinanzeigen, so the inbox read decides – its last result
@@ -45,8 +46,10 @@ def _note(state: str) -> None:
 
 
 def live() -> dict[str, Any]:
-    """{state: connected | logged out | error | off | stale, since, last_ok} for the chat list's Kleinanzeigen mark."""
+    """{state: connected | quiet | logged out | error | off | stale, since, last_ok} for the chat list's mark."""
     st = dict(_state)
+    if st["state"] == "quiet":
+        return st
     if st["state"] == "connected" and st["last_ok"] and (utcnow() - st["last_ok"]).total_seconds() > STALE_S:
         st["state"] = "stale"
     return st
@@ -370,6 +373,18 @@ async def watch() -> None:
         while True:
             wait = WATCH_S
             try:
+                from app.services import quiet_hours
+                q = quiet_hours.state()
+                if q is not None and q.active:          # the quiet hours: no checks at all, the tab closed
+                    if box is not None:
+                        await box.close()
+                        box = None
+                    _note("quiet")
+                    last = None                         # afterwards: a full read of what came meanwhile
+                    _state["after_quiet"] = True
+                    left = (q.end - utcnow().astimezone(q.end.tzinfo)).total_seconds()
+                    await asyncio.sleep(max(5.0, min(QUIET_LOOK_S, left + 5)))
+                    continue
                 if _usable() is not None:
                     if box is not None:
                         await box.close()
@@ -384,7 +399,8 @@ async def watch() -> None:
                     if last is not None and now != last:
                         await sync(force=True)          # something came: the list and the changed chats now
                     elif last is None:
-                        await sync()                    # at the start: as due (every SYNC_EVERY_S)
+                        await sync(force=_state.get("after_quiet", False))   # at the start: as due; after the
+                        _state["after_quiet"] = False                         # quiet hours: everything that came
                     last = now
             except km.LoggedOut as e:
                 _logged_out(e)
