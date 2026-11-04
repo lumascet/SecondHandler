@@ -23,7 +23,8 @@ log = logging.getLogger(__name__)
 
 PLATFORM = "kleinanzeigen"
 SYNC_EVERY_S = 600            # the full inbox at most every 10 minutes unless something changed (watch())
-WATCH_S = 60                  # the inbox's state (unread count, last change) asked this often, from one open tab
+WATCH_S = 20                  # the inbox's state (unread count, last change) asked this often, from one open tab
+                              # (the page itself asks every 2 s while it is used)
 WATCH_BACKOFF_S = 5 * 60      # ... after a failure or while logged out
 MAX_DETAILS = 5               # conversations read per sync (those with something new)
 _last_sync = [0.0]
@@ -356,7 +357,7 @@ async def _push_incoming(cids: list[str]) -> None:
 
 
 async def watch() -> None:
-    """As near to live as the web gets: every WATCH_S the inbox's state (unread count, last change) from one tab that
+    """As near to live as the web gets (it has no push: the inbox page polls too): every WATCH_S the inbox's state (unread count, last change) from one tab that
     stays open – the page's own poll, one small call –, the inbox and its changed conversations read at once when it
     changed. Logged out or failing: every WATCH_BACKOFF_S. Runs as long as the app (main.lifespan)."""
     import asyncio
