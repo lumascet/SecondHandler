@@ -127,3 +127,30 @@ def test_message_text():
     assert ki.message_text(_msg(1, "INBOUND", "Wann kann ich es abholen?", "x")) == ("Wann kann ich es abholen?", None)
     text, kind = ki.message_text(_msg(2, None, "Zahlung erhalten", "x", "PAYMENT_AND_SHIPPING_MESSAGE"))
     assert kind == "integration" and "Zahlung erhalten" in text
+
+
+async def test_the_online_mark_follows_the_inbox_reads(box, monkeypatch):
+    """No live stream on Kleinanzeigen: online while the reads work, offline when logged out or when they stopped."""
+    from datetime import timedelta
+    await ki.sync(force=True)
+    assert ki.live()["state"] == "connected"
+    monkeypatch.setitem(ki._state, "last_ok", ki.utcnow() - timedelta(seconds=ki.STALE_S + 1))
+    assert ki.live()["state"] == "stale"                          # no read that worked for too long
+    box.refuse = True
+    await ki.sync(force=True)
+    assert ki.live()["state"] == "logged out"
+
+
+def test_the_chat_list_shows_the_kleinanzeigen_mark(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app import platforms
+    from app.main import app
+    from app.services import site_accounts
+    site_accounts._save("kleinanzeigen", True)
+    monkeypatch.setattr(platforms, "enabled", lambda pid: True)
+    monkeypatch.setitem(ki._state, "state", "connected")
+    monkeypatch.setitem(ki._state, "last_ok", ki.utcnow())
+    with TestClient(app) as c:
+        html = c.get("/chats").text
+    assert 'data-live-site="kleinanzeigen" data-live="1"' in html

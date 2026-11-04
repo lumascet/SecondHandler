@@ -38,11 +38,15 @@
     {% for name, st in site_logins() if st.logged_in is false %}<div role="status" class="mb-2.5 rounded-[10px] bg-warn-soft px-3.5 py-2.5 text-warning" data-site-logged-out>{{ _("Not logged in to {site} – its messages do not arrive.", site=name) }} <a class="font-semibold text-warning underline" href="/settings/{{ name|lower }}">{{ _("Log in now") }}</a></div>{% endfor %}
     {# live connection per site: its mark, green while live, red otherwise; the details only in the tooltip #}
     {% set vl = vinted_live() if has_vinted else none %}
-    <div id="chat-live-state" class="mb-3 flex items-center gap-3{{ '' if (wh_on or has_vinted) else ' hidden' }}">
+    {% set kl = ka_live() if ka_on else none %}
+    <div id="chat-live-state" class="mb-3 flex items-center gap-3{{ '' if (wh_on or has_vinted or ka_on) else ' hidden' }}">
       {% if wh_on %}{% set wl = live.state == 'connected' %}<span class="inline-flex {{ 'text-success' if wl else 'text-error' }}" data-live-site="willhaben" data-live="{{ 1 if wl else 0 }}" role="img"
         title="willhaben: {{ _('live since {time}', time=live.since|local('%H:%M')) if wl else (_('Live chat off · polls every few minutes') if live.state == 'off' else live.state) }}" aria-label="willhaben: {{ 'live' if wl else live.state }}">{{ ui.icon('site-willhaben', 18) }}<span class="ml-1 text-[12.5px]">{{ 'online' if wl else 'offline' }}</span></span>{% endif %}
       {% if vl %}{% set vlive = vl.state == 'connected' %}<span class="inline-flex {{ 'text-success' if vlive else 'text-error' }}" data-live-site="vinted" data-vinted-live data-live="{{ 1 if vlive else 0 }}" role="img"
         title="Vinted: {{ _('live since {time}', time=vl.since|local('%H:%M')) if vlive else (_('not logged in') if vl.state == 'logged out' else _('not connected') if vl.state == 'off' else vl.state) }}" aria-label="Vinted: {{ 'live' if vlive else vl.state }}">{{ ui.icon('site-vinted', 18) }}<span class="ml-1 text-[12.5px]">{{ 'online' if vlive else 'offline' }}</span></span>{% endif %}
+      {# Kleinanzeigen has no live stream: online while its inbox reads (every 10 min) work #}
+      {% if kl %}{% set klive = kl.state == 'connected' %}<span class="inline-flex {{ 'text-success' if klive else 'text-error' }}" data-live-site="kleinanzeigen" data-live="{{ 1 if klive else 0 }}" role="img"
+        title="Kleinanzeigen: {{ _('read every 10 min, last {time}', time=kl.last_ok|local('%H:%M')) if klive else (_('not logged in') if kl.state == 'logged out' else _('not read yet') if kl.state == 'off' else _('not read lately') if kl.state == 'stale' else _('the last read failed')) }}" aria-label="Kleinanzeigen: {{ 'online' if klive else kl.state }}">{{ ui.icon('site-kleinanzeigen', 18) }}<span class="ml-1 text-[12.5px]">{{ 'online' if klive else 'offline' }}</span></span>{% endif %}
     </div>
     {# the filters swap the list (and themselves) and keep the open chat; the address follows #}
     <div id="chat-filters" hx-boost="true" hx-target="#chat-list-items" hx-select="#chat-list-items" hx-swap="outerHTML" hx-select-oob="#chat-filters" hx-push-url="true">

@@ -25,6 +25,28 @@ PLATFORM = "kleinanzeigen"
 SYNC_EVERY_S = 600            # the inbox at most every 10 minutes (a hidden tab each time)
 MAX_DETAILS = 5               # conversations read per sync (those with something new)
 _last_sync = [0.0]
+# the chat list's mark (online / offline): no stream on Kleinanzeigen, so the inbox read decides – its last result
+_state: dict[str, Any] = {"state": "off", "since": None, "last_ok": None}
+STALE_S = 3 * SYNC_EVERY_S + 120      # no read that worked for this long (the job stopped, the reads fail): offline
+
+
+def _note(state: str) -> None:
+    now = utcnow()
+    if state == "connected":
+        if _state["state"] != "connected":
+            _state["since"] = now
+        _state["last_ok"] = now
+    elif _state["state"] != state:
+        _state["since"] = now
+    _state["state"] = state
+
+
+def live() -> dict[str, Any]:
+    """{state: connected | logged out | error | off | stale, since, last_ok} for the chat list's Kleinanzeigen mark."""
+    st = dict(_state)
+    if st["state"] == "connected" and st["last_ok"] and (utcnow() - st["last_ok"]).total_seconds() > STALE_S:
+        st["state"] = "stale"
+    return st
 
 
 def _when(raw: Any):
@@ -185,6 +207,8 @@ async def sync(force: bool = False) -> dict[str, Any]:
     from app.services import chats
 
     if (why := _usable()) is not None:
+        if why == "not logged in":
+            _note("logged out")
         return {"skipped": why}
     if not force and time.monotonic() - _last_sync[0] < SYNC_EVERY_S:
         return {"skipped": "recently"}
@@ -203,10 +227,16 @@ async def sync(force: bool = False) -> dict[str, Any]:
                     log.info("kleinanzeigen conversation %s not read: %s", cid, e)
     except km.LoggedOut as e:
         _logged_out(e)
+        _note("logged out")
         return {"skipped": "not logged in"}
     except km.MessagingError as e:
         log.warning("kleinanzeigen chats: %s", e)
+        _note("error")
         return {"error": str(e)}
+    except Exception:
+        _note("error")                    # no browser tab, a closed page: offline, the next read tries again
+        raise
+    _note("connected")
     for cid in changed[:MAX_DETAILS]:
         await chats.ensure_ad_context(cid)
     n = len(inbox.get("conversations") or [])

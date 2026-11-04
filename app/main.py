@@ -52,6 +52,7 @@ from app import agent_api_routes, agent_settings_routes, mcp_http, settings_api_
 from app.services import search_agents as search_agents_svc
 from app.services.search_agents import refile_screened
 from app.platforms import vinted_inbox as vinted_inbox_mod
+from app.platforms import kleinanzeigen_inbox as kleinanzeigen_inbox_mod
 from app.willhaben import access_log, record_all
 from app.willhaben import insert as _wh_insert
 from app.willhaben.account import EndpointUnknown, SendFailed
@@ -318,6 +319,7 @@ templates.env.globals.update(record_all_stats=lambda: {**record_all.stats(), "on
 templates.env.globals.update(site_logins=lambda: [(s.name, {**site_accounts.state(s.id), "checked_at": site_accounts.checked_at(s.id)})
                                                   for s in site_accounts.SITES.values() if platforms.enabled(s.id)])   # session page
 templates.env.globals.update(vinted_live=lambda: vinted_inbox_mod.live)   # the chat list's Vinted line
+templates.env.globals.update(ka_live=lambda: kleinanzeigen_inbox_mod.live())   # ... and Kleinanzeigen's mark
 templates.env.globals.update(presence_of=lambda conv: chats.presence_of(conv),    # the open chat: their online state
                              partner_place=lambda conv: chats.partner_place(conv),     # and where they are from
                              partner_trust=lambda conv: chats.partner_trust(conv))     # their account's age, ratings
