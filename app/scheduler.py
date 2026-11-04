@@ -154,6 +154,12 @@ async def _chat_sync() -> None:
             await vinted_inbox.sync()
     except Exception as e:  # noqa: BLE001 - willhaben's poll still runs
         log.warning("vinted chat sync failed: %s", e)
+    try:                              # Kleinanzeigen: its inbox at most every 10 minutes (its own throttle)
+        if platforms.enabled("kleinanzeigen"):
+            from app.platforms import kleinanzeigen_inbox
+            await kleinanzeigen_inbox.sync()
+    except Exception as e:  # noqa: BLE001 - willhaben's poll still runs
+        log.warning("kleinanzeigen chat sync failed: %s", e)
     if get_session().chat_live_ok() and last and utcnow() - last < LIVE_FALLBACK:
         return                      # willhaben's live socket is healthy: skip its poll
     try:

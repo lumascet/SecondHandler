@@ -396,9 +396,12 @@ async def contact_seller(ad_id: str, text: str) -> str:
 
 async def sync_messages(conversation_id: str) -> str:
     """Fetch the full history; falls back to the list's last message while the endpoint is unverified."""
-    from app.platforms import vinted_inbox
+    from app.platforms import kleinanzeigen_inbox, vinted_inbox
     if vinted_inbox.is_vinted(conversation_id):   # Vinted: its conversation page in a hidden tab
         await vinted_inbox.sync_one(conversation_id)
+        return "full"
+    if kleinanzeigen_inbox.is_kleinanzeigen(conversation_id):   # Kleinanzeigen: its inbox API from a hidden tab
+        await kleinanzeigen_inbox.sync_one(conversation_id)
         return "full"
     acct = _account()
     try:
@@ -455,7 +458,7 @@ async def ensure_ad_context(conversation_id: str, force: bool = False) -> Conver
         conv = db.get(Conversation, conversation_id)
     if conv is None or not conv.ad_id or (not force and _ad_context_fresh(conv)):
         return conv
-    if conv.platform == "vinted":         # its item page on Vinted (anonymous, like a hit's), not willhaben's
+    if conv.platform in ("vinted", "kleinanzeigen"):   # its ad on that site (anonymous, like a hit's), not willhaben's
         return await _vinted_ad_context(conv)
     try:
         detail = await get_public().get_detail(conv.ad_id)
@@ -483,15 +486,16 @@ async def ensure_ad_context(conversation_id: str, force: bool = False) -> Conver
 
 
 async def _vinted_ad_context(conv: Conversation) -> Conversation:
-    """A Vinted chat's item from its public item page (title, price, photos, condition, description, status), kept
-    like a willhaben ad's; what the inbox said (order) stays. A failure keeps what was there."""
+    """A Vinted or Kleinanzeigen chat's item from its public ad page (title, price, photos, condition, description,
+    status), kept like a willhaben ad's; what the inbox said (order) stays. A failure keeps what was there."""
     from app import platforms
     from app.platforms import PlatformError
     url = (conv.ad_context or {}).get("url")
+    site = conv.platform or "vinted"
     try:
-        detail = await platforms.get("vinted").detail(conv.ad_id, url=url)
+        detail = await platforms.get(site).detail(conv.ad_id, url=url)
     except (PlatformError, Exception) as e:  # noqa: BLE001 - the chat stays usable without it
-        log.info("vinted item %s not loaded: %s", conv.ad_id, e)
+        log.info("%s item %s not loaded: %s", site, conv.ad_id, e)
         return conv
     with session() as db:
         row = db.get(Conversation, conv.id)
@@ -500,7 +504,7 @@ async def _vinted_ad_context(conv: Conversation) -> Conversation:
             ctx = {**detail.as_context(), **{k: v for k, v in old.items()
                                              if k in ("order_id", "side_tried", "partner_id", "partner_country",
                                                       "partner_country_tried", "partner_country_title", "partner_city")},
-                   "platform": "vinted"}
+                   "platform": site}
             if not ctx.get("images") and old.get("images"):   # a sold item's page has no photos: the inbox's stays
                 ctx["images"] = old["images"]
             row.ad_context = ctx
@@ -1151,9 +1155,9 @@ def draft_from(result: Any, conversation_id: str, *, auto: bool, buyer: bool) ->
 
 async def mark_read(conversation_id: str) -> int:
     """Read receipts for the buyer's unread messages (best effort: never blocks answering)."""
-    from app.platforms import vinted_inbox
-    if vinted_inbox.is_vinted(conversation_id):  # opening it on Vinted marks it read; nothing to send from here
-        return 0
+    from app.platforms import kleinanzeigen_inbox, vinted_inbox
+    if vinted_inbox.is_vinted(conversation_id) or kleinanzeigen_inbox.is_kleinanzeigen(conversation_id):
+        return 0                                 # reading it there marks it read; nothing to send from here
     try:
         n = await _account().mark_read(conversation_id)
     except Exception as e:  # noqa: BLE001 - read receipts are cosmetic, answering must go on
@@ -1197,12 +1201,13 @@ async def send_draft(draft_id: int, text: str) -> Draft:
 
 
 async def _send_claimed(draft: Draft, text: str) -> Draft:
-    from app.platforms import vinted_inbox
+    from app.platforms import kleinanzeigen_inbox, vinted_inbox
     draft_id = draft.id
     text = text.strip()
     vinted = vinted_inbox.is_vinted(draft.conversation_id)
-    sent_on_vinted = None
-    if not vinted:
+    ka = kleinanzeigen_inbox.is_kleinanzeigen(draft.conversation_id)
+    sent_on_vinted = sent_on_ka = None
+    if not vinted and not ka:
         await mark_read(draft.conversation_id)   # nobody answers without having read the message
     try:
         if vinted:                               # its page in a tab, typed and sent there (vinted_inbox.send)
@@ -1210,6 +1215,11 @@ async def _send_claimed(draft: Draft, text: str) -> Draft:
                 sent_on_vinted = await vinted_inbox.send(draft.conversation_id, text)
             except vinted_inbox.SendError as e:
                 raise SendFailed(t("Vinted did not confirm the message: {error}", error=e)) from e
+        elif ka:                                 # the inbox's own API from a tab (kleinanzeigen_inbox.send)
+            try:
+                sent_on_ka = await kleinanzeigen_inbox.send(draft.conversation_id, text)
+            except kleinanzeigen_inbox.SendError as e:
+                raise SendFailed(t("Kleinanzeigen did not confirm the message: {error}", error=e)) from e
         else:
             await _account().send_message(draft.conversation_id, text)
     except (EndpointUnknown, SendFailed, NotLoggedIn, SessionUnavailable, ValueError) as e:   # keep the edited text
@@ -1219,12 +1229,14 @@ async def _send_claimed(draft: Draft, text: str) -> Draft:
             db.add(draft)
             db.commit()
         raise
-    if not vinted and get_setting("send_verified") != "1":
+    if not vinted and not ka and get_setting("send_verified") != "1":
         set_setting("send_verified", "1")     # sending works on this account: auto replies may now send
         log.info("first send confirmed via history; auto replies enabled")
     sent = mark_sent(draft_id, text)
     if sent_on_vinted:                            # the local copy under Vinted's id: the next sync finds it, no double
         vinted_inbox.record_sent(draft_id, sent_on_vinted)
+    if ka:                                        # likewise under Kleinanzeigen's id (or gone: read back already)
+        kleinanzeigen_inbox.record_sent(draft_id, sent_on_ka)
     try:
         await meetups.on_sent(sent)           # agreed appointment -> "add to calendar?" push
     except Exception as e:  # noqa: BLE001 - the message is out; the calendar offer is a bonus
@@ -1347,6 +1359,12 @@ def enqueue_sync() -> jobs.Job:
                 await vinted_inbox.sync(force=True)       # Vinted's chats with it (hidden tab of its inbox)
             except Exception as e:  # noqa: BLE001 - willhaben's result counts
                 log.warning("vinted chat sync failed: %s", e)
+        if platforms.enabled("kleinanzeigen"):
+            from app.platforms import kleinanzeigen_inbox
+            try:
+                await kleinanzeigen_inbox.sync(force=True)  # Kleinanzeigen's chats (its inbox API from a tab)
+            except Exception as e:  # noqa: BLE001 - willhaben's result counts
+                log.warning("kleinanzeigen chat sync failed: %s", e)
         if res.get("skipped"):           # not logged in / browser off: shown with a warning sign
             job.problems = 1
             return res["skipped"]

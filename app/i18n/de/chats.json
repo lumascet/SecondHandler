@@ -245,5 +245,8 @@
  "One question per line, at most 12.": "Eine Frage pro Zeile, höchstens 12.",
  "Not logged in to willhaben's app interface – log in under Settings → willhaben": "Nicht an willhabens App-Schnittstelle angemeldet – melde dich unter Einstellungen → willhaben an",
  "off – not logged in to the app interface": "aus – nicht an der App-Schnittstelle angemeldet",
- "Not logged in to {site} – its messages do not arrive.": "Nicht bei {site} eingeloggt – Nachrichten von dort kommen nicht an."
+ "Not logged in to {site} – its messages do not arrive.": "Nicht bei {site} eingeloggt – Nachrichten von dort kommen nicht an.",
+ "Kleinanzeigen did not confirm the message: {error}": "Kleinanzeigen hat die Nachricht nicht bestätigt: {error}",
+ "Kleinanzeigen refused: HTTP {status}": "Kleinanzeigen hat abgelehnt: HTTP {status}",
+ "Kleinanzeigen: message from {name}": "Kleinanzeigen: Nachricht von {name}"
 }

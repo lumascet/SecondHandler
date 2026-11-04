@@ -10,7 +10,7 @@
 {% set show_filter = request.query_params.get('show') if request is defined else none %}
 {% set show_filter = show_filter if show_filter in ('unread', 'reply', 'draft', 'finished', 'all') else none %}
 {% set site_filter = request.query_params.get('site') if request is defined else none %}
-{% set site_filter = site_filter if site_filter in ('willhaben', 'vinted') else none %}
+{% set site_filter = site_filter if site_filter in ('willhaben', 'vinted', 'kleinanzeigen') else none %}
 {% set has_vinted = vinted_on %}
 {# the list's address with one filter changed (role: selling/buying, show: unread/reply/draft, hidden ones) #}
 {% macro chats_url(role=role_filter, show=show_filter, hidden=show_hidden, site=site_filter) -%}
@@ -46,11 +46,13 @@
     </div>
     {# the filters swap the list (and themselves) and keep the open chat; the address follows #}
     <div id="chat-filters" hx-boost="true" hx-target="#chat-list-items" hx-select="#chat-list-items" hx-swap="outerHTML" hx-select-oob="#chat-filters" hx-push-url="true">
-    {% if (has_vinted and wh_on) or site_filter %}{# which site's chats: both, willhaben's, Vinted's #}
+    {% if (multi_site and wh_on) or site_filter %}{# which site's chats: all, willhaben's, Vinted's, Kleinanzeigen's #}
     <div class="mb-2" data-chat-site>{{ ui.seg([
          (chats_url(site=none), _("All sites"), none, not site_filter),
-         (chats_url(site='willhaben'), 'willhaben', none, site_filter == 'willhaben'),
-         (chats_url(site='vinted'), 'Vinted', none, site_filter == 'vinted')], 'text-[13px]') }}</div>
+         (chats_url(site='willhaben'), 'willhaben', none, site_filter == 'willhaben')]
+         + ([(chats_url(site='vinted'), 'Vinted', none, site_filter == 'vinted')] if has_vinted else [])
+         + ([(chats_url(site='kleinanzeigen'), 'Kleinanzeigen', none, site_filter == 'kleinanzeigen')] if ka_on else []),
+         'text-[13px]') }}</div>
     {% endif %}
     {{ ui.seg([
          (chats_url(role=none), _("All"), none, not role_filter),
@@ -96,7 +98,7 @@
       <span class="relative grid min-h-14 w-14 shrink-0 self-stretch place-items-center overflow-hidden rounded-[10px] bg-hover text-[15px] font-bold text-base-content">{{ (c.partner_name or '?')[:1]|upper }}{% if thumbs.get(c.id) %}<img src="{{ thumbs[c.id] }}" alt="" loading="lazy" class="absolute inset-0 size-full object-cover" data-chat-thumb onerror="this.remove()">{% endif %}</span>
       <span class="min-w-0">
         <span class="flex min-w-0 items-center justify-between gap-2">
-          <span class="flex min-w-0 items-center gap-1.5"><span class="truncate {{ 'font-bold' if unread_by_chat.get(c.id) else 'font-semibold' }}">{{ c.partner_name or _('unknown') }}</span>{% if vinted_on %}{{ ui.site_mark(c.platform or 'willhaben') }}{% endif %}</span>
+          <span class="flex min-w-0 items-center gap-1.5"><span class="truncate {{ 'font-bold' if unread_by_chat.get(c.id) else 'font-semibold' }}">{{ c.partner_name or _('unknown') }}</span>{% if multi_site %}{{ ui.site_mark(c.platform or 'willhaben') }}{% endif %}</span>
           <span class="shrink-0 whitespace-nowrap text-[12px] text-muted">{{ c.last_message_at|ago }}</span>
         </span>
         <span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted">{% if c.role %}{{ ui.tag(_("Buying") if c.role == 'buyer' else _("Selling"), c.role == 'buyer') }}{% endif %}<span class="truncate">{{ c.ad_title or c.ad_id or '–' }}</span></span>

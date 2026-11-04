@@ -1504,8 +1504,11 @@ def _chat_list(show_hidden: bool) -> dict[str, Any]:
     have = {c.platform or "willhaben" for c in convs}
     wh_on = "willhaben" in have or bool(get_session().logged_in)
     vinted_on = platforms.enabled("vinted") and ("vinted" in have or bool(site_accounts.state("vinted")["logged_in"]))
+    ka_on = platforms.enabled("kleinanzeigen") and ("kleinanzeigen" in have
+                                                    or bool(site_accounts.state("kleinanzeigen")["logged_in"]))
     return {"convs": convs, "open_drafts": open_drafts, "hidden_count": hidden_count, "show_hidden": show_hidden,
-            "waiting": waiting, "finished": o["finished"], "finished_fresh": o["finished_fresh"], "finished_why": o["finished_why"], "unread_by_chat": o["unread"], "thumbs": o["thumbs"], "wh_on": wh_on, "vinted_on": vinted_on}
+            "waiting": waiting, "finished": o["finished"], "finished_fresh": o["finished_fresh"], "finished_why": o["finished_why"], "unread_by_chat": o["unread"], "thumbs": o["thumbs"], "wh_on": wh_on, "vinted_on": vinted_on, "ka_on": ka_on,
+            "multi_site": vinted_on or ka_on}
 
 
 @app.get("/chats", response_class=HTMLResponse)
