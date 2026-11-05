@@ -1193,14 +1193,17 @@ async def ad_fragment(request: Request, platform: platforms.Platform, ad_id: str
                 error = str(e)
             else:                       # the site failed: show what the list showed, and why
                 reduced, detail_error = True, str(e)
-    if d is not None and h is not None and not reduced:
+    offline = None                       # no longer online: the copy the app kept, and from when
+    if d is None and error is None and not reduced:
+        d, offline = _kept_copy(platform.id, ad_id, h)
+    if d is not None and h is not None and not reduced and offline is None:
         _keep_condition(platform.id, ad_id, d, h)
     if h is not None and not reduced and error is None:     # the ad page just loaded: its status for the hit cards
         search_agents_svc.record_status(platform.id, ad_id, search_agents_svc.site_status(d), d)
         with session() as db:
             h = db.get(Hit, h.id) or h                       # the pane shows the status just loaded
     if d is not None and h is not None:
-        if d.images and not reduced:
+        if d.images and not reduced and offline is None:
             search_agents_svc.remember_photos(h.id, d.images)       # saving it now keeps them all
         elif not d.images:                  # a sold ad's page drops its photos: the ones the hit kept
             kept = search_agents_svc.kept_photos(h)
@@ -1209,8 +1212,24 @@ async def ad_fragment(request: Request, platform: platforms.Platform, ad_id: str
     # the price verdict is the lazily loaded deals section (/hits/ad/{id}/deal), one verdict per ad
     return templates.TemplateResponse(request, "_ad_detail.html", {"d": d, "h": h, "ad_id": ad_id, "error": error,
                                                                    "platform": platform, "reduced": reduced,
-                                                                   "detail_error": detail_error,
+                                                                   "detail_error": detail_error, "offline": offline,
                                                                    "ref": platform.ref(ad_id)})
+
+
+def _kept_copy(pid: str, ad_id: str, h: Hit | None) -> tuple[platforms.AdDetail | None, Any]:
+    """An ad that is no longer online (sold, deleted – or removed as a scam): the fullest copy the app kept, with the
+    time it was last read. A chat about it keeps the ad page as Claude saw it (text, photos, seller); else the hit."""
+    with session() as db:
+        conv = db.exec(select(Conversation).where(Conversation.platform == pid, Conversation.ad_id == ad_id,
+                                                  col(Conversation.ad_context).is_not(None))
+                       .order_by(col(Conversation.ad_context_at).desc())).first()
+    if conv is not None and (conv.ad_context or {}).get("title"):
+        return platforms.AdDetail.from_context(conv.ad_context, ad_id, pid), conv.ad_context_at or conv.synced_at
+    if h is not None:
+        d = platforms.AdDetail.from_hit(h)
+        d.status = "gone"
+        return d, h.last_seen_at
+    return None, None
 
 
 @app.post("/hits/ad/{pid}/{ad_id}/translation", response_class=HTMLResponse)

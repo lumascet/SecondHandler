@@ -166,6 +166,27 @@ class AdDetail:
                    item_condition=r.get("item_condition"), item_condition_label=r.get("item_condition_label"),
                    shipping_price=r.get("shipping_price"), shipping=r.get("shipping"), buyer_fee=r.get("buyer_fee"))
 
+    @classmethod
+    def from_context(cls, ctx: dict[str, Any], ad_id: str, platform: str) -> AdDetail:
+        """The copy a chat kept of its ad (as_context()), for an ad no longer online: title, text, price, place,
+        seller, photos as they were the last time the ad was read."""
+        import re
+        raw = ctx.get("price")
+        price_display = raw if isinstance(raw, str) else None
+        if isinstance(raw, (int, float)):
+            price = float(raw)
+        else:                                          # "160 €", "€ 1.250", "12,50 €"
+            m = re.search(r"\d[\d.]*(?:,\d+)?", price_display or "")
+            price = float(m.group(0).replace(".", "").replace(",", ".")) if m else None
+        return cls(ad_id=str(ctx.get("ad_id") or ad_id), heading=ctx.get("title") or "", description=ctx.get("description"),
+                   price=price, price_display=price_display, status="gone", published_at=None, first_published_at=None,
+                   end_date=None, url=ctx.get("url") or "", images=list(ctx.get("images") or []),
+                   location=ctx.get("location"), seller_name=ctx.get("seller_name"),
+                   category_path=[c for c in (ctx.get("category") or "").split(" > ") if c],
+                   platform=ctx.get("platform") or platform, item_condition=ctx.get("item_condition"),
+                   item_condition_label=ctx.get("item_condition_label"), shipping=ctx.get("shipping"),
+                   shipping_price=ctx.get("shipping_price"))
+
     def as_context(self) -> dict[str, Any]:
         return {
             "ad_id": self.ad_id,

@@ -7,6 +7,7 @@
 {% if error %}<div class="p-4">{{ ui.msg(_("{platform} error: {error}", platform=platform.name, error=error), 'error') }}</div>
 {% elif not d %}<p class="px-6 py-6 text-muted">{{ _("This ad is no longer online (sold, expired or deleted).") }}</p>
 {% else %}
+{% if offline is defined and offline is not none %}<div role="status" class="bg-warn-soft px-5 py-2.5 text-[13px] text-warning" data-ad-offline>{{ _("No longer online on {platform} (sold, expired or deleted) – this is the copy the app kept on {when}.", platform=platform.name, when=offline|local('%d.%m. %H:%M')) }}</div>{% endif %}
 <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1.2fr)_minmax(320px,1fr)]">
   <div class="flex min-w-0 flex-col gap-2 bg-base-200 p-4">
     {# the picture sits on a placeholder: a picture that fails to load is hidden (onerror), the icon stays #}
