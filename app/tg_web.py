@@ -437,6 +437,8 @@ def tg_link(url: str) -> str:
         return base + "/tg/hits"
     if path.startswith("/myads"):
         return base + "/tg/myads"
+    if path.startswith("/purchases/new/"):           # the buy dialog of one ad (app/tg_purchases.py)
+        return base + "/tg" + path + (f"?{parts.query}" if parts.query else "")
     if path.startswith("/purchases"):
         return base + "/tg/purchases"
     if path in ("", "/"):
