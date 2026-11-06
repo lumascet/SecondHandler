@@ -320,6 +320,17 @@ def is_own_ad(ad_id: str | None) -> bool:
         return db.get(MyAd, str(ad_id)) is not None
 
 
+def own_ad(conv: Conversation | None) -> MyAd | None:
+    """The own ad a chat is about: a willhaben chat by its ad id (the live copy of a renewed ad); a kleinanzeigen.de chat
+    by the Kleinanzeigen id the own ad keeps (MyAd.kleinanzeigen), so the two ids never meet."""
+    if conv is None or not conv.ad_id:
+        return None
+    if conv.platform == "kleinanzeigen":
+        return my_ads.by_kleinanzeigen_id(conv.ad_id)
+    with session() as db:
+        return current_ad(db, conv.ad_id)
+
+
 MAX_CONTACT_QUESTIONS = 12
 
 
@@ -1051,8 +1062,7 @@ async def draft_reply(conversation_id: str, hint: str | None = None, auto: bool 
         raise LLMError(t("No open purchase for this chat"))
     ad = None
     if buy is None:
-        with session() as db:
-            ad = current_ad(db, conv.ad_id) if conv.ad_id else None
+        ad = own_ad(conv)
     req = await compose(conv, msgs_t, auto=auto, ad=ad, buy=buy, hint=hint)
     log.info("draft for %s: hint=%r, ad price=%s", conversation_id, hint, (req["ad_ctx"] or {}).get("price"))
     async with telegram.typing():                 # "typing…" in Telegram while Claude writes
@@ -1416,8 +1426,7 @@ def _auto_blockers(conv_id: str, d: Draft, msgs: list[Message]) -> list[str]:
         why.append(t("No open purchase for this chat"))
     ad = None
     if not buyer:
-        with session() as db:
-            ad = current_ad(db, conv.ad_id) if conv and conv.ad_id else None
+        ad = own_ad(conv)
     why += answer_blockers(conv, d, msgs, ad=ad, buy=p, buyer=buyer)
     last = next((m for m in reversed(msgs) if m.direction in ("in", "out")), None)
     if last is None or last.direction != "in":

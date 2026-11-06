@@ -64,6 +64,9 @@ def _site_items(t: Callable[..., str], p: Any) -> tuple[Item, ...]:
     if p.id == "kleinanzeigen":
         items.insert(4, Item("s-auth", t("App credentials (user:password)"),
                              t("API, 401, 403, KLEINANZEIGEN_API_AUTH, login")))
+        items[1:1] = [Item("s-ka-post-default", t("Post new ads on Kleinanzeigen too (ticked by default on the draft page)"),
+                           t("crosspost, also post, list, ticked, default, copy")),
+                      Item("s-ka-zip", t("Postcode for the ads (empty: what the form prefills)"), t("zip, PLZ, location"))]
     if p.id == "facebook":
         items.insert(4, Item("s-fb-location", t("Location for keyword searches (product search): a Marketplace link from facebook.com"),
                              t("place, radius, Marketplace")))

@@ -74,6 +74,7 @@
     <button class="btn btn-xs" formaction="/myads/bulk/activate" hx-post="/myads/bulk/activate" data-act="activate" :disabled="!picked.length">{{ _("Activate") }}</button>
     <button class="btn btn-xs" formaction="/myads/bulk/deactivate" hx-post="/myads/bulk/deactivate" data-act="deactivate" :disabled="!picked.length">{{ _("Deactivate") }}</button>
     <button class="btn btn-xs" formaction="/myads/bulk/hide" hx-post="/myads/bulk/hide" data-act="hide" :disabled="!picked.length" title="{{ _('Only from this list – the ads stay online on willhaben') }}">{{ _("Hide from list") }}</button>
+    {% if ka_ok %}<button class="btn btn-xs" formaction="/myads/bulk/kleinanzeigen" hx-post="/myads/bulk/kleinanzeigen" data-act="kleinanzeigen" :disabled="!picked.length" title="{{ _('Title, text, price, photos and category posted on Kleinanzeigen through its own ad form, in the browser of the app') }}">{{ ui.site_mark('kleinanzeigen', 12) }}{{ _("List") }}</button>{% endif %}
     {% if show_hidden %}<button class="btn btn-xs" formaction="/myads/bulk/unhide" hx-post="/myads/bulk/unhide" data-act="unhide" :disabled="!picked.length">{{ _("Show again") }}</button>{% endif %}
     {% if vinted_ok %}<button class="btn btn-xs" formaction="/myads/bulk/vinted" hx-post="/myads/bulk/vinted" data-act="vinted" :disabled="!picked.length" title="{{ _('Title, text, price and photos as a draft in your Vinted account; Claude picks the category and the condition. You check it and publish it on Vinted.') }}">{{ ui.site_mark('vinted', 12) }}{{ _("List") }}</button>{% endif %}
     <button class="btn btn-xs btn-outline btn-error bg-base-100" formaction="/myads/bulk/delete" hx-post="/myads/bulk/delete" hx-confirm="{{ _('Delete the selected ads on willhaben for good? willhaben cannot bring them back.') }}" data-act="delete" :disabled="!picked.length">{{ _("Delete") }}</button>
@@ -105,6 +106,7 @@
           {# the sites it is listed on (a dimmed mark: a draft, hidden or gone there) #}
           {% if not (a.ad_id|string).startswith('vinted-') %}<span class="inline-flex" data-row-site="willhaben">{{ ui.site_mark('willhaben', 13) }}</span>{% endif %}
           {% if a.vinted and a.vinted.id %}<span class="inline-flex {{ 'opacity-40' if a.vinted.state in ('draft', 'hidden', 'gone') else '' }}" data-row-site="vinted">{{ ui.site_mark('vinted', 13) }}</span>{% endif %}
+          {% if a.kleinanzeigen and a.kleinanzeigen.id %}<span class="inline-flex {{ 'opacity-40' if a.kleinanzeigen.state == 'gone' else '' }}" data-row-site="kleinanzeigen">{{ ui.site_mark('kleinanzeigen', 13) }}</span>{% endif %}
           {% if a.hidden %}<span title="{{ _('hidden') }}" aria-label="{{ _('hidden') }}" class="grid size-[18px] place-items-center rounded-[5px] bg-hover text-muted">{{ ui.icon('eye-off', 12, 2.5) }}</span>{% endif %}
           {% if not (a.ad_id|string).startswith('vinted-') %}<span title="{{ _('Auto-renew') }}" class="grid size-[18px] place-items-center rounded-[5px] {{ 'bg-brand-soft text-primary' if a.auto_renew else 'bg-hover text-off' }}">{{ ui.icon('refresh', 12, 2.5) }}</span>
           <span title="{{ _('Automatic answers') }}" class="grid size-[18px] place-items-center rounded-[5px] {{ 'bg-ok-soft text-success' if a.auto_reply else 'bg-hover text-off' }}">{{ ui.icon('bot', 12, 2.5) }}</span>{% endif %}
@@ -119,8 +121,11 @@
 </div>
 
 {# ---- detail ---- #}
+{# both keys when both wait: the willhaben job and the Kleinanzeigen one (base.html: a space-separated list) #}
+{% set pending_keys = ((['ad:' ~ cur.ad_id] if cur and cur.pending_action else [])
+                       + (['ka:' ~ cur.ad_id] if cur and cur.kleinanzeigen and cur.kleinanzeigen.pending else [])) | join(' ') %}
 <div id="myads-detail" class="flex min-w-0 max-w-[860px] flex-col gap-5 px-4 pt-5 pb-8 md:px-7 md:pt-[22px] {{ '' if has_detail else 'max-md:hidden' }}"
-     {% if cur and cur.pending_action %}data-pending-key="ad:{{ cur.ad_id }}"{% endif %}>
+     {% if pending_keys %}data-pending-key="{{ pending_keys }}"{% endif %}>
 {% if cur %}{% set a = cur %}{% set wh = not (a.ad_id|string).startswith('vinted-') %}
   <a href="/myads?{{ keep[1:] }}" class="btn btn-ghost btn-sm -ml-2 self-start md:hidden">{{ ui.icon('back', 16) }}{{ _("My ads") }}</a>
   <div class="flex items-start gap-4">
@@ -139,7 +144,7 @@
   <div class="flex flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 px-4 py-3" data-listings>
     {# two columns per line: the site, then its steps; steps that wrap line up under the steps, not under the
        site's name (360 px phones, 10-28) #}
-    <div class="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-x-2 text-[13px]" data-listing="willhaben">
+    <div class="grid grid-cols-[112px_minmax(0,1fr)] items-start gap-x-2 text-[13px]" data-listing="willhaben">
       <span class="inline-flex min-h-6 items-center gap-1.5 font-medium">{{ ui.site_mark('willhaben', 14) }}willhaben</span>
       <div class="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1">
       {% if wh %}
@@ -153,7 +158,7 @@
       {% endif %}
       </div>
     </div>
-    <div class="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-x-2 text-[13px]" data-listing="vinted" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML">
+    <div class="grid grid-cols-[112px_minmax(0,1fr)] items-start gap-x-2 text-[13px]" data-listing="vinted" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML">
       <span class="inline-flex min-h-6 items-center gap-1.5 font-medium">{{ ui.site_mark('vinted', 14) }}Vinted</span>
       <div class="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1">
       {% if a.vinted and a.vinted.id %}
@@ -170,11 +175,43 @@
       {% endif %}
       </div>
     </div>
+    {# Kleinanzeigen: the copy posted through the site's own ad form (services/crosspost_kleinanzeigen.py). Reserved and
+       activated with the willhaben ad, deleted here only (after a grace period). For a willhaben ad with a copy, or
+       when the account can post. #}
+    {% set ka = a.kleinanzeigen or {} %}
+    {% if wh and not a.replaced_by and (ka.id or ka.state == 'check' or ka_ok) %}
+    <div class="grid grid-cols-[112px_minmax(0,1fr)] items-start gap-x-2 text-[13px]" data-listing="kleinanzeigen" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML">
+      <span class="inline-flex min-h-6 items-center gap-1.5 font-medium">{{ ui.site_mark('kleinanzeigen', 14) }}Kleinanzeigen</span>
+      <div class="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1">
+      {% if ka.pending %}
+        {{ ui.pending('ka:' ~ a.ad_id, _("Working on Kleinanzeigen…"), _("Queued: on Kleinanzeigen")) }}
+      {% elif ka.id and ka.state != 'gone' %}
+        <span>{{ {'active': _("Online"), 'reserved': _("Reserved")}.get(ka.state, _("Check on Kleinanzeigen")) }}</span>
+        {% if ka.url %}<a class="link link-primary inline-flex items-center gap-1 no-underline" href="{{ ka.url }}" target="_blank" rel="noopener">{{ _("Open") }}{{ ui.icon('external', 13) }}</a>{% endif %}
+        {% if ka_ok %}
+          {% if ka.state == 'reserved' %}<form method="post" action="/myads/{{ a.ad_id }}/kleinanzeigen/activate" hx-post="/myads/{{ a.ad_id }}/kleinanzeigen/activate"><button class="btn btn-xs" title="{{ _('Online on Kleinanzeigen again') }}">{{ _("Activate") }}</button></form>
+          {% elif ka.state == 'active' %}<form method="post" action="/myads/{{ a.ad_id }}/kleinanzeigen/reserve" hx-post="/myads/{{ a.ad_id }}/kleinanzeigen/reserve"><button class="btn btn-xs" title="{{ _('Reserved on Kleinanzeigen: not for sale there until it is activated again') }}">{{ _("Reserve") }}</button></form>{% endif %}
+          <form method="post" action="/myads/{{ a.ad_id }}/kleinanzeigen/sync" hx-post="/myads/{{ a.ad_id }}/kleinanzeigen/sync"><button class="btn btn-xs btn-ghost" title="{{ _('Check the state on Kleinanzeigen now') }}">{{ _("Sync") }}</button></form>
+          <form method="post" action="/myads/{{ a.ad_id }}/kleinanzeigen/delete" hx-post="/myads/{{ a.ad_id }}/kleinanzeigen/delete"><button class="btn btn-xs btn-ghost text-error hover:bg-bad-soft" title="{{ _('Deletes the ad on Kleinanzeigen for good – it waits a few seconds in the queue, where you can still take it back.') }}">{{ _("Delete on Kleinanzeigen") }}</button></form>
+        {% endif %}
+      {% elif ka.state == 'check' %}
+        <span>{{ _("Check on Kleinanzeigen") }}</span>
+        {% if ka_ok %}<form method="post" action="/myads/{{ a.ad_id }}/kleinanzeigen/sync" hx-post="/myads/{{ a.ad_id }}/kleinanzeigen/sync"><button class="btn btn-xs" title="{{ _('Look for the ad on Kleinanzeigen now, by its title') }}">{{ _("Sync") }}</button></form>{% endif %}
+        <form method="post" action="/myads/{{ a.ad_id }}/kleinanzeigen/forget" hx-post="/myads/{{ a.ad_id }}/kleinanzeigen/forget"><button class="btn btn-xs btn-ghost" title="{{ _('Drops the record here only: this app stops waiting for the posting, and the ad may be listed again. An ad that is online on Kleinanzeigen stays there – delete it there.') }}">{{ _("Forget") }}</button></form>
+      {% else %}
+        <span class="text-muted">{{ _("No longer on Kleinanzeigen") if ka.id else _("not listed") }}</span>
+        {% if ka_ok %}<form method="post" action="/myads/{{ a.ad_id }}/kleinanzeigen" hx-post="/myads/{{ a.ad_id }}/kleinanzeigen"><button class="btn btn-xs" title="{{ _('Title, text, price, photos and category posted on Kleinanzeigen through its own ad form, in the browser of the app') }}">{{ _("List") }}</button></form>{% endif %}
+      {% endif %}
+      {% if ka.price and not ka.pending %}{% set dpct = ((ka.price - ka.wh_price) * 100 / ka.wh_price)|round|int if ka.wh_price else 0 %}<span class="text-muted" data-ka-price{% if ka.price_note %} title="{{ ka.price_note }}"{% endif %}>{{ _("Price there: {price}", price=ka.price|eur) }}{% if dpct > 0 %} · {{ _("{n} % above willhaben", n=dpct) }}{% elif dpct < 0 %} · {{ _("{n} % below willhaben", n=-dpct) }}{% endif %}</span>{% endif %}
+      </div>
+      {% if ka.error %}<small class="text-[12.5px] text-error" data-kleinanzeigen-error>{{ ka.error }}</small>{% endif %}
+    </div>
+    {% endif %}
     {% if a.vinted and a.vinted.error %}<small class="text-[12.5px] text-error" data-vinted-error>{{ a.vinted.error }}</small>{% endif %}
   </div>
   {# phone: two even columns; wider: one row with Delete on the right. While an action waits for its job: none.
      The willhaben actions send in the background and swap in the fresh detail and list (no reload). #}
-  {% if wh and not a.pending_action %}
+  {% if wh and not a.pending_action and a.status != 'deleted' %}
   <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center" hx-target="#myads-detail" hx-select="#myads-detail" hx-swap="outerHTML"
        hx-select-oob="#myads-rows,#myads-chips,#myads-count">
     <a class="btn whitespace-nowrap max-sm:px-2 max-sm:text-[13px]" href="/myads/{{ a.ad_id }}/edit" data-loading>{{ _("Edit") }}</a>

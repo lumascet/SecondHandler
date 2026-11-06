@@ -706,7 +706,8 @@ document.addEventListener('alpine:init', () => {
         if (fresh.some(j => j.lane === el.dataset.refreshOnLane)) todo.add(el);
       });
       if (data.pending) document.querySelectorAll('[data-pending-key]').forEach(el => {
-        if (!data.pending.includes(el.dataset.pendingKey)) todo.add(el);
+        // a space-separated list of keys (myads: the willhaben job and the Kleinanzeigen one): waiting while any is
+        if (!el.dataset.pendingKey.split(' ').some(k => data.pending.includes(k))) todo.add(el);
       });
       if (todo.size) refreshInPlace([...todo]);
       clearTimeout(this.timer);

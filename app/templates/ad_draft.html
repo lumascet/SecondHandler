@@ -8,13 +8,14 @@
    Claude's work (writing the draft, a revision, the Geizhals check) is a job: #draft-refine waits for it and
    refreshes itself, the form, the head, the error line and the side column with it. #}
 {% set writing = d.status == 'error' or not d.title %}
+{% set reasons = {'questions': _("Claude has a question for you"), 'bitte_pruefen': _("the text still says “(bitte prüfen)”"), 'no_category': _("willhaben suggests no category"), 'required': _("a required field has no value"), 'willhaben_not_logged_in': _("willhaben is not logged in")} %}
 <div id="draft-head" class="mb-5 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
   <div class="min-w-0">
     <div class="flex flex-wrap items-center gap-x-2 text-[13px] text-muted"><a href="/new-ad" class="text-muted no-underline hover:text-base-content">← {{ _("New ad") }}</a>{% if d.batch_id %}<a href="/new-ad/batch/{{ d.batch_id }}" class="text-muted no-underline hover:text-base-content">· ← {{ _("Batch #{id}", id=d.batch_id) }}</a>{% endif %}</div>
     <h1 class="mt-1.5 flex flex-wrap items-center gap-2">{{ _("Ad draft #{id}", id=d.id) }} {{ ui.pill(_("published") if d.status == 'published' else _("draft"), 'ok' if d.status == 'published' else '') }}</h1>
     <p class="mt-1 text-muted">{{ _("Written by Claude from your notes and {n} photos", n=d.image_paths|length) }} · {{ d.created_at|local }}</p>
   </div>
-  <div class="flex flex-wrap items-center gap-2">{% if published %}{% if d.wh_ad_id %}<a class="btn btn-primary" href="/myads/{{ d.wh_ad_id }}/edit" data-loading>{{ _("Edit on willhaben") }}</a>{% endif %}{% else %}<button class="btn" form="draft-form">{{ _("Save") }}</button>{% endif %}{% if d.status == 'error' and not d.refining %}<form method="post" action="/new-ad/{{ d.id }}/retry" class="m-0" hx-post="/new-ad/{{ d.id }}/retry" hx-target="#draft-head" hx-select="#draft-head" hx-swap="outerHTML" hx-select-oob="#draft-refine,#draft-error,#flash" hx-disabled-elt="find button"><button class="btn"><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ _("Try again") }}</button></form>{% endif %}{% if d.publishing %}{% elif not published and plan.options %}<button class="btn btn-primary" form="wh-publish">{{ _("Publish on willhaben") }}</button>{% elif d.wh_ad_id %}<a class="btn" href="https://www.willhaben.at/iad/object?adId={{ d.wh_ad_id }}" target="_blank" rel="noopener">{{ _("View on willhaben") }} ↗</a>{% endif %}</div>
+  <div class="flex flex-wrap items-center gap-2">{% if published %}{% if d.wh_ad_id %}<a class="btn btn-primary" href="/myads?ad={{ d.wh_ad_id }}">{{ _("My ad") }}</a><a class="btn" href="https://www.willhaben.at/iad/object?adId={{ d.wh_ad_id }}" target="_blank" rel="noopener">{{ _("View on willhaben") }} ↗</a><a class="btn" href="/myads/{{ d.wh_ad_id }}/edit" data-loading>{{ _("Edit on willhaben") }}</a>{% endif %}{% else %}{% if not d.publishing and plan.options %}<button class="btn btn-primary" form="wh-publish">{{ _("Publish on willhaben") }}</button>{% endif %}{% if d.status == 'error' and not d.refining %}<form method="post" action="/new-ad/{{ d.id }}/retry" class="m-0" hx-post="/new-ad/{{ d.id }}/retry" hx-target="#draft-head" hx-select="#draft-head" hx-swap="outerHTML" hx-select-oob="#draft-refine,#draft-error,#flash" hx-disabled-elt="find button"><button class="btn"><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ _("Try again") }}</button></form>{% endif %}{% if d.wh_ad_id and not published and not d.publishing and not plan.options %}<a class="btn" href="https://www.willhaben.at/iad/object?adId={{ d.wh_ad_id }}" target="_blank" rel="noopener">{{ _("View on willhaben") }} ↗</a>{% endif %}{% endif %}</div>
 </div>
 <div id="draft-error">{% if d.error %}{{ ui.msg(d.error, 'error') }}{% endif %}</div>
 <div class="grid grid-cols-1 items-start gap-5 md:grid-cols-[minmax(0,1fr)_340px]">
@@ -64,7 +65,7 @@
     {# Claude revises in the background (lane claude); when done this section, the text fields (unless you are editing
        them), the head and the error line swap themselves in #}
     <section id="draft-refine" class="flex flex-col gap-2.5 rounded-box border border-base-300 bg-base-100 px-5 py-4"
-             {% if d.refining %}data-pending-key="refining:{{ d.id }}" data-refresh-also="draft-form draft-head draft-error draft-aside"{% endif %}>
+             {% if d.refining %}data-pending-key="refining:{{ d.id }}" data-refresh-also="draft-form draft-head draft-error draft-aside willhaben"{% endif %}>
       <div class="font-semibold">{{ _("Improve the listing") }}</div>
       {% if d.questions and not d.refining and not published %}
       {# what Claude could not tell from notes and photos (instead of a "(bitte prüfen)" in the text) #}
@@ -87,20 +88,26 @@
       {% if not published %}<div class="flex flex-wrap items-center justify-between gap-2 text-[12.5px] text-muted"><span>{{ _("Save unsaved changes above first – Claude works with the saved version.") }}</span>
         {% if d.revisions %}<form method="post" action="/new-ad/{{ d.id }}/undo" class="m-0 max-w-full" hx-post="/new-ad/{{ d.id }}/undo" hx-target="#draft-refine" hx-select="#draft-refine" hx-swap="outerHTML" hx-select-oob="#draft-form,#draft-head,#draft-error,#draft-aside,#flash"><button class="btn btn-xs h-auto max-w-full py-1 text-left whitespace-normal">↶ {{ _("Undo: “{what}”", what=d.revisions[-1].instruction[:60]) }} <span class="text-muted">· {{ _("{n} earlier version", n=1) if d.revisions|length == 1 else _("{n} earlier versions", n=d.revisions|length) }}</span></button></form>{% endif %}</div>{% endif %}
     </section>
-    {# publishing runs as a background job (ad_creator.enqueue_publish): this card shows its state and swaps itself
-       (with the head and the error line) when it is done #}
+    {# publishing and categories run as background jobs: this card shows their state and swaps itself (with the head and
+       the error line) when they are done. The category search is a form of its own (form="wh-prepare") whose controls
+       sit under the category list; the empty form stays here. #}
     <section class="overflow-hidden rounded-box border border-base-300 bg-base-100" id="willhaben"
-             {% if d.publishing %}data-pending-key="addraft:{{ d.id }}" data-refresh-also="draft-error draft-head"{% endif %}>
-      <header class="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-4 py-3 font-semibold"><span>{{ _("Publish on willhaben") }}{% if plan.location %} <span class="text-[12.5px] font-normal text-muted">· {{ plan.location }}{% if plan.contact %} · {{ plan.contact }}{% endif %}</span>{% endif %}</span>
-        {% if d.status != 'published' and not d.publishing %}<form method="post" action="/new-ad/{{ d.id }}/willhaben/prepare" class="m-0 flex flex-wrap items-center gap-1.5"
-              hx-post="/new-ad/{{ d.id }}/willhaben/prepare" hx-include="#title, #desc, #price, #quantity" hx-target="#willhaben" hx-select="#willhaben" hx-swap="outerHTML" hx-select-oob="#draft-error,#draft-head,#flash" hx-disabled-elt="find button">{% if plan.options is defined %}<input name="category_query" value="{{ plan.query or '' }}" placeholder="{{ _('Category search term, e.g. speaker') }}" class="input input-sm w-[170px] max-w-full bg-base-200 font-normal">{% endif %}<button class="btn btn-sm"><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ _("Prepare for willhaben") if not plan.options else _("Check categories again") }}</button></form>{% endif %}</header>
+             {% if d.publishing %}data-pending-key="addraft:{{ d.id }}" data-refresh-also="draft-error draft-head"{% elif preparing %}data-pending-key="preparing:{{ d.id }}" data-refresh-also="draft-error draft-head"{% endif %}>
+      <header class="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-4 py-3 font-semibold"><span>{{ _("Publish on willhaben") }}{% if plan.location %} <span class="text-[12.5px] font-normal text-muted">· {{ plan.location }}{% if plan.contact %} · {{ plan.contact }}{% endif %}</span>{% endif %}</span></header>
+      {% if d.status != 'published' and not d.publishing %}<form id="wh-prepare" method="post" action="/new-ad/{{ d.id }}/willhaben/prepare" class="hidden" hx-post="/new-ad/{{ d.id }}/willhaben/prepare" hx-include="#title, #desc, #price, #quantity" hx-target="#willhaben" hx-select="#willhaben" hx-swap="outerHTML" hx-select-oob="#draft-error,#draft-head,#flash" hx-indicator="#wh-prepare-btn"></form><form id="wh-kaprice" method="post" action="/new-ad/{{ d.id }}/kleinanzeigen/price" class="hidden" hx-post="/new-ad/{{ d.id }}/kleinanzeigen/price" hx-include="#title, #desc, #price, #quantity, #ka-price-field" hx-target="#willhaben" hx-select="#willhaben" hx-swap="outerHTML" hx-select-oob="#draft-error,#draft-head,#flash" hx-disabled-elt="find button"></form>{% endif %}
+      {% set skipped = (d.also or {}).get('auto_publish_skipped') %}
+      {% if skipped and d.status == 'draft' and not d.publishing %}<p class="px-5 pt-3.5 text-[12.5px] text-muted">{{ _("Not published by itself – {reason}.", reason=reasons.get(skipped, skipped)) }}</p>{% endif %}
       {% if d.publishing %}
         <div class="flex flex-col gap-1 px-5 py-3.5">{{ ui.pending('addraft:' ~ d.id, _("Publishing on willhaben…"), _("Queued: publish on willhaben")) }}
           <small class="text-muted">{{ _("Runs in the background – you can leave this page. Progress in the sidebar.") }}</small></div>
+      {% elif preparing %}
+        <div class="flex flex-col gap-1 px-5 py-3.5">{{ ui.pending('preparing:' ~ d.id, _("Asking willhaben…"), _("Queued: categories")) }}
+          <small class="text-muted">{{ _("Runs in the background – you can leave this page. Progress in the sidebar.") }}</small></div>
       {% elif d.status == 'published' %}
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3.5 text-success">✓ <strong>{{ _("Published on willhaben") }}</strong><span class="text-[12.5px] text-muted">{{ _("New ads are checked by willhaben first and can take a few minutes to show up.") }}</span></div>
-        {% if d.wh_ad_id %}<div class="flex flex-wrap items-center gap-2 border-t border-base-300 px-5 py-3.5"><a class="btn btn-sm" href="/myads?ad={{ d.wh_ad_id }}">{{ _("My ad") }}</a><a class="btn btn-sm" href="/sold/{{ d.wh_ad_id }}?kind=sold">{{ _("Mark sold…") }}</a></div>{% endif %}
+        {% if d.wh_ad_id %}<div class="flex flex-wrap items-center gap-2 border-t border-base-300 px-5 py-3.5"><a class="btn btn-sm" href="/sold/{{ d.wh_ad_id }}?kind=sold">{{ _("Mark sold…") }}</a></div>{% endif %}
       {% else %}
+        {% if plan.options is not defined %}<div class="flex flex-wrap items-center gap-1.5 px-5 py-3.5"><button id="wh-prepare-btn" form="wh-prepare" class="btn btn-sm"><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ _("Prepare for willhaben") }}</button></div>{% endif %}
         {% if plan.options is defined and not plan.options %}<p class="px-5 py-3.5 text-muted">{{ _("willhaben suggests no category for this title.") }}</p>{% endif %}
         {% if plan.options is defined %}
         {# sent in the background with the (maybe unsaved) title, description and price; only this card, the head and the
@@ -108,9 +115,16 @@
         <form method="post" action="/new-ad/{{ d.id }}/willhaben/publish" id="wh-publish" class="flex flex-col"
               hx-post="/new-ad/{{ d.id }}/willhaben/publish" hx-include="#title, #desc, #price, #quantity" title="{{ _('Goes live on willhaben as a free private ad – it waits a few seconds in the queue, where you can take it back.') }}"
               hx-target="#willhaben" hx-select="#willhaben" hx-select-oob="#draft-error,#draft-head" hx-swap="outerHTML" hx-push-url="false">
-          <div class="flex flex-col gap-2.5 border-b border-base-300 px-5 py-3.5">{{ ui.eyebrow(_("Category")) }}{% with pick_q=(d.category_hint or '').replace('›', '>').split('>')[-1].replace('/', ' ').strip() if not plan.options else '', pick_url="/new-ad/" ~ d.id ~ "/willhaben/category", pick_target="#willhaben", pick_select="#willhaben", pick_oob="#draft-error,#draft-head" %}{% include "_category_picker.html" %}{% endwith %}</div>
+          <div class="flex flex-col gap-2.5 border-b border-base-300 px-5 py-3.5">{{ ui.eyebrow(_("Category")) }}{% with pick_q=(d.category_hint or '').replace('›', '>').split('>')[-1].replace('/', ' ').strip() if not plan.options else '', pick_url="/new-ad/" ~ d.id ~ "/willhaben/category", pick_target="#willhaben", pick_select="#willhaben", pick_oob="#draft-error,#draft-head" %}{% include "_category_picker.html" %}{% endwith %}
+            <div class="flex flex-wrap items-center gap-1.5"><input name="category_query" form="wh-prepare" value="{{ plan.query or '' }}" placeholder="{{ _('Category search term, e.g. speaker') }}" class="input input-sm w-[170px] max-w-full bg-base-200 font-normal"><button id="wh-prepare-btn" form="wh-prepare" class="btn btn-sm"><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ _("Prepare for willhaben") if not plan.options else _("Check categories again") }}</button></div></div>
           {% if plan.options %}
           <div class="flex flex-col gap-2.5 border-b border-base-300 px-5 py-3.5">{{ ui.eyebrow(_("Handover")) }}{% include "_wh_handover.html" %}</div>
+          {% if ka_available %}
+          <div id="ka-box" class="flex flex-col border-b border-base-300" x-data="{ on: {{ 'true' if ka_checked else 'false' }} }">
+            <label class="flex cursor-pointer items-start gap-2.5 px-5 py-3.5"><input type="checkbox" name="kleinanzeigen" value="1" {% if ka_checked %}checked{% endif %} class="checkbox checkbox-primary checkbox-sm mt-0.5" @change="on = $event.target.checked" hx-post="/new-ad/{{ d.id }}/also" hx-trigger="change" hx-params="kleinanzeigen" hx-swap="none"><span class="flex min-w-0 flex-col gap-0.5"><span>{{ _("Also post on Kleinanzeigen") }}</span><small class="text-[12.5px] text-muted">{{ _("Posted there right after willhaben, with the same text and photos, at its own price below; Claude picks the category.") }}</small></span></label>
+            {% include "_ka_price.html" %}
+          </div>
+          {% endif %}
           <div class="flex flex-wrap items-center gap-3 px-5 py-3.5"><button class="btn btn-primary">{{ _("Publish on willhaben now") }}</button><small class="text-muted">{{ _("Takes about half a minute: photos are uploaded, then the free ad is activated. Nothing that costs money is ever booked.") }}</small></div>
           {% endif %}
         </form>

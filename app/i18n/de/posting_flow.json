@@ -1,0 +1,11 @@
+{
+ "Claude has a question for you": "Claude hat eine Rückfrage an dich",
+ "the text still says “(bitte prüfen)”": "im Text steht noch „(bitte prüfen)“",
+ "willhaben suggests no category": "willhaben schlägt keine Kategorie vor",
+ "a required field has no value": "ein Pflichtfeld hat keinen Wert",
+ "Not published by itself – {reason}.": "Nicht von selbst veröffentlicht – {reason}.",
+ "Also post on Kleinanzeigen": "Auch auf Kleinanzeigen einstellen",
+ "Posted there right after willhaben, with the same text and photos, at its own price below; Claude picks the category.": "Dort gleich nach willhaben eingestellt, mit demselben Text und denselben Fotos, zum eigenen Preis unten; Claude wählt die Kategorie.",
+ "Publish on willhaben as soon as Claude is done": "Auf willhaben veröffentlichen, sobald Claude fertig ist",
+ "Restore is possible later": "Wiederherstellen ist später möglich"
+}

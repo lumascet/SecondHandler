@@ -96,3 +96,40 @@ def test_batch_page_waits_for_the_batch_instead_of_reloading(client):  # noqa: F
     page = client.get(f"/new-ad/batch/{b.id}").text
     assert 'id="batch-main" data-refresh=' in page and 'data-pending-key="batch:' not in page
     assert f"batch:{b.id}" not in client.get("/jobs", headers={"accept": "application/json"}).json()["pending"]
+
+
+def _offer_on(monkeypatch):
+    from app.services import crosspost_kleinanzeigen
+    monkeypatch.setattr(crosspost_kleinanzeigen, "available", lambda: True)
+
+
+def _ticked_box(page):
+    return 'name="kleinanzeigen" value="1" checked' in page
+
+
+def test_the_kleinanzeigen_tick_is_kept_when_the_willhaben_card_is_drawn_anew(client, monkeypatch):  # noqa: F811
+    _offer_on(monkeypatch)
+    d = _draft(wh_plan={"options": [{"label": "Audio › Lautsprecher", "fields": []}], "selected": 0})
+    page = client.get(f"/new-ad/{d.id}").text
+    assert f'hx-post="/new-ad/{d.id}/also"' in page and not _ticked_box(page)     # the Settings default: off
+    r = client.post(f"/new-ad/{d.id}/also", data={"kleinanzeigen": "1"})
+    assert r.status_code == 204 and _get(d.id).also == {"kleinanzeigen": True}
+    assert _ticked_box(client.get(f"/new-ad/{d.id}").text)                        # the card drawn again: still ticked
+    client.post(f"/new-ad/{d.id}/also", data={})                                  # an unticked box sends nothing
+    assert _get(d.id).also == {"kleinanzeigen": False}
+    assert not _ticked_box(client.get(f"/new-ad/{d.id}").text)
+
+
+def test_the_batch_bar_keeps_its_tick_on_every_draft_of_the_batch(client, monkeypatch):  # noqa: F811
+    _offer_on(monkeypatch)
+    d1 = _draft(wh_plan={"options": [], "selected": 0})
+    d2 = _draft(wh_plan={"options": [], "selected": 0})
+    b = ad_batch.new_batch("zwei Stühle")
+    ad_batch._update(b.id, status="review", groups=[{"draft_id": d1.id, "photos": []}, {"draft_id": d2.id, "photos": []}])
+    assert not _ticked_box(client.get(f"/new-ad/batch/{b.id}").text)
+    r = client.post(f"/new-ad/batch/{b.id}/also", data={"kleinanzeigen": "1"})
+    assert r.status_code == 204
+    assert _get(d1.id).also == {"kleinanzeigen": True} and _get(d2.id).also == {"kleinanzeigen": True}
+    assert _ticked_box(client.get(f"/new-ad/batch/{b.id}").text)                  # a refresh of the page keeps it
+    assert f'hx-post="/new-ad/batch/{b.id}/also"' in client.get(f"/new-ad/batch/{b.id}").text
+    assert client.post(f"/new-ad/batch/{b.id + 999}/also", data={}).status_code == 404

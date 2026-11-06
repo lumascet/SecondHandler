@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import shutil
 from pathlib import Path
@@ -367,18 +368,20 @@ async def save_table(batch_id: int, rows: dict[int, dict[str, str]]) -> tuple[li
     return redraw, unsaved
 
 
-def _publish_chosen(d: AdDraft) -> bool:
-    """Publish a draft with the category and the fields chosen in its row (the first suggestion if none was)."""
+def _publish_chosen(d: AdDraft, also: dict[str, Any] | None = None) -> bool:
+    """Publish a draft with the category and the fields chosen in its row (the first suggestion if none was).
+    also: the table's choices for this publishing (see ad_creator.enqueue_publish)."""
     plan = d.wh_plan or {}
     sel = plan.get("selected") or 0
     code = ad_creator.option_code(plan["options"][sel]) if 0 <= sel < len(plan["options"]) else None
-    return ad_creator.enqueue_publish(d.id, sel, {}, plan.get("shipping"), code=code)
+    return ad_creator.enqueue_publish(d.id, sel, {}, plan.get("shipping"), code=code, also=also)
 
 
 def run_action(batch_id: int, verb: str, ids: list[int], instruction: str = "",
-               unsaved: set[int] = frozenset()) -> tuple[str, str]:
+               unsaved: set[int] = frozenset(), also: dict[str, Any] | None = None) -> tuple[str, str]:
     """One button of the table for all ticked drafts (or the one row it belongs to): (message, tone). unsaved: drafts
-    whose edit save_table could not take over; they are not published with the old values (the row says why)."""
+    whose edit save_table could not take over; they are not published with the old values (the row says why).
+    also: the table's publishing choices, e.g. {"kleinanzeigen": True} (the box next to "Publish ticked")."""
     drafts = {d.id: d for d in drafts_of(get(batch_id))}
     picked = [drafts[i] for i in ids if i in drafts]
     if not picked:
@@ -389,8 +392,8 @@ def run_action(batch_id: int, verb: str, ids: list[int], instruction: str = "",
             if d.status != "draft" or d.id in unsaved:
                 continue
             if (d.wh_plan or {}).get("options"):
-                n += _publish_chosen(d)
-            elif ad_creator.enqueue_prepare(d.id, then=_publish_chosen):   # no category yet: ask willhaben first
+                n += _publish_chosen(d, also)
+            elif ad_creator.enqueue_prepare(d.id, then=functools.partial(_publish_chosen, also=also)):  # ask first
                 ad_creator.update_draft(d.id, error=None)
                 asking += 1
             elif d.refining:

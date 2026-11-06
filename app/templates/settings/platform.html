@@ -5,6 +5,17 @@
 {% set p = site.p %}
 <div class="flex flex-col gap-4">
   {% if account_site is defined %}{% include "settings/_account.html" %}{% endif %}
+  {% if site.ka_post is not none %}
+  {# Kleinanzeigen: an own willhaben ad posted there too; its own form (the switch and the pace are the card below) #}
+  <form method="post" action="/settings/platform/{{ p.id }}" id="s-ka-post" class="flex flex-col gap-3.5 rounded-box border border-base-300 bg-base-100 px-5 py-4">
+    <input type="hidden" name="part" value="posting">
+    <div class="flex flex-col gap-1"><span class="font-semibold">{{ _("Posting my ads on Kleinanzeigen") }}</span>
+      <p class="text-[12.5px] text-muted">{{ _("An ad from willhaben is posted through Kleinanzeigen's own ad form in the app's browser; the account above must be logged in. Reserving and activating follow the willhaben ad. Nothing is deleted on Kleinanzeigen by itself: a copy is deleted in My ads.") }}</p></div>
+    <label id="s-ka-post-default" class="flex cursor-pointer items-center justify-between gap-3"><span class="min-w-0 font-medium">{{ _("Post new ads on Kleinanzeigen too (ticked by default on the draft page)") }}</span><input type="checkbox" class="toggle toggle-primary" name="post_default" {% if site.ka_post.default %}checked{% endif %}></label>
+    <label id="s-ka-zip" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Postcode for the ads (empty: what the form prefills)") }}</span><input name="zip" value="{{ site.ka_post.zip }}" inputmode="numeric" maxlength="5" placeholder="{{ _('4 or 5 digits') }}" class="input w-full min-w-0 bg-base-200 sm:w-48"></label>
+    <div><button class="btn btn-primary">{{ _("Save") }}</button></div>
+  </form>
+  {% endif %}
   {% include "settings/_pace.html" %}
   {% include "settings/_advanced.html" %}
   {% if vpn is defined %}{% with vpn_site = p.id %}{% include "_vpn_switch.html" %}{% endwith %}{% endif %}

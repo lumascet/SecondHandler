@@ -129,10 +129,11 @@
     </div>
     {% endfor %}
     <div class="sec" style="margin-top: 12px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px">
-      <button class="chip primary" name="act" value="publish" hx-confirm="{{ _('Publish all ticked ads on willhaben now? They go live immediately (free private ads), one after another.') }}">{{ ui.icon('upload', 13, 2) }} {{ _("Publish ticked") }}</button>
+      <button class="chip primary" name="act" value="publish">{{ ui.icon('upload', 13, 2) }} {{ _("Publish ticked") }}</button>
+      {% if ka_available %}<label style="display: flex; align-items: center; gap: 8px; font-size: 14px"><input type="checkbox" name="kleinanzeigen" value="1" {% if ka_checked %}checked{% endif %} style="width: 20px; height: 20px" hx-post="/new-ad/batch/{{ b.id }}/also" hx-trigger="change" hx-params="kleinanzeigen" hx-swap="none">{{ _("Also post on Kleinanzeigen") }}</label>{% endif %}
       <button class="chip" name="act" value="prepare" title="{{ _('Ask willhaben for categories and required fields again (read-only)') }}">{{ _("Check categories") }}</button>
       <span style="display: flex; gap: 6px"><input class="field" name="instruction" placeholder="{{ _('Revise all ticked with Claude, e.g. “mention pickup in Vienna 15”') }}"><button class="chip" name="act" value="refine" style="flex-shrink: 0">{{ ui.icon('sparkle', 12, 2) }} {{ _("Revise") }}</button></span>
-      <button class="chip danger" name="act" value="discard" hx-confirm="{{ _('Discard all ticked ads? They can be restored.') }}">{{ _("Discard ticked") }}</button>
+      <button class="chip danger" name="act" value="discard">{{ _("Discard ticked") }}</button>
       <button class="mainbtn tg-hide" name="act" value="save">{{ _("Save") }}</button>
     </div>
   </form>
