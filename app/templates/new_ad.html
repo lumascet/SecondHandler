@@ -34,6 +34,10 @@
       <form method="post" action="/new-ad" enctype="multipart/form-data" class="flex flex-col gap-3.5" x-data="{ busy: false }" @submit="busy = true">
         <label class="flex flex-col gap-1.5"><span class="font-semibold">{{ _("Notes about the item") }}</span><textarea name="notes" rows="5" class="textarea w-full bg-base-200" placeholder="{{ _('KTM mountain bike, frame M, 2019, new brake pads, small scratch on the top tube, pickup Vienna 15') }}"></textarea></label>
         {{ photos(8, _("Photos")) }}
+        <div class="flex flex-col gap-2">
+          <label class="flex cursor-pointer items-center gap-2.5 text-[13px]"><input type="checkbox" name="auto_publish" value="1" class="checkbox checkbox-primary checkbox-sm"><span>{{ _("Publish on willhaben as soon as Claude is done") }}</span></label>
+          {% if ka_available %}<label class="flex cursor-pointer items-center gap-2.5 text-[13px]"><input type="checkbox" name="kleinanzeigen" value="1" {% if ka_checked %}checked{% endif %} class="checkbox checkbox-primary checkbox-sm"><span>{{ _("Also post on Kleinanzeigen") }}</span></label>{% endif %}
+        </div>
         <div class="flex flex-wrap items-center gap-3"><button class="btn btn-primary"><span x-show="busy" x-cloak class="loading loading-spinner loading-xs"></span>{{ _("Create listing with Claude") }}</button><small class="text-muted">{{ _("Takes up to 2 minutes.") }}</small></div>
       </form>
     </section>

@@ -273,6 +273,9 @@ class MyAd(SQLModel, table=True):
     #   tries, draft: the willhaben draft of the copy once presaved}
     vinted: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))  # the ad also on Vinted
     #   (services/crosspost.py): {id, url, state draft|active|reserved|sold|hidden|gone, catalog, at, checked}
+    kleinanzeigen: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))  # the ad also on Kleinanzeigen
+    #   (services/crosspost_kleinanzeigen.py): {id, url, state active|reserved|gone|check, category, at, checked,
+    #   pending listing|submitting|reserving|activating|deleting|None, hidden_by, error}
 
 
 class Sale(SQLModel, table=True):
@@ -351,6 +354,11 @@ class AdDraft(SQLModel, table=True):
     # "(bitte prüfen)" in the text); None = nothing open
     questions: list[dict[str, Any]] | None = Field(default=None, sa_column=Column(JSON))
     vinted_ad: str | None = None       # copied from an ad only on Vinted ("vinted-<id>"): published, the two are linked
+    also: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))   # other sites to post on once it is on
+    #   willhaben: {"kleinanzeigen": true}; set at publish time, read by ad_creator._publish_willhaben
+    kleinanzeigen: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))  # the ad's own price there:
+    #   {price, price_stats, comparables, search_keywords, note, at} from comparable ads on kleinanzeigen.de
+    #   (services/kleinanzeigen_price.py); None until the analysis ran
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -853,6 +861,8 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "platform_ebay_product_search": "1",
     "platform_facebook_product_search": "1",
     "kleinanzeigen_api_auth": "",
+    "kleinanzeigen_post_default": "0",   # new ads: the "also on Kleinanzeigen" box starts ticked
+    "kleinanzeigen_zip": "",             # the postcode for ads posted there (empty: what the form prefills)
     "willhaben_app_key": "",
     # the ad pane's "Message the seller": standard questions offered as chips, one per line
     "contact_questions": "Ist der Artikel noch verfügbar?\nIst Versand möglich?\nIst preislich noch etwas machbar?\n"

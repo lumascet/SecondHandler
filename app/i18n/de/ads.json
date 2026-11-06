@@ -148,5 +148,6 @@
  "Geizhals answered HTTP {status}": "Geizhals antwortet HTTP {status}",
  "Not a Geizhals product page": "Keine Geizhals-Produktseite",
  "Pcs.": "Stück",
- "How many identical pieces this ad offers (the price counts per piece); empty = one item": "Wie viele gleiche Stücke diese Anzeige anbietet (der Preis gilt pro Stück); leer = ein Artikel"
+ "How many identical pieces this ad offers (the price counts per piece); empty = one item": "Wie viele gleiche Stücke diese Anzeige anbietet (der Preis gilt pro Stück); leer = ein Artikel",
+ "willhaben is not logged in": "bei willhaben nicht eingeloggt"
 }

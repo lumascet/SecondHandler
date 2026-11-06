@@ -129,3 +129,28 @@ def test_the_sort_step_drags_photos_and_has_a_new_item(client):
         db.refresh(b)
     sort = client.get(f"/tg/new-ad/batch/{b.id}?step=sort").text
     assert 'data-gid="new"' in sort and "data-handle" in sort and "data-include-all" in sort and "pointerdown" in sort
+
+
+def test_the_mini_app_keeps_the_kleinanzeigen_tick_and_asks_nothing_before_publishing(client, monkeypatch):
+    from app.services import crosspost_kleinanzeigen
+    monkeypatch.setattr(crosspost_kleinanzeigen, "available", lambda: True)
+    d = _draft(wh_plan={"options": [{"label": "Audio › Lautsprecher", "fields": []}], "selected": 0})
+    page = client.get(f"/tg/new-ad/{d.id}").text
+    assert f'hx-post="/new-ad/{d.id}/also"' in page and 'id="wh-publish"' in page
+    assert "hx-confirm" not in page.split('id="wh-publish"')[1].split("</form>")[0]     # no popup: a grace job with Cancel
+    assert client.post(f"/new-ad/{d.id}/also", data={"kleinanzeigen": "1"}).status_code == 204
+    assert 'name="kleinanzeigen" value="1" checked' in client.get(f"/tg/new-ad/{d.id}").text
+
+
+def test_the_mini_app_batch_publishes_and_discards_without_a_popup(client, monkeypatch):
+    from app.services import ad_batch, crosspost_kleinanzeigen
+    monkeypatch.setattr(crosspost_kleinanzeigen, "available", lambda: True)
+    d = _draft(wh_plan={"options": [], "selected": 0})
+    b = ad_batch.new_batch("ein Stuhl")
+    ad_batch._update(b.id, status="review", groups=[{"draft_id": d.id, "photos": []}])
+    page = client.get(f"/tg/new-ad/batch/{b.id}").text
+    for act in ("publish", "discard"):                       # the button's own tag: no popup in front of the grace job
+        end = page.index(f'value="{act}"')
+        tag = page[page.rfind("<button", 0, end):page.index(">", end)]
+        assert "<button" in tag and "hx-confirm" not in tag
+    assert f'hx-post="/new-ad/batch/{b.id}/also"' in page

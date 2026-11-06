@@ -49,6 +49,12 @@ It runs on your own server, from your home internet connection, and you control 
   packed parcel size. A Pcs. field on every draft card corrects the count (yours wins; empty or 1 = one item).
   Publishing copies the count and the size to My ads; the size stays an estimate, and an automatic label purchase
   waits, until you confirm it in a shipment. A published draft links to its My ads entry and the sold page.
+- **Kleinanzeigen too**: an own willhaben ad can also be posted on kleinanzeigen.de (My ads → List, or ticked when you
+  publish). The copy there is reserved and activated with the willhaben ad; nothing is deleted on Kleinanzeigen by itself –
+  the copy is deleted in My ads, and it stays listed there when the willhaben ad is gone. Posting runs through Kleinanzeigen's
+  own ad form in the app's browser, once your Kleinanzeigen account is logged in (Settings → Platforms → Kleinanzeigen).
+  The copy gets a price of its own: comparable ads on Kleinanzeigen are read when Claude writes the draft, and the
+  card shows their range, Claude's price for the German market and what shipping from Austria to Germany costs.
 - **Product search** (tab "Produktsuche"): describe what you need (item, size, budget, condition, location) and
   Claude plans a few searches, the app runs them anonymously on willhaben and on every other site switched on for it
   (Settings → Platforms), page after page up to the number of ads per site you choose (30 / 100 / 200 / 500), and
@@ -207,7 +213,7 @@ pacing and budget.
 | Site | Country | Access | Search agents | Ad viewer | Price check | Buying, chats, own ads | Status |
 |---|---|---|---|---|---|---|---|
 | willhaben.at | AT | direct requests + the logged-in browser | own filters, link, keyword | yes | yes | yes | done |
-| kleinanzeigen.de | DE | the Kleinanzeigen app's JSON API (direct requests) | link, keyword with a price range, product search | yes | against willhaben listings | no | built; search, ad details and places checked once against the live API (2026-10-11), no agent has run for days yet |
+| kleinanzeigen.de | DE | the Kleinanzeigen app's JSON API (direct requests) | link, keyword with a price range, product search | yes | against willhaben listings | chats; own ads: a willhaben ad can be posted there too (My ads → List, or ticked when publishing), reserved/activated with the willhaben ad, deleted only by hand in My ads | built; search, ad details and places checked once against the live API (2026-10-11), no agent has run for days yet; posting built from the site's own ad form as the kleinanzeigen-bot project drives it, not yet run against the live site |
 | shpock.com | AT, DE | the GraphQL API of the Shpock website (direct requests, no login) | link, keyword with a price range, product search | yes (the ad's page: posting time, condition, seller) | against willhaben listings | no | built; search and ad pages checked once against the live site (2026-10-12), no agent has run for days yet |
 | vinted.at, vinted.de | AT, DE | the catalog data the website renders for a browser (direct requests, no login, about 3 MB per search, agents every 5 min at most) | link with the site's own filters, keyword with a price range, product search | yes (the ad's page) | against willhaben listings | no | built; search and ad pages checked once against the live site (2026-10-12), no agent has run for days yet |
 | preisjaeger.at | AT | the Pepper app's signed REST API (OAuth, no login); deals from shops, not private listings | link, keyword (the adapter applies the price range), product search | the listing only | against willhaben listings | no | built; search checked once against the live API (2026-10-31), no agent has run for days yet |
