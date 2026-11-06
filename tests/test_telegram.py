@@ -490,6 +490,26 @@ async def test_hit_starts_a_purchase_order(tg, monkeypatch):
     set_setting("purchase_enabled", "0")
 
 
+async def test_hit_opens_the_buy_dialog_with_the_dashboards_choices(tg, monkeypatch):
+    """With an https address the hit's 🛒 button opens the buy dialog (way to buy, wish price, maximum, time,
+    questions) in the Mini App instead of starting with the defaults; in a group chat it is the dashboard's page."""
+    from app.config import get_settings
+
+    await _linked(tg)
+    set_setting("purchase_enabled", "1")
+    monkeypatch.setattr(get_settings(), "public_url", "https://sh.example.org/")
+    await telegram.send("hit", "Rad: 120 €", "KTM", url="https://www.willhaben.at/iad/x-77", data={"ad_id": "77"})
+    rows = [b for row in tg[-1][1]["reply_markup"]["inline_keyboard"] for b in row]
+    buy = next(b for b in rows if b["text"] == "🛒 Start purchase order")
+    assert buy == {"text": "🛒 Start purchase order", "web_app": {"url": "https://sh.example.org/tg/purchases/new/77"}}
+    monkeypatch.setattr(telegram, "chat_id", lambda: -100)                # a group: no Mini App, the dashboard page
+    await telegram.send("hit", "Rad: 120 €", "KTM", url="https://www.willhaben.at/iad/x-77", data={"ad_id": "77"})
+    assert _buttons(tg[-1][1])["🛒 Start purchase order"] == "https://sh.example.org/purchases/new/77"
+    await telegram.send("hit", "Rad", "x", data={"ad_id": "vinted:5"})   # other sites: no purchase orders
+    assert "🛒 Start purchase order" not in _buttons(tg[-1][1])
+    set_setting("purchase_enabled", "0")
+
+
 def _button_row(verb, ref, token):
     from app.db import TelegramAction
     with session() as db:

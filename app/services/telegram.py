@@ -15,7 +15,9 @@ Buttons carry a short random token (`t:<token>`, table TelegramAction) instead o
   F_UP / F_DOWN                             feedback on an automatic answer (👎 asks for a note)
   A_ON / A_OFF                              automatic answers for one own ad
   H_SAVE / H_IGNORE                         search hit: keep / ignore
-  P_BUY                                     search hit: start a purchase order (when purchases are on in Settings)
+  P_BUY                                     search hit: start a purchase order with the defaults (purchases on in
+                                            Settings, no https address; with one the button opens the Mini App's
+                                            buy dialog instead, the dashboard's choices)
   AB_STOP                                   auto-buy's countdown: cancel the purchase before it runs
 Buttons that need text ("Direkte Antwort", "Mit Claude überarbeiten", 👎 note) send a ForceReply prompt that
 quotes the notification; the user's reply to it is the text. Replying to a notification directly (swipe) works
@@ -38,7 +40,7 @@ from typing import Any
 import httpx
 from sqlmodel import col, delete, select
 
-from app.config import get_settings
+from app.config import address_check, get_settings
 from app.db import (
     Conversation, Draft, Hit, MyAd, TelegramAction, TelegramMessage, current_ad, get_setting, session, set_setting, utcnow,
 )
@@ -312,7 +314,13 @@ def keyboard(kind: str, data: dict[str, Any], actions: list[dict[str, Any]], url
     elif kind in ("hit", "price_drop") and ad_id:
         buttons += [_button("⭐ " + t("Keep"), "H_SAVE", ref), _button("🚫 " + t("Ignore"), "H_IGNORE", ref)]
         if get_setting("purchase_enabled") == "1" and ":" not in str(ref):   # purchase orders: willhaben only
-            buttons.append(_button("🛒 " + t("Start purchase order"), "P_BUY", ad_id))
+            # the buy dialog with the dashboard's choices (way to buy, wish price, maximum, time, questions) in the
+            # Mini App; without an https address there is no page to open: one tap starts with the defaults
+            base = get_settings().public_url.rstrip("/")
+            if address_check(base)["https"]:
+                buttons.append(open_button("🛒 " + t("Start purchase order"), f"{base}/purchases/new/{ad_id}"))
+            else:
+                buttons.append(_button("🛒 " + t("Start purchase order"), "P_BUY", ad_id))
     rows += _rows(buttons)
     if url and url.startswith("https://"):
         rows.append([open_button("🔗 " + t("Open"), url)])
