@@ -16,6 +16,8 @@
     <span class="sub">{{ _("Written by Claude from your notes and {n} photos", n=d.image_paths|length) }} · {{ d.created_at|local }}</span>
   </div>
   {% if d.error %}<p style="font-size: 13px; color: var(--destructive); margin: 8px 4px" data-draft-error>{{ d.error }}</p>{% endif %}
+  {% set skipped = (d.also or {}).get('auto_publish_skipped') %}
+  {% if skipped and d.status == 'draft' and not d.publishing %}<p class="sub" style="margin: 8px 4px">{{ _("Not published by itself – {reason}.", reason={'questions': _("Claude has a question for you"), 'bitte_pruefen': _("the text still says “(bitte prüfen)”"), 'no_category': _("willhaben suggests no category"), 'required': _("a required field has no value"), 'willhaben_not_logged_in': _("willhaben is not logged in")}.get(skipped, skipped)) }}</p>{% endif %}
   {% if d.status == 'error' and not d.refining %}<form method="post" action="/new-ad/{{ d.id }}/retry" style="margin: 8px 0 0"><button class="chip primary" style="width: 100%">{{ _("Try again") }}</button></form>{% endif %}
 
   {% if d.image_paths %}
@@ -95,11 +97,10 @@
     {% else %}
       <form method="post" action="/new-ad/{{ d.id }}/willhaben/prepare" style="margin: 0; display: flex; gap: 6px" hx-include="#title, #desc, #price, #quantity" data-prepare>
         {% if plan.options is defined %}<input class="field" name="category_query" value="{{ plan.query or '' }}" placeholder="{{ _('Category search term, e.g. speaker') }}">{% endif %}
-        <button class="chip{{ '' if plan.options else ' primary' }}" style="flex-shrink: 0">{{ _("Prepare for willhaben") if not plan.options else _("Check categories again") }}</button></form>
+        <button class="chip{{ '' if plan.options else ' primary' }}" style="flex-shrink: 0">{{ _("Prepare for willhaben") if not plan.options else _("Check categories again") }}</button></form><form id="wh-kaprice" method="post" action="/new-ad/{{ d.id }}/kleinanzeigen/price" style="display: none" hx-post="/new-ad/{{ d.id }}/kleinanzeigen/price" hx-include="#title, #desc, #price, #quantity, #ka-price-field" hx-target="#willhaben" hx-select="#willhaben" hx-swap="outerHTML" hx-select-oob="#draft-error,#draft-head,#flash"></form>
       {% if plan.options is defined and not plan.options %}<span class="sub">{{ _("willhaben suggests no category for this title.") }}</span>{% endif %}
       {% if plan.options is defined %}
-      <form method="post" action="/new-ad/{{ d.id }}/willhaben/publish" id="wh-publish" style="margin: 0; display: flex; flex-direction: column; gap: 10px" hx-include="#title, #desc, #price, #quantity"
-            hx-confirm="{{ _('Goes live on willhaben as a free private ad – it waits a few seconds in the queue, where you can take it back.') }}">
+      <form method="post" action="/new-ad/{{ d.id }}/willhaben/publish" id="wh-publish" style="margin: 0; display: flex; flex-direction: column; gap: 10px" hx-include="#title, #desc, #price, #quantity">
         <span class="sub" style="font-weight: 600">{{ _("Category") }}</span>
         {% set sel = plan.selected if plan.selected is defined and plan.selected is not none and plan.selected < (plan.options or [])|length else 0 %}
         {% for o in plan.options or [] %}{% set oi = loop.index0 %}
@@ -136,6 +137,7 @@
           {% endfor %}
           <span class="sub">{{ _("Without PayLivery the buyer pays you directly and you send the parcel yourself.") }}</span>
         </div>
+        {% if ka_available %}{% set ka = d.kleinanzeigen or {} %}{% set kst = ka.price_stats or {} %}{% set kap = ka.price or (d.also or {}).get('kleinanzeigen_price') or d.price_suggestion %}<label style="display: flex; gap: 8px; align-items: flex-start; font-size: 14px"><input type="checkbox" name="kleinanzeigen" value="1" {% if ka_checked %}checked{% endif %} style="margin-top: 3px" hx-post="/new-ad/{{ d.id }}/also" hx-trigger="change" hx-params="kleinanzeigen" hx-swap="none"><span style="display: flex; flex-direction: column"><span>{{ _("Also post on Kleinanzeigen") }}</span><span class="sub">{{ _("Posted there right after willhaben, with the same text and photos, at its own price below; Claude picks the category.") }}</span></span></label><span style="display: flex; flex-direction: column; gap: 6px" id="ka-price"><label class="sub">{{ _("Price on Kleinanzeigen (€)") }}<input class="field" name="kleinanzeigen_price" id="ka-price-field" inputmode="decimal" value="{{ '%g'|format(kap) if kap is not none else '' }}"></label>{% if ka and kst.median %}<span class="sub">{{ _("{n} ads on Kleinanzeigen for “{q}”", n=kst.count, q=ka.search_keywords) }} · {{ _("Median") }} {{ kst.median|eur }} · {{ _("middle 50 %") }} {{ kst.p25|eur }} – {{ kst.p75|eur }}</span>{% elif ka %}<span class="sub">{{ _("Too few comparable ads on Kleinanzeigen to compare") }}</span>{% endif %}{% if ka.note %}<span class="sub"><strong style="color: var(--text)">{{ _("Note from Claude:") }}</strong> {{ ka.note }}</span>{% endif %}<span class="sub">{{ ka_shipping_hint((d.parcel or {}).get('weight_kg')) }}</span>{% if ka_busy %}<span class="sub">{{ _("Checking the price on Kleinanzeigen…") }}</span>{% endif %}<button form="wh-kaprice" class="chip" style="align-self: flex-start">{{ _("Recalculate") }}</button></span>{% endif %}
         <button class="chip primary" style="height: 44px; font-size: 15px" data-publish>{{ _("Publish on willhaben now") }}</button>
         <span class="sub">{{ _("Takes about half a minute: photos are uploaded, then the free ad is activated. Nothing that costs money is ever booked.") }}</span>
         {% endif %}

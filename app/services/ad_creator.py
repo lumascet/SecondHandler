@@ -18,7 +18,7 @@ from app.db import AdDraft, MyAd, get_setting, session, set_setting, utcnow
 from app.i18n import t
 from app.llm.base import LLMError, get_backend
 from app.llm.prompts import AD_SCHEMA, AD_SYSTEM, ad_prompt, ad_refine_prompt
-from app.services import geizhals, min_price, selling
+from app.services import geizhals, kleinanzeigen_price, min_price, selling
 from app.willhaben.public import WillhabenError, get_public
 from app.services import timeline
 from app.services.shipping import clean_parcel
@@ -103,16 +103,18 @@ async def create_draft(notes: str, files: list[tuple[str, bytes]], batch_id: int
     return await _write_draft(draft.id, notes, save_images(draft.id, files), owner_quantity)
 
 
-def enqueue_create(notes: str, files: list[tuple[str, bytes]], quantity: int | None = None) -> AdDraft:
+def enqueue_create(notes: str, files: list[tuple[str, bytes]], quantity: int | None = None,
+                   also: dict[str, Any] | None = None) -> AdDraft:
     """"Create listing with Claude" without waiting: the draft row and its photos exist at once (the page shows
     "Claude is writing the draft…" and swaps itself in when done), Claude writes title, description, price and
     the rest as a background job (lane claude, up to two minutes; the same pipeline as create_draft). Taken back
-    while queued, the draft is left as an error with "Try again"."""
+    while queued, the draft is left as an error with "Try again". also: the owner's choices for the publishing
+    (see enqueue_publish; "auto_publish" publishes the draft by itself once Claude and willhaben are done)."""
     from app.services import jobs
 
     owner_quantity = parse_quantity(quantity)
     with session() as db:
-        draft = AdDraft(input_text=notes, quantity=pick_quantity(owner_quantity, None), refining=True)
+        draft = AdDraft(input_text=notes, quantity=pick_quantity(owner_quantity, None), refining=True, also=also)
         db.add(draft)
         db.commit()
         db.refresh(draft)
@@ -126,6 +128,7 @@ def enqueue_create(notes: str, files: list[tuple[str, bytes]], quantity: int | N
             update_draft(draft_id, refining=None)
         if d.error:
             raise RuntimeError(d.error)
+        _prepare_after_writing(draft_id, d.also or {})
         return t("Written: {title}", title=(d.title or "")[:60])
 
     def taken_back() -> None:
@@ -197,7 +200,72 @@ async def _write_draft(draft_id: int, notes: str, paths: list[str], owner_quanti
         # only a confirmed product/variant: a guessed one (e.g. the 8GB model for a 4GB ad) would rewrite the text
         d = await reconcile_with_geizhals(d.id)
         d = attach_specs_if_wanted(d.id)
+    _queue_kleinanzeigen_price(d.id)
     return d
+
+
+def _ships(plan: dict[str, Any] | None) -> bool | None:
+    """Whether the willhaben handover of a draft includes shipping; None before the willhaben form was read."""
+    if not plan:
+        return None
+    ship = plan.get("shipping") or {}
+    return ship.get("handover") in ("shipping", "both") or ship.get("shipping") is True
+
+
+def _queue_kleinanzeigen_price(draft_id: int) -> None:
+    """The Kleinanzeigen price of a new draft, as a quiet job: the search there is paced (about three minutes between
+    two requests), so the draft does not wait for it; its card shows the job working until the price is there."""
+    if not kleinanzeigen_price.available():
+        return
+    try:
+        enqueue_kleinanzeigen_price(draft_id)
+    except Exception as e:  # noqa: BLE001 - the analysis never breaks a draft
+        log.warning("kleinanzeigen price of draft %s not queued: %s", draft_id, e)
+
+
+async def _kleinanzeigen_price(draft_id: int) -> AdDraft | None:
+    """The draft's own price on Kleinanzeigen (services/kleinanzeigen_price.py) into AdDraft.kleinanzeigen: at write time
+    and on the card's Recalculate button. None when the analysis does not run (platform off, no app credentials); a
+    failure of the search or of Claude goes up to the caller."""
+    with session() as db:
+        d = db.get(AdDraft, draft_id)
+        if d is None:
+            return None
+        title, keywords, condition = d.title, d.search_keywords, d.condition
+        weight, willhaben_price, shipping = (d.parcel or {}).get("weight_kg"), d.price_suggestion, _ships(d.wh_plan)
+    ka = await kleinanzeigen_price.analyse(title, keywords, condition=condition, shipping=shipping, weight_kg=weight,
+                                           willhaben_price=willhaben_price)
+    if ka is None:
+        return None
+    return update_draft(draft_id, kleinanzeigen=ka)
+
+
+KAPRICE_KIND = "kleinanzeigen-price"
+KA_PRICE_UNREADABLE = "Kleinanzeigen price not recognized: “{price}” – not published"
+
+
+def enqueue_kleinanzeigen_price(draft_id: int) -> bool:
+    """The Recalculate button of the draft's Kleinanzeigen price, as a background job (the search there takes a while):
+    the card shows it working and swaps itself in. False: no such draft, published, or already on its way."""
+    from app.services import jobs
+
+    with session() as db:
+        d = db.get(AdDraft, draft_id)
+    if d is None or d.status == "published":
+        return False
+    key = f"kaprice:{draft_id}"
+    if key in jobs.current_keys("kaprice:"):
+        return False
+
+    async def run(job) -> str:
+        ka = await _kleinanzeigen_price(draft_id)
+        if ka is None:
+            return t("Kleinanzeigen price not checked: Kleinanzeigen is off or its app credentials are missing")
+        return t("Kleinanzeigen price checked")
+
+    jobs.submit(KAPRICE_KIND, t("Kleinanzeigen price for draft #{id}", id=draft_id), run, current=key, quiet=True,
+                link=f"/new-ad/{draft_id}")
+    return True
 
 
 _CHECK_MARK = re.compile(r"\s*[\(\[](?:bitte\s+)?(?:prüfen|überprüfen|checken|nachprüfen)[\)\]]", re.I)
@@ -237,6 +305,18 @@ def attach_specs_if_wanted(draft_id: int, force: bool = False) -> AdDraft:
     if not block or not (force or auto_specs()) or block in (d.description or ""):
         return d
     return update_draft(draft_id, description=f"{(d.description or '').rstrip()}\n\n{block}")
+
+
+def set_also(draft_id: int, key: str, value: Any) -> None:
+    """One flag of the draft's "also" (the other sites to post on), set in place: the other flags are kept as they are,
+    and nothing is written when the flag already has the value."""
+    with session() as db:
+        d = db.get(AdDraft, draft_id)
+        if d is None or (d.also or {}).get(key) == value:
+            return
+        d.also = {**(d.also or {}), key: value}
+        db.add(d)
+        db.commit()
 
 
 def update_draft(draft_id: int, **fields: Any) -> AdDraft:
@@ -599,10 +679,75 @@ def save_wh_choice(draft_id: int, code: str | None, values: dict[str, dict[str, 
     return update_draft(draft_id, wh_plan=plan) if plan != (d.wh_plan or {}) else d
 
 
-def enqueue_prepare(draft_id: int, then: Callable[[AdDraft], Any] | None = None) -> bool:
+def _prepare_after_writing(draft_id: int, also: dict[str, Any]) -> None:
+    """A written draft gets its willhaben categories at once when willhaben is logged in (as the batch does, see
+    ad_batch.create_drafts), so the publish card is ready when the page is. With "publish as soon as Claude is done"
+    the categories are followed by the publishing itself, unless the draft needs the owner first."""
+    from app.services import ad_batch
+
+    auto = bool(also.get("auto_publish"))
+    if not ad_batch._willhaben_ready():
+        if auto:                                    # said on the draft: the owner sees why it did not go live
+            _auto_skipped(draft_id, "willhaben_not_logged_in")
+        return
+    try:
+        enqueue_prepare(draft_id, then=_auto_publish if auto else None, otherwise=_auto_no_category if auto else None)
+    except Exception as e:  # noqa: BLE001 - the draft is written either way; the page offers the categories by hand
+        log.warning("categories for draft %s not asked after writing: %s", draft_id, e)
+
+
+def auto_publish_blocker(d: AdDraft) -> str | None:
+    """Why a draft with categories stays for the owner instead of going live by itself (a key the page words; None
+    = nothing stands in the way): a question still open, "(bitte prüfen)" in the text, no category, a required field
+    without a value (the same rule _publish_inputs checks)."""
+    plan = d.wh_plan or {}
+    opts = plan.get("options") or []
+    if d.questions:
+        return "questions"
+    if "(bitte prüfen)" in f"{d.title or ''}\n{d.description or ''}":
+        return "bitte_pruefen"
+    if not opts:
+        return "no_category"
+    sel = plan.get("selected") or 0
+    chosen = opts[sel] if 0 <= sel < len(opts) else opts[0]
+    if any(f.get("selected") not in dict(f.get("values") or []) for f in chosen.get("fields") or []):
+        return "required"
+    return None
+
+
+def _auto_skipped(draft_id: int, reason: str) -> None:
+    """The draft stays for review; also says why (shown on its page, not an error)."""
+    with session() as db:
+        d = db.get(AdDraft, draft_id)
+    update_draft(draft_id, also={**(d.also or {}), "auto_publish": False, "auto_publish_skipped": reason})
+
+
+def _auto_no_category(d: AdDraft) -> None:
+    _auto_skipped(d.id, "no_category")
+
+
+def _auto_publish(d: AdDraft) -> None:
+    """The categories of a draft the owner asked to publish by itself are there: it goes live with the category
+    Claude picked (the first one if none was picked), the usual handover and no field choices of its own; or it
+    stays for review and the reason is kept on it."""
+    reason = auto_publish_blocker(d)
+    if reason:
+        _auto_skipped(d.id, reason)
+        return
+    plan = d.wh_plan or {}
+    opts = plan.get("options") or []
+    sel = plan.get("selected") or 0
+    if not 0 <= sel < len(opts):
+        sel = 0
+    enqueue_publish(d.id, sel, {}, plan.get("shipping"), code=option_code(opts[sel]))
+
+
+def enqueue_prepare(draft_id: int, then: Callable[[AdDraft], Any] | None = None,
+                    otherwise: Callable[[AdDraft], Any] | None = None) -> bool:
     """"Prepare for willhaben" as a background job (lane ads, read-only on willhaben): categories and required fields
     land in wh_plan, the batch row swaps itself in when done. then(draft): what follows once there are categories
-    (the batch's "Publish ticked" on a draft without one). False: not a draft, busy, or already queued."""
+    (the batch's "Publish ticked" on a draft without one). otherwise(draft): what follows instead when willhaben
+    suggests none (default: an error line on the draft). False: not a draft, busy, or already queued."""
     from app.services import jobs
 
     key = f"preparing:{draft_id}"
@@ -626,6 +771,8 @@ def enqueue_prepare(draft_id: int, then: Callable[[AdDraft], Any] | None = None)
                 except Exception as e:
                     update_draft(draft_id, error=t("Publishing failed: {error}", error=str(e)))
                     raise
+            elif otherwise is not None:
+                otherwise(d)
             else:
                 update_draft(draft_id, error=t("willhaben suggests no category – choose one in the row, then publish"))
         return t("{n} categories suggested", n=len((d.wh_plan or {}).get("options") or []))
@@ -696,9 +843,11 @@ async def publish_willhaben(draft_id: int, option: int, values: dict[str, str], 
 
 
 def enqueue_publish(draft_id: int, option: int, values: dict[str, str], shipping: dict[str, Any] | None = None,
-                    code: str | None = None) -> bool:
+                    code: str | None = None, also: dict[str, Any] | None = None) -> bool:
     """Check the form right away (errors land on the draft at once), then publish as a background job.
 
+    also: the owner's choices for this publishing, merged into the draft's own (kept on it, it documents what was
+    asked): {"kleinanzeigen": bool} posts the ad on Kleinanzeigen right after willhaben (_publish_willhaben).
     Returns False when nothing was queued (input error, already queued or published); the reason is in d.error.
     """
     from app.services import jobs
@@ -708,6 +857,8 @@ def enqueue_publish(draft_id: int, option: int, values: dict[str, str], shipping
         d = db.get(AdDraft, draft_id)
     if d.publishing:
         return False
+    if also is not None:
+        d = update_draft(draft_id, also={**(d.also or {}), **also})
     if d.refining:                        # publishing now would upload the text the revision is about to replace
         update_draft(draft_id, error=t(REFINING_BUSY))
         return False
@@ -898,6 +1049,18 @@ def _publish_inputs(d: AdDraft, option: int, values: dict[str, str], shipping: d
     return chosen, attrs, labels, shipping
 
 
+def _post_on_kleinanzeigen(wh_ad_id: str) -> None:
+    """The willhaben ad goes on Kleinanzeigen as well (app/services/crosspost_kleinanzeigen.py, its own background
+    job). A failure there is logged only: the ad is online on willhaben already."""
+    from app.services import crosspost_kleinanzeigen
+
+    try:
+        if not crosspost_kleinanzeigen.enqueue(wh_ad_id):
+            log.info("ad %s not queued for Kleinanzeigen (nothing to post, or already there)", wh_ad_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("ad %s not queued for Kleinanzeigen: %s", wh_ad_id, e)
+
+
 async def _publish_willhaben(draft_id: int, option: int, values: dict[str, str], stop_after: str | None,
                              shipping: dict[str, Any] | None, job: Any = None, code: str | None = None):
     from app.willhaben import insert
@@ -977,6 +1140,8 @@ async def _publish_willhaben(draft_id: int, option: int, values: dict[str, str],
             row.quantity = d.quantity
         db.add(row)
         db.commit()
+    if (d.also or {}).get("kleinanzeigen"):      # "also on Kleinanzeigen": a job of its own, never fails this publish
+        _post_on_kleinanzeigen(res["ad_id"])
     if d.vinted_ad:                              # copied from an ad only on Vinted: now one ad on both sites
         from app.services import crosspost
         crosspost.link_willhaben(d.vinted_ad, res["ad_id"])

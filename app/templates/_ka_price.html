@@ -1,0 +1,25 @@
+{# The draft's own price on Kleinanzeigen (services/kleinanzeigen_price.py), inside the publish form under the Kleinanzeigen
+   box: the field, the numbers of the comparable ads there, Claude's note, the shipping hint and Recalculate (the form
+   wh-kaprice, outside this form). Shown while the box is ticked (x-show on the wrapper, on). The field is off while
+   hidden, so an unticked box sends no price. Its own job (kaprice:<id>) swaps this block in when it is done. #}
+{% import "_ui.html" as ui %}
+{% set ka = d.kleinanzeigen or {} %}
+{% set kst = ka.price_stats or {} %}
+{% set kap = ka.price or (d.also or {}).get('kleinanzeigen_price') or d.price_suggestion %}
+<div id="ka-price" class="flex flex-col gap-2.5 px-5 py-3.5" x-show="on" x-cloak{% if ka_busy %} data-pending-key="kaprice:{{ d.id }}"{% endif %}>
+  <div class="flex flex-wrap items-end gap-3">
+    <label class="flex w-[170px] max-w-full flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Price on Kleinanzeigen (€)") }}</span><input name="kleinanzeigen_price" id="ka-price-field" value="{{ '%g'|format(kap) if kap is not none else '' }}" inputmode="decimal" class="input w-full bg-base-200 text-base font-semibold" :disabled="!on"></label>
+    <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+      {% if kst.count and kst.median %}{% with g = price_gauge(kap, kst), basis = _("{n} comparable ads", n=kst.count) %}{% include "_price_gauge.html" %}{% endwith %}{% endif %}
+    </div>
+  </div>
+  {% if ka %}
+    {% if kst.median %}<span class="text-[12.5px] text-muted">{{ _("{n} ads on Kleinanzeigen for “{q}”", n=kst.count, q=ka.search_keywords) }} · {{ _("Median") }} {{ kst.median|eur }} · {{ _("middle 50 %") }} {{ kst.p25|eur }} – {{ kst.p75|eur }}{% if kst.llm_estimate %} · {{ _("Claude estimates {price}.", price=kst.llm_estimate|eur) }}{% endif %}</span>{% else %}<span class="text-[12.5px] text-muted">{{ _("Too few comparable ads on Kleinanzeigen to compare") }}</span>{% endif %}
+    {% if ka.note %}<p class="text-[12.5px] text-muted"><strong class="text-base-content">{{ _("Note from Claude:") }}</strong> {{ ka.note }}</p>{% endif %}
+  {% endif %}
+  <small class="text-[12.5px] text-muted">{{ ka_shipping_hint((d.parcel or {}).get('weight_kg')) }}</small>
+  <div class="flex flex-wrap items-center gap-2">
+    {% if ka_busy %}{{ ui.pending('kaprice:' ~ d.id, _("Checking the price on Kleinanzeigen…"), _("Queued: Kleinanzeigen price")) }}{% endif %}
+    <button form="wh-kaprice" class="btn btn-xs"><span class="loading loading-spinner loading-xs hidden busy:inline-block"></span>{{ _("Recalculate") }}</button>
+  </div>
+</div>

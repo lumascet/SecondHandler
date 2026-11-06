@@ -18,6 +18,8 @@
     <label class="sub">{{ _("Notes about the item") }}<textarea class="field" name="notes" rows="5" placeholder="{{ _('KTM mountain bike, frame M, 2019, new brake pads, small scratch on the top tube, pickup Vienna 15') }}"></textarea></label>
     <label class="sub">{{ _("Photos") }} · {{ _("up to {n}", n=8) }}<input class="field" type="file" name="photos" accept="image/*" multiple data-max="8"></label>
     <div class="tg-previews" style="display: flex; flex-wrap: wrap; gap: 8px"></div><span class="sub" data-photo-note aria-live="polite"></span>
+    <label class="sub" style="display: flex; align-items: center; gap: 8px"><input type="checkbox" name="auto_publish" value="1">{{ _("Publish on willhaben as soon as Claude is done") }}</label>
+    {% if ka_available %}<label class="sub" style="display: flex; align-items: center; gap: 8px"><input type="checkbox" name="kleinanzeigen" value="1" {% if ka_checked %}checked{% endif %}>{{ _("Also post on Kleinanzeigen") }}</label>{% endif %}
     <button class="mainbtn tg-hide">{{ _("Create listing with Claude") }}</button>
     <span class="sub">{{ _("Takes up to 2 minutes.") }}</span>
   </form>

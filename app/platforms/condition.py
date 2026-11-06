@@ -123,6 +123,10 @@ def facebook(attributes: list[Any] | None) -> tuple[str | None, str | None]:
 # attribute "<category>.condition" (seen live in Handy & Telefon, list and ad: new "Neu", like_new "Sehr Gut",
 # ok "Gut", alright "In Ordnung", defect "Defekt"); <category>.battery_condition is another thing
 KLEINANZEIGEN = {"new": "new", "like_new": "like_new", "ok": "used", "alright": "used", "defect": "defect"}
+# the reverse, for posting an own ad: the form takes these codes; it has no "refurbished", the nearest is
+# like_new (the ad text says the rest). A value without a code is left out of the form: None.
+CONDITION_TO_KLEINANZEIGEN = {"new": "new", "like_new": "like_new", "refurbished": "like_new",
+                              "used": "ok", "defect": "defect"}
 
 
 def _ka_text(node: Any) -> str | None:

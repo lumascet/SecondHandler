@@ -52,10 +52,17 @@ def add(ref: str, auto_renew: bool = False) -> MyAd:
     return row
 
 
+def kleinanzeigen_copy_alive(row: MyAd) -> bool:
+    """The ad has a copy on Kleinanzeigen that is still there: online, reserved, or a posting waiting for a check."""
+    ka = row.kleinanzeigen or {}
+    return ka.get("state") == "check" or bool(ka.get("id") and ka.get("state") != "gone")
+
+
 def remove(ad_id: str) -> None:
     """The ad is gone from willhaben: its row goes too – except the old copy of a renewed ad, which stays (deleted,
     hidden): its buyers' chats still point at it and the renewals are chained through it (stock, minimum price,
-    automatic answers, the other buyers' notices)."""
+    automatic answers, the other buyers' notices). A row with a live copy on Kleinanzeigen stays too, as "deleted"
+    (the copy is reserved there by the sync, and My ads lists it until the owner deletes it there)."""
     with session() as db:
         row = db.get(MyAd, ad_id)
         if row is None:
@@ -67,7 +74,11 @@ def remove(ad_id: str) -> None:
             if (row.vinted or {}).get("id") and (row.vinted or {}).get("state") != "gone":
                 from app.services import crosspost   # also on Vinted: the ad stays, only on Vinted (10-28: lost)
                 db.add(crosspost.vinted_only_row(row))
-            db.delete(row)
+            if kleinanzeigen_copy_alive(row):
+                row.status = "deleted"
+                db.add(row)
+            else:
+                db.delete(row)
         db.commit()
 
 
@@ -344,18 +355,23 @@ async def _run_bulk(job: jobs.Job, action: str, ad_ids: list[str]) -> str:
     return line + (" · " + t("{n} failed (see the ads)", n=len(res["failed"])) if res["failed"] else "")
 
 
-def _vinted_follows(ad_ids: list[str]) -> None:
-    """An ad the app just changed on willhaben: its Vinted item follows (a quiet job; nothing without a link)."""
-    from app.services import crosspost
+def _sites_follow(ad_ids: list[str]) -> None:
+    """An ad the app just changed on willhaben: its Vinted item and its Kleinanzeigen copy follow (quiet jobs; nothing
+    without a link)."""
+    from app.services import crosspost, crosspost_kleinanzeigen
     for ad_id in ad_ids:
-        try:
-            crosspost.schedule_sync(ad_id)
-        except RuntimeError:                  # no running event loop (a test calling it directly)
-            pass
+        for follow in (crosspost.schedule_sync, crosspost_kleinanzeigen.schedule_sync):
+            try:
+                follow(ad_id)
+            except RuntimeError:              # no running event loop (a test calling it directly)
+                pass
+
+
+_vinted_follows = _sites_follow               # the name the callers used before (sold.py, the lists)
 
 
 def _clear_pending(ad_ids: list[str]) -> None:
-    _vinted_follows(ad_ids)
+    _sites_follow(ad_ids)
     with session() as db:
         for ad_id in ad_ids:
             row = db.get(MyAd, ad_id)
@@ -363,6 +379,14 @@ def _clear_pending(ad_ids: list[str]) -> None:
                 row.pending_action = None
                 db.add(row)
         db.commit()
+
+
+def by_kleinanzeigen_id(ka_id: str) -> MyAd | None:
+    """The own ad whose Kleinanzeigen copy has this id (a chat on kleinanzeigen.de is about it), None when no ad here."""
+    with session() as db:
+        rows = db.exec(select(MyAd).where(col(MyAd.kleinanzeigen).is_not(None))).all()
+    return next((r for r in rows if str((r.kleinanzeigen or {}).get("id") or "") == str(ka_id) and not r.replaced_by),
+                None)
 
 
 def recover() -> None:
@@ -378,6 +402,8 @@ def recover() -> None:
             row.pending_action, row.last_error = None, t("Interrupted by a restart – please try again")
             db.add(row)
         db.commit()
+    from app.services import crosspost_kleinanzeigen
+    crosspost_kleinanzeigen.recover()             # the Kleinanzeigen copies: the same for their steps
     shutil.rmtree(_photo_dir(), ignore_errors=True)
 
 
@@ -403,7 +429,7 @@ def _mark(ad_id: str, action: str, payload: dict[str, Any] | None = None) -> MyA
 
 def _unmark(ad_id: str, error: str | None = None, payload: Any = False) -> None:
     if error is None:
-        _vinted_follows([ad_id])
+        _sites_follow([ad_id])
     with session() as db:
         row = db.get(MyAd, ad_id)
         if row is not None:

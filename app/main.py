@@ -291,6 +291,8 @@ from app.services.price_gauge import gauge as _price_gauge  # noqa: E402
 from app.services.deals import level_label as _level_label  # noqa: E402
 
 templates.env.globals.update(price_gauge=_price_gauge, deal_level_label=_level_label)
+from app.services import kleinanzeigen_price as _kleinanzeigen_price  # noqa: E402
+templates.env.globals.update(ka_shipping_hint=_kleinanzeigen_price.shipping_hint)
 templates.env.globals.update(geizhals_levels=search_agents_svc.level_choices)
 templates.env.globals.update(hit_can_sync=lambda h: _can_sync(h))     # the hit cards' sync button
 from app.platforms import shipping_info as _shipping_info  # noqa: E402
@@ -2056,9 +2058,10 @@ async def myads_page(request: Request, msg: str | None = None, show_hidden: bool
         except (NotLoggedIn, SessionUnavailable, ValueError) as e:
             msg = msg or t("Could not load ads: {error}", error=e)
     with session() as db:   # deleted on willhaben: gone from the list (the row stays for old chats and the sold workflow)
-        rows = list(db.exec(select(MyAd).where(MyAd.status != "deleted")
+        rows = list(db.exec(select(MyAd).where(or_(MyAd.status != "deleted", col(MyAd.kleinanzeigen).is_not(None)))
                             .order_by(col(MyAd.end_date).desc().nulls_last())))   # most days left first
-    rows = [a for a in rows if not a.replaced_by]   # a renewed ad's old copy: its chats use the new one (current_ad)
+    # a deleted ad stays only with its copy on Kleinanzeigen (my_ads.remove): listed until that copy is deleted there
+    rows = [a for a in rows if not a.replaced_by and (a.status != "deleted" or my_ads.kleinanzeigen_copy_alive(a))]
     hidden = [a for a in rows if a.hidden]
     ads = rows if show_hidden else [a for a in rows if not a.hidden]
     # sections: active on top, then expired (ran out recently, always shown: they need renewing), then the rest;
@@ -2071,7 +2074,8 @@ async def myads_page(request: Request, msg: str | None = None, show_hidden: bool
     sold = [a for a in ads if my_ads.is_sold(a) or reserved(a)]
     # a draft only on Vinted is still to be dealt with (publish it, or put it on willhaben): with the active ones,
     # not hidden under "Deactivated" (10-28: "I don't see Vinted only ads")
-    active = [a for a in ads if a not in sold and (a.status == "active" or a.status == "draft")]
+    # (a deleted ad with a live copy on Kleinanzeigen is listed here too: my_ads.remove keeps its row for that copy)
+    active = [a for a in ads if a not in sold and a.status in ("active", "draft", "deleted")]
     expired = [a for a in ads if a not in sold and my_ads.is_expired(a, cutoff)]
     inactive = [a for a in ads if a not in sold and a not in active and a not in expired]
     show_active = show_active or not (show_inactive or show_sold)
@@ -2089,11 +2093,13 @@ async def myads_page(request: Request, msg: str | None = None, show_hidden: bool
     # the open ad (?ad=) stays open even when the chips hide its group, e.g. right after it was deactivated
     wanted = request.query_params.get("ad")
     cur_ad = next((a for a in rows if wanted and str(a.ad_id) == wanted), None)
+    from app.services import crosspost_kleinanzeigen
     return render(request, "myads.html", ads=ads, msg=msg, myadverts_url=my_ads.MYADVERTS_URL, cur_ad=cur_ad,
                   show_active=show_active, active_count=len(active) + len(expired),
                   hidden_count=len(hidden), show_hidden=show_hidden, sold_count=len(sold), show_sold=show_sold,
                   inactive_count=len(inactive), show_inactive=show_inactive, sections=sections,
-                  vinted_ok=site_accounts.state("vinted")["logged_in"] is not False)   # unknown: try it
+                  vinted_ok=site_accounts.state("vinted")["logged_in"] is not False,   # unknown: try it
+                  ka_ok=crosspost_kleinanzeigen.available())
 
 
 def _hx(request: Request) -> bool:
@@ -2304,12 +2310,15 @@ async def myads_photos_save(ad_id: str, order: list[str] = Form(default=[]),
 
 @app.post("/myads/bulk/{action}")
 async def myads_bulk(request: Request, action: str):
-    if action not in ("activate", "deactivate", "delete", "hide", "unhide", "vinted", "vinted-sync"):
+    if action not in ("activate", "deactivate", "delete", "hide", "unhide", "vinted", "vinted-sync", "kleinanzeigen"):
         raise HTTPException(404)
     form = await request.form()
     ids = [str(i) for i in form.getlist("ids") if str(i).isdigit()]
     if not ids:
         return _myads_back(request, t("No ads selected"), form=form)
+    if action == "kleinanzeigen":             # the selected ads on Kleinanzeigen: a posting job for each new one
+        from app.services import crosspost_kleinanzeigen
+        return _queued(request, crosspost_kleinanzeigen.enqueue_many(ids), form)
     if action in ("vinted", "vinted-sync"):   # the selected ads on Vinted: drafts for the new ones / one sync job
         from app.services import crosspost
         if action == "vinted":
@@ -2405,6 +2414,29 @@ async def myads_vinted_sync(request: Request, ad_id: str):
     return _myads_back(request, "")
 
 
+@app.post("/myads/{ad_id}/kleinanzeigen")
+async def myads_kleinanzeigen(request: Request, ad_id: str):
+    """The own ad on Kleinanzeigen through its posting form, as a background job (services/crosspost_kleinanzeigen.py)."""
+    from app.services import crosspost_kleinanzeigen
+    return _queued(request, 1 if crosspost_kleinanzeigen.enqueue(ad_id) else 0)
+
+
+@app.post("/myads/{ad_id}/kleinanzeigen/{step}")
+async def myads_kleinanzeigen_step(request: Request, ad_id: str, step: str):
+    """The Kleinanzeigen copy: reserve, activate (as the willhaben ad's state wants) or delete; sync checks it now;
+    forget drops a posting that is waiting for a check."""
+    from app.services import crosspost_kleinanzeigen as ka
+    if step == "sync":
+        ka.schedule_sync(ad_id)
+        return _myads_back(request, "")
+    if step == "forget":                       # a "check" record only: the posting itself is not touched
+        return _myads_back(request, "" if ka.forget(ad_id) else t("Nothing to forget: the ad is not waiting for a check"))
+    start = {"reserve": ka.enqueue_reserve, "activate": ka.enqueue_activate, "delete": ka.enqueue_delete}.get(step)
+    if start is None:
+        raise HTTPException(404)
+    return _queued(request, 1 if start(ad_id) else 0)
+
+
 @app.post("/myads/{ad_id}/deactivate")
 async def myads_deactivate(request: Request, ad_id: str):
     return _queued(request, my_ads.enqueue("deactivate", [ad_id]))
@@ -2498,6 +2530,7 @@ async def jobs_status(since: int | None = None):
         pending += jobs.current_keys("shipping:")          # Claude prepares a parcel from a chat
         pending += jobs.current_keys("purchase:")          # a purchase order about to contact the seller
         pending += jobs.current_keys("chatreload:")        # a chat reloading its history (Reload button)
+        pending += jobs.current_keys("ka:")                # an own ad's copy on Kleinanzeigen (crosspost_kleinanzeigen)
         pending += [f"batch:{i}" for i in db.exec(select(AdBatch.id).where(col(AdBatch.status).in_(("sorting", "creating"))))]
         last = _live_cursor()
         new = [] if since is None or since >= last else list(db.exec(
@@ -2670,6 +2703,27 @@ async def sold_reset(ad_id: str, kind: str = Form("sold"), buyer: str = Form("")
 
 
 # ------------------------------------------------------------------ new ad
+def _ticked(value: Any) -> bool:
+    """A checkbox of a form: sent as "1" (or on/true/yes) when ticked, absent otherwise."""
+    return str(value or "").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _kleinanzeigen_offer(d: AdDraft | None = None) -> dict[str, bool]:
+    """The "also post on Kleinanzeigen" box of the posting forms: offered only while the account is logged in there
+    (ka_available); ticked by the draft's own choice when it made one, else by Settings (kleinanzeigen_post_default)."""
+    from app.services import crosspost_kleinanzeigen
+
+    try:
+        available = bool(crosspost_kleinanzeigen.available())
+    except Exception as e:  # noqa: BLE001 - the account check must not take the posting page down
+        log.warning("Kleinanzeigen login state unknown: %s", e)
+        available = False
+    checked = get_setting("kleinanzeigen_post_default") == "1"
+    if d is not None and "kleinanzeigen" in (d.also or {}):
+        checked = bool(d.also["kleinanzeigen"])
+    return {"ka_available": available, "ka_checked": checked}
+
+
 @app.get("/new-ad", response_class=HTMLResponse)
 async def new_ad_page(request: Request):
     with session() as db:
@@ -2679,17 +2733,28 @@ async def new_ad_page(request: Request):
         live = {r.ad_id: r for r in db.exec(select(MyAd).where(col(MyAd.ad_id).in_(
             [d.wh_ad_id for d in drafts if d.status == "published" and d.wh_ad_id])))}
     return render(request, "new_ad.html", drafts=drafts, batches=batches, max_batch=ad_batch.MAX_BATCH_IMAGES,
-                  live=live)
+                  live=live, **_kleinanzeigen_offer())
 
 
 @app.post("/new-ad")
-async def new_ad_create(notes: str = Form(""), photos: list[UploadFile] = File(default=[])):
-    """The draft page opens at once; Claude writes the listing as a background job (lane claude)."""
+async def new_ad_create(notes: str = Form(""), photos: list[UploadFile] = File(default=[]),
+                        auto_publish: str = Form(""), kleinanzeigen: str = Form("")):
+    """The draft page opens at once; Claude writes the listing as a background job (lane claude). auto_publish: the
+    draft goes live on willhaben by itself once Claude and willhaben are done (ad_creator._auto_publish)."""
     files = [(p.filename or "", await p.read()) for p in photos if p.filename]
     if not notes.strip() and not files:
         return back("/new-ad")
-    draft = ad_creator.enqueue_create(notes, files)
+    draft = ad_creator.enqueue_create(notes, files, also={"kleinanzeigen": _ticked(kleinanzeigen),
+                                                          "auto_publish": _ticked(auto_publish)})
     return back(f"/new-ad/{draft.id}")
+
+
+@app.post("/new-ad/{draft_id:int}/also")
+async def new_ad_also(draft_id: int, kleinanzeigen: str = Form("")):
+    """The "also on Kleinanzeigen" tick, saved as it is ticked: the willhaben card is drawn anew with every category
+    pick and would otherwise show the Settings default until the publish. Answers with nothing to swap (204)."""
+    ad_creator.set_also(draft_id, "kleinanzeigen", _ticked(kleinanzeigen))
+    return Response(status_code=204)
 
 
 @app.get("/new-ad/{draft_id:int}", response_class=HTMLResponse)
@@ -2700,7 +2765,8 @@ async def ad_draft_page(request: Request, draft_id: int, msg: str | None = None)
         raise HTTPException(404)
     gh = d.geizhals or {}
     return render(request, "ad_draft.html", d=d, msg=msg, insert_url=ad_creator.INSERT_URL, gh=gh,
-                  spec_block=geizhals.spec_block(gh.get("match")))
+                  spec_block=geizhals.spec_block(gh.get("match")), preparing=d.id in _preparing(),
+                  ka_busy=f"kaprice:{d.id}" in jobs.current_keys("kaprice:"), **_kleinanzeigen_offer(d))
 
 
 @app.post("/new-ad/{draft_id:int}")
@@ -2760,6 +2826,22 @@ async def ad_draft_reconcile(draft_id: int):
                                      label=t("Checked against the Geizhals spec sheet")):
         return back(f"/new-ad/{draft_id}?msg={quote(ad_creator.refine_refusal(draft_id), safe='')}#geizhals")
     return back(f"/new-ad/{draft_id}#geizhals")
+
+
+@app.post("/new-ad/{draft_id:int}/kleinanzeigen/price")
+async def ad_draft_kleinanzeigen_price(request: Request, draft_id: int):
+    """The card's Recalculate button: the Kleinanzeigen price analysed again, as a background job the card waits for."""
+    _draft_or_404(draft_id)
+    form = await request.form()
+    _save_posted_fields(draft_id, form)                      # the text fields as typed (the card swaps the page part)
+    typed = form.get("kleinanzeigen_price")
+    if typed is not None:                                    # the typed price survives the swap; unreadable: dropped
+        try:
+            ad_creator.set_also(draft_id, "kleinanzeigen_price", ad_creator.parse_price(str(typed)))
+        except ValueError:
+            pass
+    ad_creator.enqueue_kleinanzeigen_price(draft_id)
+    return back(f"/new-ad/{draft_id}#willhaben")
 
 
 @app.post("/new-ad/{draft_id:int}/undo")
@@ -2837,7 +2919,17 @@ async def ad_draft_wh_publish(request: Request, draft_id: int):
         option = -1
     prefix = f"o{option}_"
     values = {k[len(prefix):]: str(v) for k, v in form.multi_items() if k.startswith(prefix) and v}
-    if not ad_creator.enqueue_publish(draft_id, option, values, shipping=ad_creator.parse_shipping(form)):
+    also: dict[str, Any] = {"kleinanzeigen": _ticked(form.get("kleinanzeigen"))}
+    # the card's Kleinanzeigen price (blank: the analysis price); without the tick it is not read at all (the Mini App
+    # sends the field either way), so a stray text there never holds up the willhaben publish
+    if also["kleinanzeigen"] and form.get("kleinanzeigen_price") is not None:
+        try:
+            also["kleinanzeigen_price"] = ad_creator.parse_price(str(form.get("kleinanzeigen_price")))
+        except ValueError:
+            ad_creator.update_draft(draft_id, error=t(ad_creator.KA_PRICE_UNREADABLE,
+                                                      price=str(form.get("kleinanzeigen_price")).strip()))
+            return back(f"/new-ad/{draft_id}#willhaben")  # not published with a price nobody can read
+    if not ad_creator.enqueue_publish(draft_id, option, values, shipping=ad_creator.parse_shipping(form), also=also):
         return back(f"/new-ad/{draft_id}#willhaben")       # input error (on the draft) or already on its way
     return back(f"/new-ad/{draft_id}?msg={quote(t('Publishing in the background – you can leave this page'), safe='')}#willhaben")
 
@@ -2890,10 +2982,15 @@ async def ad_batch_page(request: Request, batch_id: int, msg: str | None = None,
     drafts = ad_batch.drafts_of(b)
     off = {int(x) for x in unticked.split(",") if x.strip().isdigit()}
     selected = {d.id for d in drafts if d.status == "draft" and not d.publishing and d.id not in off} if off else None
+    offer = _kleinanzeigen_offer()
+    kept = [(d.also or {})["kleinanzeigen"] for d in drafts if "kleinanzeigen" in (d.also or {})]
+    if kept:                                          # the bar's tick as the batch's drafts keep it (ad_batch_also)
+        offer["ka_checked"] = bool(kept[0])
     return render(request, "ad_batch.html", b=b, msg=msg, drafts=drafts, unassigned=ad_batch.unassigned(b),
                   pending=ad_batch.pending(b), busy=b.status in ("sorting", "creating"), selected=selected,
                   unticked=sorted(off),
-                  preparing=_preparing(), max_images=ad_creator.MAX_IMAGES, parallel=ad_batch.CREATE_PARALLEL)
+                  preparing=_preparing(), max_images=ad_creator.MAX_IMAGES, parallel=ad_batch.CREATE_PARALLEL,
+                  **offer)
 
 
 def _preparing() -> set[int]:
@@ -2921,11 +3018,23 @@ async def ad_batch_drafts(request: Request, batch_id: int):
     elif verb != "save":
         ids = [int(ref)] if ref.isdigit() else ticked
         msg, tone = ad_batch.run_action(batch_id, verb, ids, str(form.get(f"{ref}.instruction" if ref else "instruction") or ""),
-                                        unsaved)
+                                        unsaved, also={"kleinanzeigen": _ticked(form.get("kleinanzeigen"))})
         redraw += ids
     drafts = ad_batch.drafts_of(ad_batch.get(batch_id))
     return render(request, "_batch_oob.html", b=b, drafts=drafts, redraw=[d for d in drafts if d.id in set(redraw)],
                   selected=set(ticked), preparing=_preparing(), msg=msg, tone=tone)
+
+
+@app.post("/new-ad/batch/{batch_id}/also")
+async def ad_batch_also(batch_id: int, kleinanzeigen: str = Form("")):
+    """The batch bar's "also on Kleinanzeigen" tick, kept on every draft of the batch: the page draws the bar from
+    them (ad_batch_page), so a refresh of the page keeps the tick. Answers with nothing to swap (204)."""
+    b = ad_batch.get(batch_id)
+    if b is None:
+        raise HTTPException(404)
+    for d in ad_batch.drafts_of(b):
+        ad_creator.set_also(d.id, "kleinanzeigen", _ticked(kleinanzeigen))
+    return Response(status_code=204)
 
 
 @app.get("/new-ad/batch/{batch_id}/row/{draft_id}", response_class=HTMLResponse)
@@ -3592,7 +3701,9 @@ def _platform_row(p: Any) -> dict[str, Any]:
             "auth_source": st.get("auth_source"),
             "auth_env": (get_settings().kleinanzeigen_api_auth.strip() if p.id == "kleinanzeigen"
                          and st.get("auth_source") == "env" else ""),
-            "fb_location": _fb_location() if p.id == "facebook" else None}
+            "fb_location": _fb_location() if p.id == "facebook" else None,
+            "ka_post": {"default": get_setting("kleinanzeigen_post_default") == "1",
+                        "zip": get_setting("kleinanzeigen_zip")} if p.id == "kleinanzeigen" else None}
 
 
 def _fb_location() -> dict[str, Any] | None:
@@ -3610,6 +3721,13 @@ async def settings_platform(request: Request, pid: str):
     if p is None:
         raise HTTPException(404)
     form = await request.form()
+    if p.id == "kleinanzeigen" and form.get("part") == "posting":     # the posting card: its own form, the switch stays
+        zip_code = str(form.get("zip") or "").strip()
+        if zip_code and not re.fullmatch(r"\d{4,5}", zip_code):
+            return back(f"/settings/{p.id}?msg={quote(t('The postcode has 4 or 5 digits'), safe='')}#s-ka-zip")
+        set_setting("kleinanzeigen_post_default", "1" if form.get("post_default") else "0")
+        set_setting("kleinanzeigen_zip", zip_code)
+        return back(f"/settings/{p.id}?msg={quote(t('Changes saved'), safe='')}#s-ka-post")
     set_setting(f"platform_{p.id}_enabled", "1" if form.get("enabled") else "0")
     set_setting(f"platform_{p.id}_product_search", "1" if form.get("product_search") else "0")
     gap = str(form.get("gap") or "").strip().replace(",", ".")

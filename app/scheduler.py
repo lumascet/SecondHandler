@@ -222,6 +222,9 @@ def start() -> None:
     from app.services import crosspost
     scheduler.add_job(crosspost.scheduled_sync, IntervalTrigger(hours=1, jitter=300), id="vinted-sync",
                       replace_existing=True, max_instances=1, coalesce=True)   # the ads also on Vinted: in step
+    from app.services import crosspost_kleinanzeigen
+    scheduler.add_job(crosspost_kleinanzeigen.scheduled_sync, IntervalTrigger(hours=1, jitter=300),
+                      id="kleinanzeigen-sync", replace_existing=True, max_instances=1, coalesce=True)  # ... and on Kleinanzeigen
     from app.services import chat_done
     scheduler.add_job(chat_done.check_job, IntervalTrigger(minutes=30, jitter=300), id="chat-done",
                       replace_existing=True, max_instances=1, coalesce=True,   # chats Claude judges over

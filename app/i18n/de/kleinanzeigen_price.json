@@ -1,0 +1,19 @@
+{
+ "Price on Kleinanzeigen (€)": "Preis auf Kleinanzeigen (€)",
+ "{n} ads on Kleinanzeigen for “{q}”": "{n} Anzeigen auf Kleinanzeigen für „{q}“",
+ "Too few comparable ads on Kleinanzeigen to compare": "Zu wenige vergleichbare Anzeigen auf Kleinanzeigen zum Vergleichen",
+ "Checking the price on Kleinanzeigen…": "Preis auf Kleinanzeigen wird geprüft…",
+ "Queued: Kleinanzeigen price": "Wartet: Preis auf Kleinanzeigen",
+ "Recalculate": "Neu berechnen",
+ "Price there: {price}": "Preis dort: {price}",
+ "{n} % above willhaben": "{n} % über willhaben",
+ "{n} % below willhaben": "{n} % unter willhaben",
+ "Shipping to Germany costs more than at home: about {low}–{high} € for a parcel up to {kg} kg (rough).": "Versand nach Deutschland kostet mehr als zu Hause: etwa {low}–{high} € für ein Paket bis {kg} kg (grob).",
+ "Shipping to Germany costs more than at home: a parcel up to {kg} kg is about {low}–{high} € (rough).": "Versand nach Deutschland kostet mehr als zu Hause: ein Paket bis {kg} kg kostet etwa {low}–{high} € (grob).",
+ "Shipping to Germany costs more than at home: a parcel over {kg} kg costs more than {high} € (rough).": "Versand nach Deutschland kostet mehr als zu Hause: ein Paket über {kg} kg kostet mehr als {high} € (grob).",
+ "Kleinanzeigen price not checked: Kleinanzeigen is off or its app credentials are missing": "Preis auf Kleinanzeigen nicht geprüft: Kleinanzeigen ist aus oder seine App-Zugangsdaten fehlen",
+ "Kleinanzeigen price checked": "Preis auf Kleinanzeigen geprüft",
+ "Kleinanzeigen price for draft #{id}": "Preis auf Kleinanzeigen für Entwurf #{id}",
+ "Kleinanzeigen price not recognized: “{price}” – not published": "Preis auf Kleinanzeigen nicht erkannt: „{price}“ – nicht veröffentlicht",
+ "Comparing prices on Kleinanzeigen": "Preise auf Kleinanzeigen werden verglichen"
+}

@@ -61,6 +61,18 @@ def test_product_search_names_the_switched_off_sites(client):
     assert "can also be searched once you switch them on" not in client.get("/deals").text
 
 
+def test_kleinanzeigen_posting_card_on_its_settings_page(client):
+    """Kleinanzeigen's card for the own ads posted there: its own form (the default tick and the postcode), its
+    searchable items; the other sites have no such card."""
+    page = client.get("/settings/kleinanzeigen").text
+    start = page.rindex("<form", 0, page.index('id="s-ka-post"'))
+    form = page[start:page.index("</form>", start)]
+    assert 'action="/settings/platform/kleinanzeigen"' in form and 'name="part" value="posting"' in form
+    assert 'name="post_default"' in form and 'name="zip"' in form and 'maxlength="5"' in form
+    assert 'id="s-ka-post-default"' in page and 'id="s-ka-zip"' in page
+    assert 'id="s-ka-post"' not in client.get("/settings/vinted").text
+
+
 def test_refs_with_letters_and_site_links():
     set_setting("platform_shpock_enabled", "1")
     set_setting("platform_vinted_enabled", "1")
