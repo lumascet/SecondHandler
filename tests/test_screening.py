@@ -1,3 +1,4 @@
+import asyncio
 import copy
 
 import httpx
@@ -166,6 +167,56 @@ async def test_a_failed_call_ends_the_round_its_hits_fail_open(responses, ha, im
     await run_agent(agent.id)
     assert len(fake.calls) == 1 and len(_pushes(ha)) == 1
     assert sorted([_hit("999000111").state, _hit("999000112").state]) == ["new", "pending"]
+
+
+async def test_a_later_call_that_fails_leaves_its_hits_pending(responses, ha, images, monkeypatch):  # noqa: F811
+    """11-06: the chunks after the first run side by side; one that timed out let its hits through unjudged."""
+    queue, _ = responses
+    set_setting("ha_notify_service", "mobile_app_phone")
+    set_setting("push_channel", "ha")
+    agent = await _agent_with_two_new(queue)
+    monkeypatch.setattr(screening, "MAX_PER_CALL", 1)
+
+    class FailsSecond(FakeScreen):
+        async def complete(self, **kw):
+            self.fail = len(self.calls) >= 1          # the first call answers, the second times out
+            return await super().complete(**kw)
+
+    fake = FailsSecond([{"nr": 1, "relevant": True, "deal": "good", "reason": "Passt"}])
+    monkeypatch.setattr(screening, "get_backend", lambda *a: fake)
+    await run_agent(agent.id)
+    assert len(fake.calls) == 2 and len(_pushes(ha)) == 1           # the unjudged one gets no push
+    assert sorted([_hit("999000111").state, _hit("999000112").state]) == ["new", "pending"]
+
+
+async def test_screening_calls_wait_for_a_free_slot(monkeypatch):
+    agent = create_agent(URL)
+    with dbmod.session() as db:
+        a = db.get(dbmod.SearchAgent, agent.id)
+        a.screen = True
+        db.add(a)
+        hits = [dbmod.Hit(agent_id=agent.id, ad_id=str(n), heading=f"Rad {n}", url="u", body="x" * 100)
+                for n in range(4)]
+        db.add_all(hits)
+        db.commit()
+        for h in hits:
+            db.refresh(h)
+            db.expunge(h)
+    monkeypatch.setattr(screening, "MAX_PER_CALL", 1)
+    monkeypatch.setattr(screening, "SCREEN_CONCURRENCY", 1)
+    running, peak = 0, 0
+
+    async def ask(agent, hits, check, stats):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return {1: {"nr": 1, "relevant": True, "deal": "good", "reason": "Passt"}}, {}
+
+    monkeypatch.setattr(screening, "ask", ask)
+    asked = await screening.screen_all(agent.id, hits)
+    assert asked == {h.id for h in hits} and peak == 1               # unbounded, the last three ran at once
 
 
 def test_refile_screened_moves_held_back_new_hits_once(client):  # noqa: F811
