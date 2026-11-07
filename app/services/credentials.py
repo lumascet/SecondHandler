@@ -26,6 +26,9 @@ log = logging.getLogger(__name__)
 SITES = ("willhaben", "vinted")
 AUTO_LOGIN_EVERY_S = 3600          # automatic logins per site at most this often
 AUTO_RETRY_UNSENT_S = 300          # ... but one that sent nothing (no form, no browser) may try again this soon
+AUTO_RETRY_SENT_S = 900            # ... and one whose details went out but the check did not see the login (the site
+                                   # asked for more, or the check was wrong) after this; a refused password never
+                                   # comes back as "sent" (no login at all: "no_form" after the error page)
 _auto_lock = asyncio.Lock()
 _tasks: set = set()                # automatic logins started in the background (asyncio.Task)
 # where each site asks for them (seen 2026-10-21: Vinted's e-mail login page, then POST /web/api/auth/oauth)
@@ -188,8 +191,10 @@ async def auto_login(site: str) -> str | None:
         last = float(get_setting(f"auto_login_{site}_at") or 0)
     except ValueError:
         last = 0.0
-    unsent = get_setting(f"auto_login_{site}_result") in ("", "no_form", "error")   # nothing reached the site
-    if time.time() - last < (AUTO_RETRY_UNSENT_S if unsent else AUTO_LOGIN_EVERY_S):
+    prev = get_setting(f"auto_login_{site}_result")
+    wait = AUTO_RETRY_UNSENT_S if prev in ("", "no_form", "error") else AUTO_RETRY_SENT_S if prev == "sent" \
+        else AUTO_LOGIN_EVERY_S
+    if time.time() - last < wait:
         return None
     async with _auto_lock:
         set_setting(f"auto_login_{site}_at", str(time.time()))      # before trying: a crash does not loop

@@ -83,3 +83,18 @@ async def test_the_dead_vinted_login_cookies_go_before_a_login(monkeypatch):
     monkeypatch.setattr(vm, "_alive", True)                                   # a working login stays
     await credentials._drop_dead_vinted_login(SimpleNamespace(context=Ctx()))
     assert cleared == []
+
+
+async def test_a_sent_login_the_check_did_not_see_tries_again_after_15_min(creds, monkeypatch):
+    import time as _time
+    results = iter(["sent", "ok"])
+
+    async def login(site):
+        return next(results)
+    monkeypatch.setattr(credentials, "login", login)
+    assert await credentials.auto_login("vinted") == "sent"
+    now = _time.time()
+    monkeypatch.setattr(credentials.time, "time", lambda: now + credentials.AUTO_RETRY_SENT_S - 5)
+    assert await credentials.auto_login("vinted") is None
+    monkeypatch.setattr(credentials.time, "time", lambda: now + credentials.AUTO_RETRY_SENT_S + 1)
+    assert await credentials.auto_login("vinted") == "ok"
