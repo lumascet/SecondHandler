@@ -74,6 +74,7 @@ def remove(ad_id: str) -> None:
             if (row.vinted or {}).get("id") and (row.vinted or {}).get("state") != "gone":
                 from app.services import crosspost   # also on Vinted: the ad stays, only on Vinted (10-28: lost)
                 db.add(crosspost.vinted_only_row(row))
+                row.vinted = None             # the Vinted item is the new row's now: the sync must not hide it
             if kleinanzeigen_copy_alive(row):
                 row.status = "deleted"
                 db.add(row)
@@ -889,7 +890,7 @@ def _move_to_new_id(old_id: str, new_id: str) -> MyAd:
     replaced, auto-renew off) because buyer chats keep pointing at the old id and still need its auto-reply
     settings."""
     keep = ("heading", "image_url", "auto_renew", "auto_reply", "auto_reply_instructions", "published_at", "min_price",
-            "parcel", "quantity", "vinted")
+            "parcel", "quantity", "vinted", "kleinanzeigen")
     with session() as db:
         old = db.get(MyAd, old_id)
         new = db.get(MyAd, new_id) or MyAd(ad_id=new_id)
@@ -897,6 +898,7 @@ def _move_to_new_id(old_id: str, new_id: str) -> MyAd:
             if hasattr(old, k):
                 setattr(new, k, getattr(old, k))
         old.vinted = None                 # the Vinted item follows the live copy (services/crosspost.sync)
+        old.kleinanzeigen = None          # ... and so does the Kleinanzeigen copy (no second posting of the ad)
         new.url, new.status = f"https://www.willhaben.at/iad/object?adId={new_id}", "active"
         new.last_action = t("republished (was {id})", id=old_id)
         old.replaced_by, old.auto_renew, old.status = new_id, False, "replaced"

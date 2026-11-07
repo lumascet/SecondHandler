@@ -139,7 +139,24 @@ def _draft_source(ad_id: str) -> dict[str, Any] | None:
                 "also": dict(d.also or {}), "kleinanzeigen": dict(d.kleinanzeigen or {})}
 
 
-def _draft_price(draft: dict[str, Any]) -> tuple[float | None, str | None]:
+PRICE_FLOOR = 0.7     # an analysed price below this share of willhaben's is not posted: willhaben's price instead
+
+
+def _guard(price: float | None, note: str | None, wh_price: float | None,
+           min_price: float | None) -> tuple[float | None, str | None]:
+    """An analysed price the owner did not confirm: never below the ad's own lowest price, nor below PRICE_FLOOR of
+    willhaben's price (a bad set of comparable ads must not post a 500 € item at 50 €) – willhaben's price then."""
+    if price is None or not wh_price:
+        return price, note
+    floor = max(float(min_price or 0), PRICE_FLOOR * float(wh_price))
+    if price < floor:
+        log.info("kleinanzeigen price %.2f below %.2f (willhaben %.2f): willhaben's price is posted", price, floor,
+                 wh_price)
+        return float(wh_price), t("the comparable ads were far cheaper – willhaben's price is kept")
+    return price, note
+
+
+def _draft_price(draft: dict[str, Any], min_price: float | None = None) -> tuple[float | None, str | None]:
     """The price the Kleinanzeigen copy is posted at, in order: the price typed for it on the draft ("also"), a free
     willhaben ad stays free (0: the analysis does not change a giveaway), the analysis of the comparable ads there
     (services/kleinanzeigen_price.py), willhaben's price. With its note when the analysis gave the price."""
@@ -149,8 +166,8 @@ def _draft_price(draft: dict[str, Any]) -> tuple[float | None, str | None]:
     if draft["price"] == 0:
         return 0.0, None
     ka = draft["kleinanzeigen"] or {}
-    if ka.get("price"):
-        return float(ka["price"]), ka.get("note")
+    if ka.get("price"):                  # the analysis: within the guard (not typed by the owner)
+        return _guard(float(ka["price"]), ka.get("note"), draft["price"], min_price)
     return (float(draft["price"]) if draft["price"] is not None else None), None
 
 
@@ -176,7 +193,7 @@ async def _source(ad_id: str, row: MyAd, tmp: Path, step: Callable[[str], None])
     zip_code = get_setting("kleinanzeigen_zip") or None
     draft = _draft_source(ad_id)
     if draft is not None:
-        price, note = _draft_price(draft)
+        price, note = _draft_price(draft, row.min_price)
         if price is None:
             raise kl.ListingError(t("the ad has no price on willhaben (a free ad is price 0)"))
         ship = draft["wh_plan"].get("shipping") or {}
@@ -205,6 +222,7 @@ async def _source(ad_id: str, row: MyAd, tmp: Path, step: Callable[[str], None])
     if plan.price:                       # a giveaway stays one (its price type is set by build_plan from the price)
         step(t("Comparing prices on Kleinanzeigen"))
         price, note = await _analysed_price(plan.title, plan.condition, plan.shipping, plan.price)
+        price, note = _guard(price, note, plan.wh_price, row.min_price)
         if price is not None:
             plan.price, plan.price_note = price, note
     return plan
@@ -278,11 +296,11 @@ async def to_kleinanzeigen(ad_id: str, job: jobs.Job | None = None) -> str:
                 aid = await up.submit(plan.title, on_submitting=mark)
             except BaseException as e:              # noqa: BLE001 - routed below, never retried
                 # Once the marker is set the final click may have been made: any error from here on is a posting to
-                # check, not a failure to retry - also a cancel or the job's timeout (CancelledError), which would
-                # otherwise leave the marker and let a second List post the ad again. The listing module's own
-                # ListingError after the click (a paid category, a rejected form still on screen) means nothing was
-                # posted: that one is a plain failure and the ad may be listed again.
-                if not marked or (isinstance(e, kl.ListingError) and not isinstance(e, kl.Uncertain)):
+                # check, not a failure to retry - also a cancel or the job's timeout (CancelledError), and also the
+                # listing module's own ListingError after the click: its signs of "nothing posted" (a rejected form
+                # still on screen, a paid category) come from selectors not yet seen live, and a false one would
+                # let a second List post the ad twice. Until they are, the owner looks first.
+                if not marked:
                     raise
                 _set(ad_id, state="check", pending=None, title=plan.title, checked=utcnow().isoformat(),
                      error=t(SUBMIT_UNCERTAIN))
@@ -302,8 +320,8 @@ def enqueue(ad_id: str) -> bool:
     listed or on its way, or waiting for a check."""
     row = _row(ad_id)
     ka = _ka(row)
-    if row is None or row.replaced_by or str(ad_id).startswith(VINTED_ONLY):
-        return False
+    if row is None or row.replaced_by or str(ad_id).startswith(VINTED_ONLY) or row.status != "active":
+        return False                                # only an ad that is for sale (not sold, expired or deleted)
     if (ka.get("id") and ka.get("state") != "gone") or ka.get("state") == "check" or _busy(ad_id, ka):
         return False
     _set(ad_id, pending="listing", error=None)

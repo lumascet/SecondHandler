@@ -279,17 +279,17 @@ async def test_an_unexpected_error_after_the_marker_leaves_a_check(monkeypatch, 
     assert not row.get("id")
 
 
-async def test_a_rejected_form_after_the_marker_is_a_plain_failure_not_a_check(monkeypatch, tmp_path):
-    """The listing module raises a plain ListingError after the click only when the form is still on screen (nothing
-    posted): the ad may be listed again at once instead of waiting for a Forget."""
+async def test_a_rejected_form_after_the_marker_is_a_check_too(monkeypatch, tmp_path):
+    """After the final click even the listing module's "rejected" (the form still on screen) is a check, not a plain
+    failure: its signs come from selectors not yet seen live, and a false one would let a second List post the ad
+    twice. The owner looks, then lists again or forgets."""
     _setup(monkeypatch, tmp_path)
     FakeUpload.detected = ["Elektronik"]
     FakeBackend.answers = [0]
     FakeUpload.mode = "rejected"
-    with pytest.raises(kl.ListingError, match="rejected"):
-        await ka.to_kleinanzeigen("601")
+    await ka.to_kleinanzeigen("601")
     assert FakeUpload.seen_pending == ["submitting"]
-    assert _ka().get("state") is None and not _ka().get("id")
+    assert _ka().get("state") == "check" and not _ka().get("id")
 
 
 async def test_a_cancel_after_the_marker_leaves_a_check_and_goes_on(monkeypatch, tmp_path):

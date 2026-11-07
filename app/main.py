@@ -2850,15 +2850,21 @@ async def ad_draft_reconcile(draft_id: int):
 @app.post("/new-ad/{draft_id:int}/kleinanzeigen/price")
 async def ad_draft_kleinanzeigen_price(request: Request, draft_id: int):
     """The card's Recalculate button: the Kleinanzeigen price analysed again, as a background job the card waits for."""
-    _draft_or_404(draft_id)
+    d = _draft_or_404(draft_id)
     form = await request.form()
     _save_posted_fields(draft_id, form)                      # the text fields as typed (the card swaps the page part)
     typed = form.get("kleinanzeigen_price")
     if typed is not None:                                    # the typed price survives the swap; unreadable: dropped
         try:
-            ad_creator.set_also(draft_id, "kleinanzeigen_price", ad_creator.parse_price(str(typed)))
+            value = ad_creator.parse_price(str(typed))
         except ValueError:
-            pass
+            value = None
+        # the field shows the last analysis (or willhaben's suggestion) until the owner types: that default is no
+        # price of the owner's, else it would beat the new analysis for good
+        defaults = {round(float(v), 2) for v in ((d.kleinanzeigen or {}).get("price"), d.price_suggestion)
+                    if v is not None}
+        if value is not None:                                # unreadable: the typed price before it stays
+            ad_creator.set_also(draft_id, "kleinanzeigen_price", None if round(value, 2) in defaults else value)
     ad_creator.enqueue_kleinanzeigen_price(draft_id)
     return back(f"/new-ad/{draft_id}#willhaben")
 

@@ -327,3 +327,6 @@ def test_recalculate_keeps_the_typed_kleinanzeigen_price(client, wh, monkeypatch
     assert 'id="wh-kaprice"' in page and 'hx-include="#title, #desc, #price, #quantity, #ka-price-field"' in page
     client.post(f"/new-ad/{d.id}/kleinanzeigen/price", data={**PUBLISH, "kleinanzeigen_price": "zwölf"})
     assert _get(d.id).also.get("kleinanzeigen_price") == 77.0        # unreadable: the typed price before it stays
+    client.post(f"/new-ad/{d.id}/kleinanzeigen/price", data={**PUBLISH, "kleinanzeigen_price": "12"})
+    assert _get(d.id).also.get("kleinanzeigen_price") is None         # the shown default (the suggestion): not mine,
+                                                                      # the new analysis decides
