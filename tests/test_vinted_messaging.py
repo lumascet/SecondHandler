@@ -314,3 +314,33 @@ async def test_refused_tokens_are_not_taken_back_from_the_browser(monkeypatch, t
     assert await vm.seed_from_browser(old) is False and vm._jar == {}
     new = _sess([{"name": "access_token_web", "value": "fresh"}, {"name": "refresh_token_web", "value": "r-fresh"}])
     assert await vm.seed_from_browser(new) is True and vm._jar["access_token_web"] == "fresh"
+
+
+def _jwt(iat):
+    import base64
+    import json as _json
+    body = base64.urlsafe_b64encode(_json.dumps({"iat": iat, "exp": iat + 7200}).encode()).decode().rstrip("=")
+    return f"h.{body}.s"
+
+
+async def test_a_newer_login_in_the_browser_wins_over_the_jar(monkeypatch, tmp_path):
+    """The automatic login (or one in the remote view) made a new session in the browser while the jar still held the
+    older one that works too: the turn must take the new one over, not push the old one on top of it (that logged the
+    browser out again right after each login, 11-07)."""
+    monkeypatch.setattr(vm, "_state_path", lambda: tmp_path / "v.json")
+    vm._jar.update({"access_token_web": _jwt(1000), "refresh_token_web": "r-old", "_vinted_fr_session": "s-old"})
+    ctx = TurnCtx([{"name": "access_token_web", "value": _jwt(2000), "domain": ".vinted.at", "path": "/"},
+                   {"name": "refresh_token_web", "value": "r-new", "domain": ".vinted.at", "path": "/"},
+                   {"name": "_vinted_fr_session", "value": "s-new", "domain": ".vinted.at", "path": "/"}])
+    async with vm.browser_turn(SimpleNamespace(context=ctx)):
+        assert ctx.store["refresh_token_web"]["value"] == "r-new"            # the new login stays in the browser
+    assert vm._jar["refresh_token_web"] == "r-new" and vm._jar["_vinted_fr_session"] == "s-new"
+
+
+async def test_an_older_browser_copy_gets_the_jars_newer_token(monkeypatch, tmp_path):
+    monkeypatch.setattr(vm, "_state_path", lambda: tmp_path / "v.json")
+    vm._jar.update({"access_token_web": _jwt(3000), "refresh_token_web": "r-jar"})
+    ctx = TurnCtx([{"name": "access_token_web", "value": _jwt(2000), "domain": ".vinted.at", "path": "/"},
+                   {"name": "refresh_token_web", "value": "r-old", "domain": ".vinted.at", "path": "/"}])
+    async with vm.browser_turn(SimpleNamespace(context=ctx)):
+        assert ctx.store["refresh_token_web"]["value"] == "r-jar"            # the jar's refreshed one goes in

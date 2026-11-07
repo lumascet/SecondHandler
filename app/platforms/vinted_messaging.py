@@ -85,6 +85,14 @@ async def _push_to_browser(sess: Any) -> None:
         return
     try:
         have = await sess.context.cookies([MSG_API, WEB])
+        browser_tok = next((c.get("value") for c in have if c.get("name") == "access_token_web"), None)
+        if _issued(browser_tok) > _issued(_jar.get("access_token_web")):
+            # the browser holds a newer login (the automatic login, or one in the remote view): it wins – pushed
+            # over, the old session's cookies broke it at once (11-07: the check after each automatic login saw
+            # "logged out" and the next hour logged in again)
+            log.info("vinted: the browser holds a newer login: the app takes it over")
+            await seed_from_browser(sess)
+            return
         names = {c["name"] for c in have}
         put = [{**c, "value": _jar[c["name"]]} for c in have if c["name"] in _jar and c.get("value") != _jar[c["name"]]]
         put += [{"name": k, "value": v, "domain": ".vinted.at", "path": "/", "secure": True}
@@ -93,6 +101,17 @@ async def _push_to_browser(sess: Any) -> None:
             await sess.context.add_cookies(put)
     except Exception as e:  # noqa: BLE001 - no browser: the page loads with what it has
         log.info("vinted: cookies not handed to the browser (%s)", type(e).__name__)
+
+
+def _issued(token: str | None) -> float:
+    """When an access token (a JWT) was issued (its iat, else its exp); 0 when it is none or unreadable."""
+    import base64
+    try:
+        part = (token or "").split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        return float(claims.get("iat") or claims.get("exp") or 0)
+    except (IndexError, ValueError, TypeError, AttributeError):
+        return 0.0
 
 
 def _cookie_header() -> str:
