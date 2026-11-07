@@ -9,6 +9,7 @@ import asyncio
 import logging
 import re
 import tempfile
+import weakref
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,21 @@ MIN_RANK = {"match": 0, "fair": 1, "good": 2}
 _transport: httpx.AsyncBaseTransport | None = None   # tests inject a mock transport
 THIN_BODY_CHARS = 80               # an ad text this short probably hides its specs in a photo: worth an OCR pass
 OCR_CONCURRENCY = 3
-PHOTO_CONCURRENCY = 4      # the screening's photo downloads at once                # hits whose photos are read at once (each site's limiter paces its own requests)
+PHOTO_CONCURRENCY = 4      # the screening's photo downloads at once
+# screening calls running at once, across all agents: every call is a `claude -p` process that reads up to ten photos
+# turn by turn; since the chunks of a check run side by side (11-01) several agents' checks started six or more of
+# them together, they slowed each other past the CLI timeout (11-06) and the timed-out chunks' hits went out unjudged
+SCREEN_CONCURRENCY = 2
+_gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = weakref.WeakKeyDictionary()
+
+
+def _gate() -> asyncio.Semaphore:
+    """The semaphore of the running event loop (one per loop: a semaphore must not be shared between loops)."""
+    loop = asyncio.get_running_loop()
+    gate = _gates.get(loop)
+    if gate is None:
+        gate = _gates[loop] = asyncio.Semaphore(SCREEN_CONCURRENCY)
+    return gate
 
 
 def _thin_text(hit: Hit) -> bool:
@@ -304,7 +319,8 @@ async def screen(agent_id: int, hits: list[Hit]) -> int:
     check = [nr for nr, h in enumerate(hits, 1) if geizhals_check.unchecked(h.geizhals)]
     await read_photo_text(hits)         # specs a seller hid in a photo (OCR), before the judge weighs the hit
     try:
-        by_nr, cands = await ask(agent, hits, check, _stats(agent_id, {h.id for h in hits}))
+        async with _gate():             # waiting for a slot does not count against the CLI timeout
+            by_nr, cands = await ask(agent, hits, check, _stats(agent_id, {h.id for h in hits}))
     except LLMError as e:
         log.warning("screening failed for agent %s: %s", agent_id, e)
         return 0
@@ -338,8 +354,10 @@ async def screen(agent_id: int, hits: list[Hit]) -> int:
 
 async def screen_all(agent_id: int, hits: list[Hit]) -> set[int]:
     """Screen up to MAX_PER_RUN hits, MAX_PER_CALL per Claude call. The first call runs alone — if it fails (a backend
-    outage) the round ends so the rest stay pending instead of all failing open — then the remaining calls run in
-    parallel (disjoint hit sets). Returns the ids Claude was sent."""
+    outage) its hits fail open and the round ends, so the rest stay pending — then the remaining calls run in parallel
+    (disjoint hit sets, at most SCREEN_CONCURRENCY calls at once over all agents). Returns the ids of the first call and
+    of every later call that got an answer: a later call that failed (a CLI timeout) leaves its hits pending for the
+    follow-up check instead of letting them all through unjudged, as the round did before the calls ran side by side."""
     hits = hits[:MAX_PER_RUN]
     if not hits:
         return set()
@@ -349,8 +367,10 @@ async def screen_all(agent_id: int, hits: list[Hit]) -> set[int]:
         return asked
     rest = parts[1:]
     if rest:
-        for r in await asyncio.gather(*(screen(agent_id, part) for part in rest), return_exceptions=True):
+        results = await asyncio.gather(*(screen(agent_id, part) for part in rest), return_exceptions=True)
+        for part, r in zip(rest, results, strict=True):
             if isinstance(r, Exception):    # one chunk's error must not orphan the siblings mid-commit
                 log.warning("screening chunk failed for agent %s: %s", agent_id, r)
-        asked |= {h.id for part in rest for h in part}
+            elif r:
+                asked |= {h.id for h in part}
     return asked
