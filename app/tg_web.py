@@ -421,29 +421,15 @@ async def tg_sold(request: Request, ad_id: str, kind: str = "sold", buyer: str |
 
 def tg_link(url: str) -> str:
     """The Mini App page for a link to an app page (a Telegram button opens that instead of the dashboard)."""
-    from urllib.parse import parse_qs, urlsplit
-
     from app.config import get_settings
     base = (get_settings().public_url or "").rstrip("/")
     if not base or not url.startswith(base):
         return url
-    parts = urlsplit(url[len(base):] or "/")
-    path, q = parts.path, parse_qs(parts.query)
-    if path.startswith("/chats/"):
-        return base + "/tg" + path
-    if path == "/hits" and q.get("view"):
-        return f"{base}/tg/ad/{q['view'][0]}"
-    if path == "/hits":
-        return base + "/tg/hits"
-    if path.startswith("/myads"):
-        return base + "/tg/myads"
-    if path.startswith("/purchases/new/"):           # the buy dialog of one ad (app/tg_purchases.py)
-        return base + "/tg" + path + (f"?{parts.query}" if parts.query else "")
-    if path.startswith("/purchases"):
-        return base + "/tg/purchases"
-    if path in ("", "/"):
-        return base + "/tg"
-    return url
+    from app.tg_bridge import tg_path
+    # the same mapping as the Mini App's own links (tg_bridge): one ad, one purchase, one chat open as such – this
+    # partial copy of it sent "your ad expires" and "purchase #5" to the lists
+    page = tg_path(url[len(base):] or "/")
+    return base + page if page else url
 
 
 def _notes(conv: Conversation, drafts: list[Draft]) -> list[str]:

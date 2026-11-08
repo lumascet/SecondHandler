@@ -330,9 +330,10 @@ def keyboard(kind: str, data: dict[str, Any], actions: list[dict[str, Any]], url
 # ------------------------------------------------------------------ outgoing
 async def send(kind: str, title: str, message: str, *, url: str | None = None, image: str | None = None,
                data: dict[str, Any] | None = None, actions: list[dict[str, Any]] | None = None,
-               tag: str | None = None, fresh: bool = False) -> bool:
-    """Post one notification to the linked chat. A known `tag` edits the earlier message instead (like HA)."""
-    if not active() or (kind not in ("test", "health") and kind not in enabled_kinds()):   # health: watchdog
+               tag: str | None = None, fresh: bool = False, command: bool = False) -> bool:
+    """Post one notification to the linked chat. A known `tag` edits the earlier message instead (like HA).
+    `command`: the answer to the owner's own command (/drafts): it goes out whatever kinds are switched off."""
+    if not active() or (not command and kind not in ("test", "health") and kind not in enabled_kinds()):
         return False
     text = f"<b>{_esc(title)}</b>\n{_esc(message)}"
     try:
@@ -728,7 +729,7 @@ async def _on_callback(cq: dict[str, Any]) -> None:
             await _drop_buttons(msg)
     elif verb in ("H_SAVE", "H_IGNORE"):
         n = _set_hit_state(ref, "saved" if verb == "H_SAVE" else "ignored")
-        await _answer(cq_id, ("⭐ " + t("Kept")) if verb == "H_SAVE" else ("🚫 " + t("Ignored")) if n else t("Hit not found."))
+        await _answer(cq_id, t("Hit not found.") if not n else ("⭐ " + t("Kept")) if verb == "H_SAVE" else ("🚫 " + t("Ignored")))
         if n:
             await _drop_buttons(msg)
     else:
@@ -915,7 +916,8 @@ async def _cmd_drafts() -> None:
         await send("auto_reply_pending", f"{label}: {conv.partner_name if conv else ''}".strip(),
                    f"„{d.text[:300]}“\n{(conv.ad_title if conv else '') or ''}",
                    data={"conversation_id": d.conversation_id, "draft_id": d.id},
-                   actions=ha_actions.draft_actions(d.id, can_send(d)), tag=ha_actions.tag_for(d.id), fresh=True)
+                   actions=ha_actions.draft_actions(d.id, can_send(d)), tag=ha_actions.tag_for(d.id), fresh=True,
+                   command=True)
 
 
 async def _cmd_auto() -> None:

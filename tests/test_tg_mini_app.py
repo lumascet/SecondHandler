@@ -89,7 +89,8 @@ def test_telegram_buttons_open_the_mini_app(monkeypatch):
     assert tg_link("https://sh.example.org/purchases/new/77") == "https://sh.example.org/tg/purchases/new/77"
     assert tg_link("https://sh.example.org/purchases/new/77?search=3&q=rad") == \
         "https://sh.example.org/tg/purchases/new/77?search=3&q=rad"
-    assert tg_link("https://sh.example.org/purchases/5") == "https://sh.example.org/tg/purchases"
+    assert tg_link("https://sh.example.org/purchases/5") == "https://sh.example.org/tg/purchases/5"   # the order itself
+    assert tg_link("https://sh.example.org/myads?ad=900") == "https://sh.example.org/tg/myads/900"   # the ad itself
     assert menu_url() == "https://sh.example.org/tg"
     monkeypatch.setattr(get_settings(), "public_url", "http://10.0.0.5:8000")
     assert menu_url() is None                                                    # Telegram opens https only

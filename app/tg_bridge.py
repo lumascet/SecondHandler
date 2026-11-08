@@ -81,8 +81,8 @@ def tg_path(url: str) -> str | None:
         return f"/tg/purchases/{m.group(1)}"
     if path == "/purchases":
         return "/tg/purchases"
-    if m := re.fullmatch(r"/purchases/new/([^/]+)", path):
-        return f"/tg/purchases/new/{m.group(1)}"
+    if m := re.fullmatch(r"/purchases/new/([^/]+)", path):     # the buy dialog keeps where it came from
+        return f"/tg/purchases/new/{m.group(1)}" + (f"?{urlencode(one)}" if one else "")
     if path in ("/agents", "/agents/new"):
         return "/tg/agents"
     if m := re.fullmatch(r"/new-ad/(\d+)", path):

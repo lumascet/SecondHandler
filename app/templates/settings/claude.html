@@ -30,8 +30,8 @@
       <div id="s-claude-limit" class="flex flex-wrap items-center justify-between gap-2"><span class="font-medium">{{ _("Token limit") }}</span><small class="text-[12.5px] text-muted">{{ '%.1f'|format(cu.used / 1e6) }} M {{ _("used") }} · {{ '%.1f'|format((cu.limit - cu.used) / 1e6) }} M {{ _("left") }}</small></div>
       {{ ui.bar(cpct, 'brand', 'h-1.5') }}
       <div class="flex min-w-0 flex-wrap items-center gap-3">
-        <input type="range" name="claude_token_limit_m" min="1" max="50" step="1" x-model.number="limit" class="range range-primary range-xs min-w-0 flex-1 basis-40">
-        <label class="input input-sm w-auto shrink-0 gap-1 bg-base-200 pr-2.5"><input name="limit_echo" x-model.number="limit" inputmode="numeric" class="w-12 text-right font-semibold" aria-label="{{ _('Token limit') }}"><span class="text-muted">M</span></label>
+        <input type="range" min="0" max="50" step="1" x-model.number="limit" class="range range-primary range-xs min-w-0 flex-1 basis-40">
+        <label class="input input-sm w-auto shrink-0 gap-1 bg-base-200 pr-2.5"><input name="claude_token_limit_m" x-model.number="limit" inputmode="numeric" class="w-12 text-right font-semibold" aria-label="{{ _('Token limit') }}"><span class="text-muted">M</span></label>
       </div>
       {# the period: rolling, a week by default; the chips fill the field, any number of days 1–90 works #}
       <div id="s-claude-limit-days" class="flex flex-wrap items-center gap-1.5" x-data="{ days: {{ cu.days if cu.days is defined else 7 }} }">

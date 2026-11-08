@@ -206,12 +206,12 @@ async def auto_login(site: str) -> str | None:
             result = "error"
         log.warning("automatic login on %s: %s", site, result)
         set_setting(f"auto_login_{site}_result", result)
-        if result not in ("ok", "already"):
+        if result not in ("ok", "already") and prev not in ("sent", "no_form", "error"):   # once per series
             from app.services.notify import notify
             await notify("health", t("{site} needs you", site=name),
                          t("{site} logged out and the automatic login did not finish (a captcha or a code?) – "
                            "finish it in the browser window.", site=name),
-                         url=f"/settings/{site}?remote={'1' if site == 'willhaben' else site}")
+                         url=f"/settings/{site}?remote={'1' if site == 'willhaben' else site}", tag=f"auto-login-{site}")
         return result
 
 
