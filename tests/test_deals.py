@@ -578,6 +578,8 @@ def test_deals_pages_and_claude_on_post(app_client):
     assert app_client.calls["search"] == 1                                    # ... without willhaben requests
     result = app_client.get(f"/deals/ad/{AD_ID}/result", params={"q": "Bosch GSR 18V-55"}).text   # ... the check loads into it
     assert "Comparable ads" in result and "this ad" in result and "<html" not in result
+    # a pasted link lands here: the way to write to the seller (and make an offer) is on the page, via the ad viewer
+    assert f'data-ad="{AD_ID}" data-deal-message' in result or f'data-ad="willhaben:{AD_ID}" data-deal-message' in result
     assert "Recently checked" in app_client.get(f"/deals/ad/{AD_ID}").text      # the check is remembered
     assert app_client.calls["search"] == 2   # comparables served from cache; +1 for the category navigator (selector)
     assert 'name="cat"' in result and "Automatic (all categories)" in result
