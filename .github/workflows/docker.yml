@@ -192,8 +192,10 @@ jobs:
           }
           # the version's section of CHANGELOG.md at the tag (its heading up to the next version's), else (tags before
           # the changelog) its own file docs/releases/<tag>.md
-          section=$(git show "$TAG:CHANGELOG.md" 2>/dev/null | awk -v h="## SecondHandler $version" \
-            '$0 == h {on = 1} on && /^## SecondHandler / && $0 != h {exit} on' || true)
+          # the heading is "## SecondHandler <version>" or linked to its release, "## [SecondHandler <version>](…)"
+          section=$(git show "$TAG:CHANGELOG.md" 2>/dev/null | awk -v v="$version" \
+            '$0 == "## SecondHandler " v || index($0, "## [SecondHandler " v "](") == 1 {on = 1; print; next}
+             on && /^## / {exit} on' || true)
           written="docs/releases/$TAG.md"
           if [ -z "$section" ] && git cat-file -e "$TAG:$written" 2>/dev/null; then
             section=$(git show "$TAG:$written")

@@ -3,7 +3,7 @@
 What changed in each release of SecondHandler, newest first. The pictures are in `docs/releases/v<version>/`;
 every GitHub release takes its text from its section here.
 
-## SecondHandler 0.5.6
+## [SecondHandler 0.5.6](https://github.com/lumascet/SecondHandler/releases/tag/v0.5.6)
 
 A release about selling on Kleinanzeigen as well and about fixing what an app-wide bug hunt found: an own willhaben ad
 goes onto kleinanzeigen.de with one click or along with its publish, a pasted ad link lets you write to the seller,
@@ -76,7 +76,7 @@ gone.
 - Posting on Kleinanzeigen needs its account logged in in the app's browser and the platform switched on; the price
   analysis uses the Kleinanzeigen app credentials, as the search agents do.
 
-## SecondHandler 0.5.5
+## [SecondHandler 0.5.5](https://github.com/lumascet/SecondHandler/releases/tag/v0.5.5)
 
 A release about chats that stay connected: Kleinanzeigen's chats join willhaben's and Vinted's, Vinted keeps its login
 for good (and logs in again by itself when it does lose it), the VPN no longer locks itself out, and a broad audit of
@@ -164,7 +164,7 @@ the app fixed security, reliability and correctness issues all over.
 - Automatic re-login is on wherever login details are stored; turn it off with the setting `auto_login_vinted` or
   `auto_login_willhaben` = `0`.
 
-## SecondHandler 0.5.4
+## [SecondHandler 0.5.4](https://github.com/lumascet/SecondHandler/releases/tag/v0.5.4)
 
 A release about talking to the sites through their apps' own interfaces: willhaben's account now runs through its
 app API instead of the browser, Vinted's chat actions go through its messaging API, the platform settings pages share
@@ -225,7 +225,7 @@ The browser is no longer willhaben's main way in. SecondHandler now speaks to wi
 - **Publishing without a category asks willhaben first** for the category, during a batch publish.
 - **The browser heals a page that closed under the app**, coming back without waiting for the next request.
 
-## SecondHandler 0.5.3
+## [SecondHandler 0.5.3](https://github.com/lumascet/SecondHandler/releases/tag/v0.5.3)
 
 A release about chats across languages and sites: messages in another language come with a translation, Claude
 answers in the other person's own language, finished conversations step aside, Vinted's messages and shipping
@@ -287,7 +287,7 @@ updates arrive as pushes – and a PayLivery sale of one piece puts the ad onlin
 Nothing to do: new database fields are added at start. Translations and the finished-chat check use Claude
 (Settings → Claude, purpose "Chat replies"); both can be switched off under Settings → Chats.
 
-## SecondHandler 0.5.2
+## [SecondHandler 0.5.2](https://github.com/lumascet/SecondHandler/releases/tag/v0.5.2)
 
 A release about trust and speed: an audit of the whole app (security, auto-buy, chats, product search), Claude
 correcting wrong Geizhals products, a price rating by similar ads with limits you set, new prices for self-built
