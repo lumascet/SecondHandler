@@ -4,5 +4,6 @@
  "{n} more offers found; Claude ranks the next {k} and adds the best below.": "{n} weitere Angebote gefunden; Claude reiht die nächsten {k} und fügt die besten unten an.",
  "No more offers in this search.": "Keine weiteren Angebote in dieser Suche.",
  "Loading more offers failed: {error}": "Weitere Angebote laden ist fehlgeschlagen: {error}",
- "not searched: waiting for the VPN ({why})": "nicht gesucht: wartet auf das VPN ({why})"
+ "not searched: waiting for the VPN ({why})": "nicht gesucht: wartet auf das VPN ({why})",
+ "The check took over {n} min and was stopped": "Die Prüfung dauerte über {n} Min. und wurde abgebrochen"
 }

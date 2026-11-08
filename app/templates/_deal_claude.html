@@ -10,7 +10,7 @@
     </div>
   {% elif res %}
     {% if cl.error or error %}<p class="text-[12.5px] text-muted">{{ _("Claude failed: {error}", error=cl.error or error) }}</p>{% endif %}
-    <button type="button" class="btn btn-sm disabled:opacity-60" hx-post="/deals/ad/{{ res.ad.ad_id }}/claude"
+    <button type="button" class="btn btn-sm disabled:opacity-60" hx-post="/deals/ad/{{ res.ad.platform or 'willhaben' }}/{{ res.ad.ad_id }}/claude"
             hx-vals='{"q": {{ (q or '')|tojson }}, "hit": {{ (hit or '')|string|tojson }}, "cat": {{ (res.category_url or '')|tojson }}, "own": {{ ('1' if res.own_query else '')|tojson }}}'
             hx-target="closest [data-deal-claude]" hx-swap="outerHTML" hx-disabled-elt="this">
       <span class="loading loading-spinner loading-xs hidden busy:inline-block"></span> {{ _("Ask Claude") }}</button>

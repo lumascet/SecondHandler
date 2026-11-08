@@ -515,9 +515,13 @@ def failure_lines(failed: list[tuple[int, str]], n: int) -> list[str]:
 def _apply(hit: Hit, ad: Listing) -> None:
     hit.heading = ad.heading
     hit.body = ad.body
+    keep_old = hit.old_price if (ad.old_price is None and hit.old_price is not None and ad.price is not None
+                                 and hit.old_price > ad.price) else None
     hit.price = ad.price
     hit.price_display = ad.price_display
-    hit.old_price = ad.old_price
+    # most lists name no old price (Kleinanzeigen never, eBay/Vinted/Shpock only a struck-through one): the one stored
+    # at the drop stays while it is still above the price, so the drop's badge does not vanish at the next check
+    hit.old_price = ad.old_price if ad.old_price is not None else keep_old
     hit.location = ad.location
     hit.postcode = ad.postcode
     hit.published_at = ad.published_at or hit.published_at   # Vinted's list has no date: the item page's stays
@@ -610,7 +614,11 @@ def enqueue_run(agent_id: int) -> bool:
         return False
 
     async def run(job) -> str:
-        res = await run_agent(agent_id, job=job)
+        from app.scheduler import AGENT_DEADLINE_S
+        try:                                   # a hanging check would block every later one of the agent
+            res = await asyncio.wait_for(run_agent(agent_id, job=job), AGENT_DEADLINE_S)
+        except asyncio.TimeoutError:
+            raise RuntimeError(t("The check took over {n} min and was stopped", n=AGENT_DEADLINE_S // 60)) from None
         if res.error:
             raise RuntimeError(res.error)
         return _run_summary(res)
@@ -734,7 +742,9 @@ async def _run_agent(agent_id: int) -> RunResult:
                 hit.old_price = prev_price
                 hit.scam_flags = scam.flags(hit, scam_ctx, home_country=_site(hit.platform).home_country) or None   # a new red flag?
                 _mark_scam_issue(hit)
-                if hit.state not in ("ignored", CLEARED):
+                if hit.state == CLEARED:         # cleared by age, still listed and cheaper now: back, as seen
+                    hit.state = "seen"
+                if hit.state != "ignored":
                     res.price_drops.append(hit)
             if ad.is_bumped is True and prev_published and ad.published_at and ad.published_at > prev_published:
                 hit.bumped_count += 1
@@ -835,6 +845,8 @@ async def _run_agent(agent_id: int) -> RunResult:
         good = [h.id for h in res.new if passes(agent, h) and not _unjudged(agent, h, asked)]
         pushed = set(good[:MAX_PUSH_PER_RUN])
         await _shipping_pages([h for h in res.new if h.id in pushed])   # the push names the shipping
+        # its ad page (just read for the shipping) says it is gone or sold: no push for an ad that cannot be bought
+        pushed = {h.id for h in res.new if h.id in pushed and h.site_status not in ("gone", "sold", "expired")}
         for h in res.new:
             if h.id in pushed or h.id not in good:   # rejected hits: HA event only, no push
                 await notify("hit", _scam_prefix(h) + f"{label(h.platform)}: {h.price_display or ''}{_ship_suffix(h)}".strip(" :"),
@@ -852,7 +864,9 @@ async def _run_agent(agent_id: int) -> RunResult:
     if notify_drops and res.price_drops and auto_buy.enabled(agent):   # a price drop into the maximum buys too
         await auto_buy.consider(agent, [h for h in res.price_drops if passes(agent, h) and not _unjudged(agent, h, asked)])
     if notify_drops:
-        for h in res.price_drops[:MAX_PUSH_PER_RUN]:
+        # the drops that push first: rejected ones (an inbox entry only) must not take the push slots
+        drops = sorted(res.price_drops, key=lambda h: not (passes(agent, h) and not _unjudged(agent, h, asked)))
+        for h in drops[:MAX_PUSH_PER_RUN]:
             await notify("price_drop", _scam_prefix(h) + t("{name}: price dropped", name=label(h.platform)),
                          f"{h.heading}: {h.old_price:g} → {h.price:g} {_site(h.platform).currency}{_ship_suffix(h)}"
                          + _scam_line(h)
@@ -927,7 +941,8 @@ def geizhals_passes(agent: SearchAgent, hit: Hit) -> bool:
 
 def passes(agent: SearchAgent, hit: Hit) -> bool:
     """Should this hit push: the screening lets it through, it keeps the Geizhals rule and the distance limit."""
-    return screening.passes(agent, hit) and geizhals_passes(agent, hit) and distance_passes(agent, hit)
+    return (screening.passes(agent, hit) and geizhals_passes(agent, hit) and distance_passes(agent, hit)
+            and not negotiable_only(hit))     # also not later (a price drop, the shipping found): never among the hits
 
 
 def ships(hit: Hit) -> bool:

@@ -97,7 +97,10 @@ async def _follow_up_job(agent_id: int) -> None:
     if is_checking(agent_id):
         return
     with timeline.fresh(actor="scheduler"):
-        await run_agent(agent_id)
+        try:
+            await asyncio.wait_for(run_agent(agent_id), AGENT_DEADLINE_S)
+        except asyncio.TimeoutError:
+            log.warning("agent %s: the follow-up check took over %d min, cut off", agent_id, AGENT_DEADLINE_S // 60)
 
 
 def unschedule_agent(agent_id: int) -> None:
