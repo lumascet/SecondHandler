@@ -120,10 +120,12 @@ def apply_inbox(data: dict[str, Any], incoming: list[str] | None = None) -> list
             row = db.get(Conversation, cid)
             known = row is not None
             row = row or Conversation(id=cid, platform=PLATFORM)
-            if row.removed:
-                continue
             at = _when(c.get("receivedDate"))
             newer = at is not None and (row.last_message_at is None or at > row.last_message_at)
+            if (row.removed or row.hidden_at) and newer and c.get("boundness") == "INBOUND":
+                row.removed, row.hidden_at = False, None        # they wrote again: back in the list, as on willhaben
+            elif row.removed:
+                continue
             name, _uid = _partner(c)
             row.platform = PLATFORM
             row.role = _mine(c) or row.role
@@ -137,9 +139,12 @@ def apply_inbox(data: dict[str, Any], incoming: list[str] | None = None) -> list
             row.synced_at = utcnow()
             db.add(row)
             empty = known and db.exec(select(Message.id).where(Message.conversation_id == cid).limit(1)).first() is None
-            if newer or row.messages_synced_at is None or empty:
+            # read before but not to its newest message (more changed chats than MAX_DETAILS, a failed read): again
+            behind = bool(row.messages_synced_at and row.last_message_at and row.messages_synced_at < row.last_message_at)
+            if newer or row.messages_synced_at is None or empty or behind:
                 changed.append(cid)
-                if incoming is not None and known and c.get("boundness") == "INBOUND" and c.get("unread"):
+                # a brand-new chat too (a buyer's first message): the very first sync of all stays quiet (sync())
+                if incoming is not None and newer and c.get("boundness") == "INBOUND" and c.get("unread"):
                     incoming.append(cid)
         db.commit()
     return changed

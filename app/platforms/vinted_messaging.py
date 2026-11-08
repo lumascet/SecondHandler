@@ -70,7 +70,7 @@ async def browser_turn(sess: Any) -> AsyncIterator[None]:
             yield
         finally:
             try:
-                await seed_from_browser(sess)       # what the page left: a refreshed token, a new datadome cookie
+                await _take_back(sess)              # what the page left: a refreshed token, a new datadome cookie
             finally:
                 _turn.reset(tok)
 
@@ -81,7 +81,9 @@ async def _push_to_browser(sess: Any) -> None:
     from app.platforms.vinted import MSG_API
 
     _load_once()
-    if not _logged_in() or not _alive:            # nothing (or a login that stopped working): the browser's stays
+    # nothing, or a login Vinted refused: the browser's stays (a new login there must not be overwritten). Not
+    # "_alive": after a restart no call has worked yet, but the persisted jar holds the current rotated token
+    if not _logged_in() or _dead & {_jar.get("access_token_web"), _jar.get("refresh_token_web")} - {None}:
         return
     try:
         have = await sess.context.cookies([MSG_API, WEB])
@@ -101,6 +103,21 @@ async def _push_to_browser(sess: Any) -> None:
             await sess.context.add_cookies(put)
     except Exception as e:  # noqa: BLE001 - no browser: the page loads with what it has
         log.info("vinted: cookies not handed to the browser (%s)", type(e).__name__)
+
+
+async def _take_back(sess: Any) -> None:
+    """After a turn: the browser's cookies into the jar, unless the jar holds a newer login than the browser (the
+    browser was not handed it: its older cookies must not replace the rotated token)."""
+    from app.platforms.vinted import MSG_API
+    if _logged_in():
+        try:
+            have = await sess.context.cookies([MSG_API, WEB])
+        except Exception:  # noqa: BLE001 - no browser: nothing to take
+            return
+        browser_tok = next((c.get("value") for c in have if c.get("name") == "access_token_web"), None)
+        if _issued(browser_tok) < _issued(_jar.get("access_token_web")):
+            return
+    await seed_from_browser(sess)
 
 
 def _issued(token: str | None) -> float:

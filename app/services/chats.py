@@ -1406,8 +1406,7 @@ def _auto_ad(conv: Conversation) -> MyAd | None:
     """The own ad whose buyers get automatic answers, if this conversation qualifies."""
     if conv.role != "seller" or not conv.ad_id:
         return None
-    with session() as db:
-        ad = current_ad(db, conv.ad_id)
+    ad = own_ad(conv)                       # a Kleinanzeigen chat by the copy's id, never as a willhaben id
     if ad and (my_ads.is_sold(ad) or ad.status == "deleted"):
         return None   # sold out / given away / gone: no automatic answers (the sold workflow offers a polite draft)
     return ad if ad and ad.auto_reply else None
@@ -1974,9 +1973,10 @@ async def delete(ids: list[str]) -> tuple[list[str], list[str]]:
     a chat of a site without a known delete (Vinted) is not touched there and comes back as `kept` – it is not
     removed here either, so nothing looks deleted that is not. Returns (deleted, kept). Raises when willhaben
     refuses: then nothing is removed."""
-    from app.platforms import vinted_inbox
-    wh = [i for i in ids if not vinted_inbox.is_vinted(i)]
-    kept = [i for i in ids if vinted_inbox.is_vinted(i)]
+    with session() as db:                  # by the chat's site: only willhaben's are deleted there
+        site = {c.id: c.platform or "willhaben" for c in db.exec(select(Conversation).where(col(Conversation.id).in_(ids)))}
+    wh = [i for i in ids if site.get(i, "willhaben") == "willhaben"]
+    kept = [i for i in ids if site.get(i, "willhaben") != "willhaben"]
     if wh:
         await _account().delete_conversations(wh)
         log.info("deleted %d chat(s) on willhaben", len(wh))

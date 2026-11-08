@@ -675,9 +675,22 @@ def pending_start(pid: int) -> bool:
     return f"purchase:{pid}" in jobs.current_keys("purchase:")
 
 
+BEFORE_PAYMENT = ("new", "contacting", "negotiating", "agreed", "meetup", "pay_now", "paused")
+
+
 async def _fail(pid: int, reason: str) -> None:
-    row = _change(pid, lambda r: _move(r, "failed", reason, note=reason))
-    if row is not None:
+    """The order failed – only while no money has moved: a paid, shipped or done order (an error after the payment,
+    e.g. a lost push) keeps its state, so the hooks still follow it into shipping and receipt."""
+    moved: list[bool] = []
+
+    def fail(r: Purchase) -> None:
+        if r.status in BEFORE_PAYMENT:
+            _move(r, "failed", reason, note=reason)
+            moved.append(True)
+        else:
+            _line(r, t("Error after the payment, the order stays {status}: {reason}", status=r.status, reason=reason))
+    row = _change(pid, fail)
+    if row is not None and moved:
         await _push(row, t("Purchase failed"), reason)
 
 

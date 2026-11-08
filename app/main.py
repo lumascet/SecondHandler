@@ -1917,7 +1917,9 @@ async def chat_page(request: Request, conversation_id: str, msg: str | None = No
     return render(request, "chat.html", conv=conv, messages=chats.messages_of(conversation_id),
                   drafts=drafts, msg=msg, live_state=chats.live_state(conversation_id), meetup=meetups.current(conv, drafts), gcal_on=gcal.connected(),
                   sale=sold.state_for(conv), contact_warn=selling.contact_hits(open_draft.text) if open_draft else [],
-                  sale_panel=sold.panel(conv.ad_id, conv.id) if conv.role == "seller" and conv.ad_id else None,
+                  # the sale panel is about the own (willhaben) ad: a chat on another site only when it maps to one
+                  sale_panel=sold.panel(own.ad_id, conv.id) if conv.role == "seller" and (own := chats.own_ad(conv))
+                  and (conv.platform or "willhaben") in ("willhaben", "kleinanzeigen") else None,
                   gcal_duration=gcal.config()["duration"], **await _shipping_ctx(conversation_id, conv, sort),
                   **_chat_list(show_hidden or bool(conv.hidden_at)))
 

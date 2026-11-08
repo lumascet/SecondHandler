@@ -1376,7 +1376,7 @@ def buy_ceiling(conv: Conversation, amount: float) -> float:
     fee), else the confirmed price plus room for those two. The page may have changed since the ad was read (the
     seller raised the price): this is the last look before money moves."""
     from app.services import purchase
-    row = purchase.for_conversation(conv.id) or purchase._latest_for_conversation(conv.id)   # also a paused one
+    row = purchase.for_conversation(conv.id)        # the open one (paused included: OPEN); never an ended order's
     if row is not None and row.max_price:
         return float(row.max_price)
     return round(amount * (1 + BUY_SLACK_SHARE) + BUY_SLACK_EUR, 2)
@@ -1731,6 +1731,8 @@ async def _drive(sess, conv: Conversation, action: str, amount: float | None,
 
 async def _drive_steps(sess, conv: Conversation, action: str, amount: float | None,
                        catch: _LabelCatch | None = None) -> tuple[bool, str]:
+    from app.services import purchase as _purchase
+    open_order = _purchase.for_conversation(conv.id) if action == "buy" else None   # the order this buy is for
     await sess.open_url(_start_url(conv, action))
     page = sess.ui_page
     await _settle(page)
@@ -1768,10 +1770,11 @@ async def _drive_steps(sess, conv: Conversation, action: str, amount: float | No
             if verdict == "refused":
                 return False, _stopped(t("refused to click “{label}” for this action", label=el.get("label") or ""))
             if action == "buy" and verdict == "final":
-                from app.services import purchase as _purchase
                 from app.services.label_buy import page_total
-                order = _purchase._latest_for_conversation(conv.id)
-                if order is not None and order.status in ("cancelled", "failed"):   # taken back while the page loaded
+                # the order open when this buy started, taken back while the page loaded (an order that ended days
+                # ago says nothing about this buy: it refused every manual Buy in that chat)
+                order = _purchase.get(open_order.id) if open_order is not None else None
+                if order is not None and order.status in ("cancelled", "failed"):
                     return False, _stopped(t("the purchase was cancelled – not paying"))
                 total, ceiling = page_total(await _all_text(page)), buy_ceiling(conv, amount or 0)
                 if total is None:

@@ -293,6 +293,16 @@ def not_for_sale(row: MyAd | None) -> str | None:
         return None                      # a renewed ad: its live copy carries the link
     if row.sale_status in ("sold", "reserved"):
         return row.sale_status
+    if row.status in ("Passiv", "passive", "deactivated", "inactive"):
+        # deactivated by the owner: offline on willhaben on purpose, so not for sale on the other sites either.
+        # Right after publishing an ad is "Passiv" too while willhaben reviews it: within REVIEW_WINDOW that stays
+        from datetime import timezone
+
+        from app.services.my_ads import REVIEW_WINDOW
+        pub = row.published_at
+        if pub is not None and utcnow() - (pub if pub.tzinfo else pub.replace(tzinfo=timezone.utc)) > REVIEW_WINDOW:
+            return "deactivated"
+        return None                      # in review, or its age unknown: nothing hidden on a guess
     return row.status if row.status in ("sold", "reserved", "expired", "deleted") else None
 
 

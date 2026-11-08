@@ -315,6 +315,23 @@ async def to_kleinanzeigen(ad_id: str, job: jobs.Job | None = None) -> str:
     return t("„{title}“ is on Kleinanzeigen: {path}", title=plan.title[:60], path=cat)
 
 
+def after_review(ad_id: str) -> None:
+    """A fresh willhaben ad with "also on Kleinanzeigen": it is posted once willhaben's review let it online
+    (my_ads.review_check_job), not before – enqueue() lists only an ad that is for sale."""
+    _set(ad_id, wish="after_review")
+
+
+def review_done(ad_ids: list[str]) -> int:
+    """Ads willhaben let online: the ones waiting for it (after_review) go on Kleinanzeigen now. How many."""
+    n = 0
+    for i in ad_ids:
+        row = _row(i)
+        if (row is not None and _ka(row).get("wish") == "after_review") and enqueue(i):
+            _set(i, wish=None)
+            n += 1
+    return n
+
+
 def enqueue(ad_id: str) -> bool:
     """"List" on the Kleinanzeigen line as a background job (grace: it goes live). False: not an ad of this app, already
     listed or on its way, or waiting for a check."""
@@ -541,6 +558,12 @@ async def _run_all() -> str:
 async def scheduled_sync() -> None:
     """The hourly sync (a quiet job only with linked ads and an account that is not known to be logged out)."""
     from app.services import site_accounts
+    with session() as db:                 # online by another way than the review check (the daily update): due now
+        waiting = [r.ad_id for r in db.exec(select(MyAd).where(col(MyAd.kleinanzeigen).is_not(None),
+                                                                MyAd.status == "active"))
+                   if (r.kleinanzeigen or {}).get("wish") == "after_review"]
+    if waiting and site_accounts.state(PLATFORM)["logged_in"] is not False:
+        review_done(waiting)
     if not _tracked() or site_accounts.state(PLATFORM)["logged_in"] is False:
         return
     await jobs.submit(SYNC_KIND, t("Sync with Kleinanzeigen"), lambda job: _run_all(), quiet=True,

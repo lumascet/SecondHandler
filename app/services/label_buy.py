@@ -584,15 +584,16 @@ async def _act(page, s: Shipment, prep: dict[str, Any], res: dict[str, Any],
         entry["note"] = f"{entry['note']} · {t('click refused: {label}', label=label)}".strip(" ·")
         return applied, None
     entry["action"] = label
-    if _PURCHASE.search(label):
-        total = await _check_price(page, s)
-        shipping.update(s.id, paid_price=total)
-        _active["bought"] = True
+    paying = bool(_PURCHASE.search(label))
+    total = await _check_price(page, s) if paying else None     # checked before the click, recorded after it
     try:
         await prep["where"][idx].locator(f'[data-whact="{idx}"]').first.click(timeout=3000)
     except Exception as e:  # noqa: BLE001 - the next step looks at the page again
         entry["note"] = f"{entry['note']} · click failed: {type(e).__name__}".strip(" ·")
         return applied, None
+    if paying:                         # only a pay click that went through counts as paid (a failed one bought nothing)
+        shipping.update(s.id, paid_price=total)
+        _active["bought"] = True
     await page.wait_for_timeout(SETTLE_MS)
     return applied, item
 

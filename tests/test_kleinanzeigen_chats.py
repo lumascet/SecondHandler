@@ -64,6 +64,8 @@ def box(monkeypatch):
     monkeypatch.setattr(km, "Box", FakeBox)
     monkeypatch.setattr(platforms, "enabled", lambda pid: True)
     monkeypatch.setattr(type(ws.get_session()), "started", property(lambda self: True))
+    from app.services import quiet_hours
+    monkeypatch.setattr(quiet_hours, "state", lambda *a, **k: None)    # not the clock's quiet hours (the test at night)
 
     async def no_ad(cid, force=False):
         return None

@@ -362,8 +362,6 @@ def apply_inbox(data: dict[str, Any], incoming: list[str] | None = None) -> list
             row = db.get(Conversation, cid)
             known = row is not None                    # a chat seen before: its new message is news
             row = row or Conversation(id=cid, platform="vinted")
-            if row.removed:
-                continue
             items = (c.get("data") or {}).get("inventory_items") or [{}]
             item = items[0] or {}
             last = c.get("last_message") or {}
@@ -371,6 +369,11 @@ def apply_inbox(data: dict[str, Any], incoming: list[str] | None = None) -> list
             at = _when(last.get("created_at") or c.get("created_at"))
             newer = at is not None and (row.last_message_at is None or at > row.last_message_at)
             partner = _partner(c)
+            they_wrote = str(last.get("sender_id") or "") == str(partner.get("id") or "-")
+            if (row.removed or row.hidden_at) and newer and they_wrote:
+                row.removed, row.hidden_at = False, None        # they wrote again: back in the list, as on willhaben
+            elif row.removed:
+                continue
             row.platform = "vinted"
             row.ad_id = str(item.get("id")) if item.get("id") else row.ad_id
             row.ad_title = item.get("title") or row.ad_title
@@ -395,7 +398,9 @@ def apply_inbox(data: dict[str, Any], incoming: list[str] | None = None) -> list
                 ~col(Message.ext_id).like("vinted-msg-%"), ~col(Message.ext_id).like("vinted-ev-%")).limit(1)).first() is not None
             no_side = (row.role is None and c.get("conversation_type") == "order"     # its order says the side;
                        and not (row.ad_context or {}).get("side_tried"))                    # tried once
-            if newer or row.messages_synced_at is None or empty or no_side or stale:
+            # read before but not to its newest message (more changed chats than MAX_DETAILS, a failed read): again
+            behind = bool(row.messages_synced_at and row.last_message_at and row.messages_synced_at < row.last_message_at)
+            if newer or row.messages_synced_at is None or empty or no_side or stale or behind:
                 changed.append(cid)
                 partner_wrote = str(last.get("sender_id") or "") == str(partner.get("id") or "-")
                 if incoming is not None and known and partner_wrote and c.get("is_unread_by_current_user"):
@@ -671,9 +676,13 @@ def record_sent(draft_id: int, reply: dict[str, Any]) -> None:
         m = db.exec(select(Message).where(Message.ext_id == f"draft-{draft_id}")).first()
         if m is None:
             return
-        m.ext_id = message_key(reply)
-        m.created_at = _when(reply.get("created_at")) or m.created_at
-        db.add(m)
+        key = message_key(reply)
+        if db.exec(select(Message).where(Message.conversation_id == m.conversation_id, Message.ext_id == key)).first():
+            db.delete(m)                 # the live stream's read stored it under its own id first: no second copy
+        else:
+            m.ext_id = key
+            m.created_at = _when(reply.get("created_at")) or m.created_at
+            db.add(m)
         db.commit()
 
 

@@ -240,5 +240,6 @@
  "willhaben did not show the buyer protection fee – it is estimated from the category": "willhaben hat die Käuferschutzgebühr nicht angezeigt – sie wird nach der Kategorie geschätzt",
  "Counter offer {amount}": "Gegenangebot {amount}",
  "The seller made a PayLivery counter offer. It fits your maximum – accept it in the chat.": "Der Verkäufer hat ein PayLivery-Gegenangebot gemacht. Es passt in deinen Höchstpreis – im Chat annehmen.",
- "The seller made a PayLivery counter offer above your maximum.": "Der Verkäufer hat ein PayLivery-Gegenangebot über deinem Höchstpreis gemacht."
+ "The seller made a PayLivery counter offer above your maximum.": "Der Verkäufer hat ein PayLivery-Gegenangebot über deinem Höchstpreis gemacht.",
+ "Error after the payment, the order stays {status}: {reason}": "Fehler nach der Zahlung, der Auftrag bleibt {status}: {reason}"
 }

@@ -173,6 +173,14 @@ async def buy(pid: int) -> str:
                                      setattr(r, "shipping_source", "ad" if d.shipping_price is not None else r.shipping_source)))
     if why := await seller_doubt(d):
         return await _stop(pid, t("The seller's account is doubtful ({why}) – not bought automatically", why=why))
+    # willhaben's exact fee for this ad (its PayLivery window), as the normal purchase flow reads it – the general
+    # rule (4.5 %) is far off in some categories and let orders over the maximum into the checkout
+    from app.platforms import fees
+    rule = fees.rule("willhaben", d.category_path) or purchase.rule_of()
+    stated = await purchase.stated_fee(row.ad_id, float(d.price))
+    if stated is not None:
+        rule = rule.stated(float(d.price), stated)
+    purchase._change(pid, lambda r: setattr(r, "fee", rule.as_dict()))
     total = _total(pid, d.price)
     row = purchase.get(pid)
     if row.max_price and total > row.max_price + 0.005:
@@ -206,9 +214,12 @@ async def buy(pid: int) -> str:
         _switch_off(row.agent_id)
     row = purchase.get(pid)
     if row is not None and row.status == "paid":
-        await notify("purchase", t("Bought: {title}", title=row.ad_title or row.ad_id),
-                     t("{price} paid with PayLivery", price=_eur(total)), url=row.ad_url, tag=f"wh-autobuy-{pid}",
-                     data=purchase.event_data(row, "bought", total=round(total, 2)))
+        try:                           # paid: a lost push must not turn into an error (the order stays paid)
+            await notify("purchase", t("Bought: {title}", title=row.ad_title or row.ad_id),
+                         t("{price} paid with PayLivery", price=_eur(total)), url=row.ad_url, tag=f"wh-autobuy-{pid}",
+                         data=purchase.event_data(row, "bought", total=round(total, 2)))
+        except Exception as e:  # noqa: BLE001
+            log.warning("auto-buy %s: the 'bought' push failed: %s", pid, e)
         return t("Bought")
     await purchase.pause(pid, t("Auto-buy did not finish: {result}", result=result[:300]), push=True)
     return t("Not bought")

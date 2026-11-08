@@ -1055,8 +1055,9 @@ def _post_on_kleinanzeigen(wh_ad_id: str) -> None:
     from app.services import crosspost_kleinanzeigen
 
     try:
-        if not crosspost_kleinanzeigen.enqueue(wh_ad_id):
-            log.info("ad %s not queued for Kleinanzeigen (nothing to post, or already there)", wh_ad_id)
+        if not crosspost_kleinanzeigen.enqueue(wh_ad_id):       # a fresh ad is still in review: posted once online
+            crosspost_kleinanzeigen.after_review(wh_ad_id)
+            log.info("ad %s goes on Kleinanzeigen once willhaben has it online", wh_ad_id)
     except Exception as e:  # noqa: BLE001
         log.warning("ad %s not queued for Kleinanzeigen: %s", wh_ad_id, e)
 

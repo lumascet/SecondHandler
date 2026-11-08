@@ -1177,6 +1177,8 @@ async def review_check_job() -> None:
     if online:
         log.info("new ads online on willhaben now: %s", ", ".join(online))
         crosspost.schedule_sync_many(online)
+        from app.services import crosspost_kleinanzeigen
+        crosspost_kleinanzeigen.review_done(online)     # "also on Kleinanzeigen" waited for this
 
 
 def start_update(label: str | None = None) -> jobs.Job:
