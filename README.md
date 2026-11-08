@@ -498,9 +498,10 @@ Locally a real Chromium window opens for the login. Use `BROWSER_HEADLESS=1` for
   Container Registry. The default branch gets `latest`, tags `v1.2.3` get `1.2.3` and `1.2`, and every build gets
   `sha-<commit>`. Pull requests build without pushing. To release, bump the version in `app/__init__.py` and
   `pyproject.toml` (the workflow fails when they differ) and push to master: the image is built, `vX.Y.Z` is tagged
-  and a GitHub release is published. Its text is `docs/releases/vX.Y.Z.md` when that file exists (pictures in
-  `docs/releases/vX.Y.Z/`, linked at the tag; `scripts/demo_screenshots.py --out docs/releases/vX.Y.Z --only …` makes
-  them), with the commits folded below; without it, the commits since the previous version. A `vX.Y.Z` tag pushed by
+  and a GitHub release is published. Its text is the version's section of [`CHANGELOG.md`](CHANGELOG.md)
+  (`## SecondHandler X.Y.Z`, newest on top; pictures in `docs/releases/vX.Y.Z/`, linked at the tag;
+  `scripts/demo_screenshots.py --out docs/releases/vX.Y.Z --only …` makes them), with the commits folded below; without
+  a section, the commits since the previous version. A `vX.Y.Z` tag pushed by
   hand gets its image and release too.
 
 How the app talks to willhaben (endpoints, verification status) is documented in `docs/willhaben-api.md`.

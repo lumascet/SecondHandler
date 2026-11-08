@@ -150,10 +150,10 @@ jobs:
 
   # A GitHub release for every version tag that has none: the tag above (a raised version on master) or a tag v*
   # pushed by hand (after its image). Any other push to master checks the current version's tag too, so a release
-  # that failed once (or v0.2.4, tagged before releases existed) is made up for. Notes: the hand-written ones in
-  # docs/releases/v<version>.md when there are some (their pictures in docs/releases/v<version>/, linked at the tag),
-  # with the commits folded below; else the commits since the previous version. Then the image to pull and the
-  # compare link.
+  # that failed once (or v0.2.4, tagged before releases existed) is made up for. Notes: the version's section of
+  # CHANGELOG.md ("## SecondHandler <version>" up to the next one; its pictures in docs/releases/v<version>/, linked at
+  # the tag), for tags before the changelog the file docs/releases/v<version>.md, with the commits folded below; else
+  # the commits since the previous version. Then the image to pull and the compare link.
   release:
     needs: [version, image, tag]
     if: >-
@@ -190,14 +190,21 @@ jobs:
             git log --no-merges --max-count=100 --invert-grep --grep='^Version [0-9.]*$' --format='- %s (%h)' \
               "${prev:+$prev..}$TAG"
           }
+          # the version's section of CHANGELOG.md at the tag (its heading up to the next version's), else (tags before
+          # the changelog) its own file docs/releases/<tag>.md
+          section=$(git show "$TAG:CHANGELOG.md" 2>/dev/null | awk -v h="## SecondHandler $version" \
+            '$0 == h {on = 1} on && /^## SecondHandler / && $0 != h {exit} on' || true)
           written="docs/releases/$TAG.md"
+          if [ -z "$section" ] && git cat-file -e "$TAG:$written" 2>/dev/null; then
+            section=$(git show "$TAG:$written")
+          fi
           {
-            if git cat-file -e "$TAG:$written" 2>/dev/null; then
+            if [ -n "$section" ]; then
               # relative picture links (markdown and <img src>) point at the files as they are at the tag
-              raw="https://raw.githubusercontent.com/$REPO/$TAG/docs/releases"
-              git show "$TAG:$written" | sed -E \
-                -e "s#\]\((\./)?(v[0-9][^)]*)\)#](${raw}/\2)#g" \
-                -e "s#src=\"(\./)?(v[0-9][^\"]*)\"#src=\"${raw}/\2\"#g"
+              raw="https://raw.githubusercontent.com/$REPO/$TAG"
+              printf '%s\n' "$section" | sed -E \
+                -e "s#\]\((\./)?(docs/releases/)?(v[0-9][^)]*)\)#](${raw}/docs/releases/\3)#g" \
+                -e "s#src=\"(\./)?(docs/releases/)?(v[0-9][^\"]*)\"#src=\"${raw}/docs/releases/\3\"#g"
               echo
               echo "<details><summary>All commits</summary>"
               echo
