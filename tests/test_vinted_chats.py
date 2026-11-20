@@ -484,10 +484,12 @@ async def test_an_orders_shipping_update_is_read_and_pushed(monkeypatch):
     monkeypatch.setattr(vinted_inbox, "LOAD_RETRY_S", 0)
     conv = copy.deepcopy(CONV)
     asked = {"conv": 0, "fail": 0}
+    inbox = copy.deepcopy(INBOX)                                         # an order active yesterday (within ORDER_DAYS)
+    inbox["conversations"][0]["last_message"]["created_at"] = (utcnow() - timedelta(days=1)).isoformat()
 
     async def catch(url, part, timeout_ms=0, extra=None, untranslate_cid=None):
         if url.endswith("/inbox"):
-            return copy.deepcopy(INBOX)
+            return copy.deepcopy(inbox)
         asked["conv"] += 1
         if asked["fail"]:
             asked["fail"] -= 1
