@@ -1251,6 +1251,7 @@ async def test_every_candidate_is_ranked_in_batches_and_shown_as_they_come(wh, c
     assert all("Beschreibung der Person" in c["system"] and "Beschreibung der Person" not in c["prompt"] for c in ranks)
     assert row.passed and not {r["ad_id"] for r in row.results} & {p["ad_id"] for p in row.passed}
     assert [r["fit"] for r in row.results] == sorted((r["fit"] for r in row.results), reverse=True)
+    assert row.note is None             # each batch's note speaks of its part only ("only three fit"): not the search's
 
 
 async def test_each_search_pages_up_to_the_chosen_number_per_site(wh, claude, monkeypatch):

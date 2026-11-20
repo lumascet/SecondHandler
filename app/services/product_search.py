@@ -997,7 +997,8 @@ async def _rank_all(search_id: int, description: str, plan: dict[str, Any], card
     """Every card in batches of MAX_CANDIDATES, RANK_PARALLEL batches at a time; after each batch the results so far
     (the ones shown before, then the new ones best first across the batches) and the passed-over offers are stored,
     so the page shows them at once. Returns (results, passed, unseen, note, warning, progress): unseen = cards of
-    batches Claude could not rank; progress with the ranking calls counted (progress["calls"])."""
+    batches Claude could not rank; progress with the ranking calls counted (progress["calls"]). A batch's note speaks
+    of its own part of the offers ("only three of them fit"), so it is the search's note only when there was one batch."""
     batches = [cards[i:i + MAX_CANDIDATES] for i in range(0, len(cards), MAX_CANDIDATES)]
     state = {"before": list(results), "new": [], "passed": list(passed), "unseen": [], "note": "", "warning": None,
              "done": 0, "progress": dict(progress)}
@@ -1020,7 +1021,8 @@ async def _rank_all(search_id: int, description: str, plan: dict[str, Any], card
             fit_keys = {_key(c) for c in got}
             state["passed"] += [{**c, "fit": None, "reason": "", "red_flags": []} for c in batch if _key(c) not in fit_keys]
             state["new"] = _by_fit(state["new"] + got)
-            state["note"] = state["note"] or batch_note
+            if len(batches) == 1:
+                state["note"] = batch_note
         _update(search_id, results=state["before"] + state["new"], passed=state["passed"] or None,
                 progress=state["progress"])
 
