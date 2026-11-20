@@ -1369,3 +1369,11 @@ async def test_a_sites_searches_spread_over_parallel_lanes(wh, fake_site, monkey
     assert {n for n, _ in by_lane} == {"own", "srv2"} and "srv3" not in {n for n, _ in by_lane}
     assert lost_once and all(e["found"] is not None for e in found["per_query"])
     assert found["lanes"] == {"fake": 3}
+
+
+def test_the_geizhals_rule_judges_an_offer_without_a_new_price():
+    """A search with a price zone and an offer Geizhals has no price for: the agents' rule reads fields a product
+    search result does not have (the similar ads' rating); the page broke with a 500 on it."""
+    st = ps.make_settings()
+    st["gh_level"] = "cheap"
+    assert ps.geizhals_passes({"price": 700.0, "title": "Mac mini M4"}, st)

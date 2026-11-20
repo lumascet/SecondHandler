@@ -828,7 +828,8 @@ def geizhals_passes(r: dict[str, Any], settings: dict[str, Any] | None) -> bool:
     if rule is None:
         return True
     gh = r.get("geizhals") if discount(r) is not None else None      # a new price the comparables contradict counts not
-    hit = SimpleNamespace(price=r.get("price"), geizhals=gh, item_condition=r.get("item_condition"), screen_deal=None)
+    hit = SimpleNamespace(price=r.get("price"), geizhals=gh, item_condition=r.get("item_condition"), screen_deal=None,
+                          similar=None)     # every field the agents' rule reads (a missing one is a 500 on the page)
     return search_agents.geizhals_passes(rule, hit)
 
 
