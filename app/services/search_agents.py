@@ -15,6 +15,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import or_
@@ -845,8 +846,14 @@ async def _run_agent(agent_id: int) -> RunResult:
         good = [h.id for h in res.new if passes(agent, h) and not _unjudged(agent, h, asked)]
         pushed = set(good[:MAX_PUSH_PER_RUN])
         await _shipping_pages([h for h in res.new if h.id in pushed])   # the push names the shipping
+        # with the shipping now known, the price rules incl. shipping and the shipping limit judge again
+        new_by_id = {h.id: h for h in res.new}
+        good = [i for i in good if i not in pushed or passes(agent, new_by_id[i])]
+        if late := [new_by_id[i] for i in pushed if i not in good]:
+            _file_screened(agent, late, [], asked)                  # held back by their shipping: to "Filtered"
         # its ad page (just read for the shipping) says it is gone or sold: no push for an ad that cannot be bought
-        pushed = {h.id for h in res.new if h.id in pushed and h.site_status not in ("gone", "sold", "expired")}
+        pushed = {h.id for h in res.new if h.id in pushed and h.id in good
+                  and h.site_status not in ("gone", "sold", "expired")}
         for h in res.new:
             if h.id in pushed or h.id not in good:   # rejected hits: HA event only, no push
                 await notify("hit", _scam_prefix(h) + f"{label(h.platform)}: {h.price_display or ''}{_ship_suffix(h)}".strip(" :"),
@@ -886,11 +893,23 @@ def _site(pid: str | None) -> platforms.Platform:
         return platforms.get("willhaben")
 
 
-def _geizhals_cents(hit: Hit) -> tuple[int, int] | None:
+def _geizhals_cents(hit: Hit, price: float | None = None) -> tuple[int, int] | None:
     """(ad price, Geizhals new price) in whole cents, None without both: whole numbers compare exactly (in floats
-    700 € · 0.7 is 489.99999… €, so an ad exactly 30 % below would miss a 30 % rule)."""
+    700 € · 0.7 is 489.99999… €, so an ad exactly 30 % below would miss a 30 % rule). `price`: the one to compare
+    instead of the ad's (judged_price: with its shipping)."""
+    price = hit.price if price is None else price
     new_price = round(((hit.geizhals or {}).get("price_from") or 0) * 100)
-    return None if new_price <= 0 or hit.price is None else (round(hit.price * 100), new_price)
+    return None if new_price <= 0 or price is None else (round(price * 100), new_price)
+
+
+def judged_price(agent: Any, hit: Any) -> float | None:
+    """The price the agent's price rules compare: with its "price incl. shipping" the item and its shipping, when the
+    ad ships and the shipping price is known; pickup-only ads and an unknown shipping: the item alone."""
+    price, ship = getattr(hit, "price", None), getattr(hit, "shipping_price", None)
+    if price is None or not getattr(agent, "price_with_shipping", None) or ship is None \
+            or getattr(hit, "shipping", None) == shipping_info.PICKUP:
+        return price
+    return price + ship
 
 
 LEVELS = ("bargain", "cheap", "fair")     # the zones an agent's Geizhals rule can ask for (price_zones.NAMES order)
@@ -920,7 +939,8 @@ def geizhals_passes(agent: SearchAgent, hit: Hit) -> bool:
     (Settings → Search & prices → Price rating, used or new by the item's condition) is `geizhals_level` or cheaper. Without a
     Geizhals price (not found, Geizhals unreachable) a zone takes Claude's price verdict (LEVEL_DEAL) when the
     screening gave one. Without the rule, any price to compare or, for a zone, with a defective item: it passes."""
-    cents = _geizhals_cents(hit)
+    price = judged_price(agent, hit)
+    cents = _geizhals_cents(hit, price)
     if not geizhals_rule(agent):
         return True
     if cents is None and agent.geizhals_level in LEVELS and (hit.similar or {}).get("level"):
@@ -933,7 +953,8 @@ def geizhals_passes(agent: SearchAgent, hit: Hit) -> bool:
     if agent.geizhals_level in LEVELS:
         from app.services import deals, price_zones
 
-        lvl = deals.hit_level(hit)
+        lvl = deals.hit_level(SimpleNamespace(geizhals=hit.geizhals, price=price,
+                                              item_condition=getattr(hit, "item_condition", None)))
         return lvl is None or price_zones.NAMES.index(lvl) <= price_zones.NAMES.index(agent.geizhals_level)
     price, new_price = cents
     return price * 100 <= new_price * (100 - agent.geizhals_pct)
@@ -942,7 +963,7 @@ def geizhals_passes(agent: SearchAgent, hit: Hit) -> bool:
 def passes(agent: SearchAgent, hit: Hit) -> bool:
     """Should this hit push: the screening lets it through, it keeps the Geizhals rule and the distance limit."""
     return (screening.passes(agent, hit) and geizhals_passes(agent, hit) and distance_passes(agent, hit)
-            and not negotiable_only(hit))     # also not later (a price drop, the shipping found): never among the hits
+            and shipping_passes(agent, hit) and not negotiable_only(hit))     # also not later (a price drop, the shipping found): never among the hits
 
 
 def ships(hit: Hit) -> bool:
@@ -954,6 +975,14 @@ def pickup_limit(agent: SearchAgent) -> int | None:
     from app.services import geo
 
     return agent.max_km or geo.pickup_radius()
+
+
+def shipping_passes(agent: SearchAgent, hit: Hit) -> bool:
+    """The agent's shipping limit: a known shipping price above it holds the hit back; pickup-only ads and ads whose
+    shipping is not known pass."""
+    most = getattr(agent, "max_shipping", None)
+    ship = getattr(hit, "shipping_price", None)
+    return most is None or ship is None or hit.shipping == shipping_info.PICKUP or ship <= most + 0.005
 
 
 def distance_passes(agent: SearchAgent, hit: Hit) -> bool:
@@ -1097,7 +1126,8 @@ def _unjudged(agent: SearchAgent, h: Hit, asked: set[int]) -> bool:
 def _holds(agent: SearchAgent) -> bool:
     """New hits of this agent are pending until judged: it pushes, and screens, has a Geizhals rule or a distance
     limit."""
-    return bool(agent.notify and (agent.screen or geizhals_rule(agent) or pickup_limit(agent)))
+    return bool(agent.notify and (agent.screen or geizhals_rule(agent) or pickup_limit(agent)
+                                  or agent.max_shipping is not None))
 
 
 def _judges(agent: SearchAgent) -> bool:
@@ -1525,6 +1555,8 @@ def held_back_reasons(agent: SearchAgent | None, h: Hit) -> list[str]:
         out.append(t("Geizhals rule: {rule}", rule=rule))
     if not distance_passes(agent, h):
         out.append(t("pickup only, farther than {n} km", n=pickup_limit(agent)))
+    if not shipping_passes(agent, h):
+        out.append(t("shipping over {price}", price=f"{agent.max_shipping:g} €"))
     return out
 
 

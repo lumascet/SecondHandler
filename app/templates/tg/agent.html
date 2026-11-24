@@ -45,6 +45,7 @@
       <span class="sub">{{ _("Only show and push ads in this price range, measured against the lowest new price on Geizhals. Dearer ones go to “Filtered” without a push. For ads Geizhals does not know, a price range is judged by their similar ads (your limits for similar ads), else by Claude's price verdict (with the screening on); without either they are pushed as usual.") }}</span>
       <select class="field" name="gh_level" aria-label="{{ _('Price range') }}">{% for v, lbl in geizhals_levels() %}<option value="{{ v }}"{% if v == lvl0 %} selected{% endif %}>{{ lbl }}</option>{% endfor %}<option value="pct"{% if lvl0 == 'pct' %} selected{% endif %}>{{ _("Own percentage") }}</option></select>
       <label class="sub">{{ _("% below the Geizhals new price") }} ({{ _("Own percentage") }})<input class="field" type="number" name="gh_pct" min="1" max="95" step="1" value="{{ a.geizhals_pct or 30 }}"></label>
+      <label style="display: flex; align-items: center; justify-content: space-between; gap: 10px"><span class="sub">{{ _("Price incl. shipping (when the ad ships and its shipping is known)") }}</span><input type="checkbox" name="gh_ship" {% if a.price_with_shipping %}checked{% endif %} style="width: 22px; height: 22px"></label>
     </div>
 
     {# distance: pickup-only ads farther from home go to "Filtered"; ads that ship always pass #}
@@ -54,6 +55,15 @@
       <span class="sub">{{ _("Ads that can only be picked up are shown and pushed only within this distance from your address (Settings → Shipping & pickup). Ads that ship always pass, so do ads without a known place.") }}</span>
       <label class="sub">{{ _("km from home") }}<input class="field" type="number" name="max_km" min="1" max="2000" step="1" value="{{ a.max_km or 30 }}"></label>
       {% if not home_address() %}<span style="font-size: 13px; color: #B07800">{{ _("No address set yet") }}</span>{% endif %}
+    </div>
+
+    {# shipping limit: hits whose known shipping costs more go to "Filtered"; pickup and unknown shipping pass #}
+    <div class="sh">{{ _("Limit the shipping") }}</div>
+    <div class="sec" style="padding: 10px 14px; display: flex; flex-direction: column; gap: 8px" data-shipping-limit>
+      <input type="hidden" name="ship_shown" value="1">
+      <label style="display: flex; align-items: center; justify-content: space-between; gap: 10px"><span>{{ _("Limit the shipping") }}</span><input type="checkbox" name="ship_on" {% if a.max_shipping is not none %}checked{% endif %} style="width: 22px; height: 22px"></label>
+      <span class="sub">{{ _("Ads whose shipping costs more than this are shown under “Filtered” without a push. Ads for pickup and ads whose shipping is not known pass.") }}</span>
+      <label class="sub">{{ _("Maximum shipping in euros") }}<input class="field" type="text" inputmode="decimal" name="max_shipping" value="{{ ('%.2f'|format(a.max_shipping)).rstrip('0').rstrip('.') if a.max_shipping is not none else '10' }}"></label>
     </div>
 
     {# auto-buy: a passing hit within the maximum is bought with PayLivery after a countdown (app/services/auto_buy.py) #}

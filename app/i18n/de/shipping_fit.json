@@ -5,5 +5,13 @@
  "too big: length + girth {cm} cm > {max} cm": "zu groß: Länge + Gurtmaß {cm} cm > {max} cm",
  "too big: {size} cm > {max} cm": "zu groß: {size} cm > {max} cm",
  "parcel size missing": "Paketmaße fehlen",
- "The size is Claude's generous estimate. Enter the real size of the packed parcel above and more options may fit.": "Die Maße sind eine großzügige Schätzung von Claude. Trag oben die echten Maße des verpackten Pakets ein, dann passen eventuell mehr Optionen."
+ "The size is Claude's generous estimate. Enter the real size of the packed parcel above and more options may fit.": "Die Maße sind eine großzügige Schätzung von Claude. Trag oben die echten Maße des verpackten Pakets ein, dann passen eventuell mehr Optionen.",
+ "Price incl. shipping (when the ad ships and its shipping is known)": "Preis inkl. Versand (wenn die Anzeige verschickt und der Versand bekannt ist)",
+ "Limit the shipping": "Versand begrenzen",
+ "Ads whose shipping costs more than this are shown under “Filtered” without a push. Ads for pickup and ads whose shipping is not known pass.": "Anzeigen mit teurerem Versand landen ohne Push unter „Gefiltert“. Anzeigen zur Abholung und solche ohne bekannte Versandkosten gehen durch.",
+ "Maximum shipping in euros": "Höchste Versandkosten in Euro",
+ "shipping": "Versand",
+ "incl. shipping": "inkl. Versand",
+ "shipping up to {price}": "Versand bis {price}",
+ "shipping over {price}": "Versand über {price}"
 }

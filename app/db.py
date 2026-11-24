@@ -60,6 +60,9 @@ class SearchAgent(SQLModel, table=True):
     plan: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))   # {max_price, must_have, nice_to_have, exclude, summary}
     search_id: int | None = None        # origin ProductSearch
     max_km: int | None = None           # pickup-only hits farther from home than this are held back; None = any
+    # the price rules (Geizhals %, price zone) compare item + shipping when the ad ships and the shipping is known
+    price_with_shipping: bool | None = None
+    max_shipping: float | None = None   # hits whose known shipping costs more are held back; None = any
 
 
 class Hit(SQLModel, table=True):

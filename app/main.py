@@ -837,6 +837,8 @@ async def agents_edit(agent_id: int, name: str = Form(...), interval_min: int = 
                       add_price_from: list[str] = Form([]), add_price_to: list[str] = Form([]),
                       gh_on: str | None = Form(None), gh_pct: str = Form(""), gh_level: str = Form("pct"),
                       gh_check: str | None = Form(None), km_on: str | None = Form(None), max_km: str = Form(""),
+                      ship_shown: str = Form(""), gh_ship: str | None = Form(None), ship_on: str | None = Form(None),
+                      max_shipping: str = Form(""),
                       auto_buy_shown: str = Form(""), auto_buy_on: str | None = Form(None), auto_buy_max: str = Form("")):
     from app.services import search_agents
 
@@ -862,6 +864,10 @@ async def agents_edit(agent_id: int, name: str = Form(...), interval_min: int = 
         a.geizhals_pct = min(max(int(pct if pct is not None else 30), 1), 95) if gh_on and not level else None
         km = _num_or_none(max_km)      # pickup only within this distance from home
         a.max_km = min(max(int(km if km is not None else 30), 1), 2000) if km_on else None
+        if ship_shown:                 # a form with the shipping fields (another form leaves them as they are)
+            a.price_with_shipping = bool(gh_ship)
+            ship = _num_or_none(max_shipping)  # hits whose shipping costs more are held back (0 = free shipping only)
+            a.max_shipping = round(min(max(float(ship if ship is not None else 10), 0), 1000), 2) if ship_on else None
         if auto_buy_shown:             # a form with the auto-buy fields (another form leaves them as they are)
             most = _num_or_none(auto_buy_max)
             if auto_buy_on and not (most and most > 0):
