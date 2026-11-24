@@ -921,7 +921,7 @@ async def _push(conv: Conversation, state: dict[str, Any], msg: Message) -> None
 
     try:
         await notify("paylivery", t("PayLivery: {stage}", stage=stage_label(state.get("stage"))),
-                     _push_body(state), url=f"{_base()}/chats/{conv.id}#paylivery",
+                     _push_body(state, conv), url=f"{_base()}/chats/{conv.id}#paylivery",
                      data=_event_data(conv, state.get("stage"), state.get("role"), state.get("offer") or state.get("amount")))
     except Exception as e:  # noqa: BLE001 - a failed push never breaks the sync
         log.warning("PayLivery push failed: %s", e)
@@ -935,11 +935,23 @@ def _event_data(conv: Conversation, stage: str | None, role: str | None, amount:
     return {k: v for k, v in data.items() if v is not None}
 
 
-def _push_body(state: dict[str, Any]) -> str:
+def _push_body(state: dict[str, Any], conv: Conversation | None = None) -> str:
+    """The site and the ad first ("willhaben · Kinderbuch": which offer this is, with several sales open), then the
+    amount and the deadline, else the next step."""
     parts = [_money(state.get("offer") or state.get("amount")) or ""]
     if state.get("deadline"):
         parts.append(t("Deadline {date}", date=_date_text(state["deadline"])))
-    return " · ".join(p for p in parts if p) or next_step(state.get("role") or "seller", state.get("stage"))
+    what = " · ".join(p for p in parts if p) or next_step(state.get("role") or "seller", state.get("stage"))
+    if conv is None:
+        return what
+    from app import platforms
+    try:
+        site = platforms.get(getattr(conv, "platform", None) or "willhaben").name
+    except Exception:  # noqa: BLE001 - an unknown site still names the ad
+        site = getattr(conv, "platform", None) or "willhaben"
+    title = (getattr(conv, "ad_title", None) or (getattr(conv, "ad_context", None) or {}).get("title") or "").strip()
+    head = f"{site} · {title}" if title else site
+    return f"{head}\n{what}"
 
 
 def _base() -> str:

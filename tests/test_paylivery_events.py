@@ -46,14 +46,21 @@ class HookCalls(list):
         self.states: list[dict] = []
 
 
+class _Sent(list):
+    """The pushes' titles; their texts in .bodies."""
+    def __init__(self):
+        super().__init__()
+        self.bodies = []
+
+
 @pytest.fixture
 def pushes(monkeypatch):
-    sent = []
-
     async def fake_notify(kind, title, message, **kw):
         sent.append(title)
+        sent.bodies.append(message)
         return True
 
+    sent = _Sent()
     monkeypatch.setattr("app.services.notify.notify", fake_notify)
     return sent
 
@@ -303,6 +310,7 @@ async def test_the_three_notices_of_a_buy_now_purchase_give_released(hooks, push
     assert st["applied"] == ["n1", "n2", "n3"]
     assert hooks == [("cb", "paid"), ("cb", "released")]
     assert pushes == ["PayLivery: Paid", "PayLivery: Released for shipping"]
+    assert all(b.startswith("willhaben · Kinderbuch\n") for b in pushes.bodies)     # which ad, on which site
     card = paylivery.card(_conv())
     assert card["stage"] == "released" and [a["name"] for a in card["actions"]] == ["problem"]
 
