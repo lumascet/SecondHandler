@@ -383,3 +383,74 @@ async def test_own_ads_running_past_the_page_cap_are_an_error():
     own.page = FakePage(kl.OWN_ADS_URL, answers=answers)
     with pytest.raises(kl.ListingError, match="past"):
         await own.list()
+
+
+# ------------------------------------------------------------------ the category picker, in a real browser
+# A made-up form after the site's redesign as kleinanzeigen-bot reads it: the link opens a native <dialog open> (no
+# role attribute) a moment later, first with only "Alle Kategorien", each choice with an sr-only suffix.
+PICKER_FORM = """<!doctype html><meta charset="utf-8">
+<span id="ad-category-path"></span><a href="#" aria-describedby="ad-category-path" id="open">Ändern</a>
+<dialog id="d"><h2>Kategorie wählen</h2><ul id="list"></ul><button id="apply">Übernehmen</button></dialog>
+<script>
+const tree = {"Alle Kategorien": {"Elektronik": {"Haushaltsgeräte": null, "Weitere Elektronik": null},
+                                  "Haus & Garten": {"Werkzeug": null}}};
+let level = tree;
+function render() {
+  const ul = document.getElementById("list"); ul.innerHTML = "";
+  for (const k of Object.keys(level)) {
+    const li = document.createElement("li"), b = document.createElement("button");
+    b.innerHTML = k + (level[k] ? '<span class="sr-only">, öffnet Unterkategorien</span>' : "")
+                    + '<svg aria-hidden="true"><text>›</text></svg>';
+    b.onclick = () => { if (level[k]) { level = level[k]; render(); } else { b.setAttribute("aria-pressed", "true"); } };
+    li.append(b); ul.append(li);
+  }
+}
+document.getElementById("open").onclick = e => {
+  e.preventDefault();
+  setTimeout(() => { document.getElementById("d").show(); render(); }, 1200);   // later than the old fixed 800 ms
+};
+document.getElementById("apply").onclick = () => document.getElementById("d").close();
+</script>"""
+
+
+@pytest.fixture
+async def browser_page():
+    pw_mod = pytest.importorskip("playwright.async_api")
+    async with pw_mod.async_playwright() as pw:
+        browser = None
+        for kwargs in ({}, {"channel": "chrome"}):              # bundled Chromium, else the installed Google Chrome
+            try:
+                browser = await pw.chromium.launch(**kwargs)
+                break
+            except Exception:  # noqa: BLE001 - not installed under this name
+                continue
+        if browser is None:
+            pytest.skip("no Chromium or Google Chrome for Playwright")
+        page = await browser.new_page()
+        await page.set_content(PICKER_FORM)
+        yield page
+        await browser.close()
+
+
+async def test_the_native_category_dialog_opens_and_is_walked(browser_page):
+    up = kl.Upload()
+    up.page = browser_page
+    labels = await up.open_category_dialog()
+    assert labels == ["Elektronik", "Haus & Garten"]            # past "Alle Kategorien", without the sr-only suffix
+    assert await up.choose_category("Elektronik") == ["Haushaltsgeräte", "Weitere Elektronik"]
+    assert await up.choose_category("Weitere Elektronik") is None    # a leaf: the level stays
+    await up.apply_category()
+    assert not await browser_page.locator("dialog[open]").count()
+
+
+async def test_no_picker_is_still_an_error(browser_page):
+    await browser_page.set_content("<a href='#' aria-describedby='ad-category-path'>Ändern</a>")
+    up = kl.Upload()
+    up.page = browser_page
+    kl_wait = kl.CATEGORY_OPEN_MS
+    try:
+        kl.CATEGORY_OPEN_MS = 500
+        with pytest.raises(kl.ListingError):
+            await up.open_category_dialog()
+    finally:
+        kl.CATEGORY_OPEN_MS = kl_wait

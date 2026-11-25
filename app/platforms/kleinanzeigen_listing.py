@@ -5,9 +5,13 @@ The site's flow as read from the open-source kleinanzeigen-bot (Second-Hand-Frie
 publishing_form.py, publishing_submission.py, published_ads.py, delete_flow.py, reserve_flow.py; read 2026-11-06):
   form      https://www.kleinanzeigen.de/p-anzeige-aufgeben-schritt2.html, logged in (else the login page). The form is
             filled in one session and never reloaded: a category change resets it, so the category comes first.
-  category  typing the text (#ad-description) detects one; #ad-category-path shows it. To set another: the link
-            a[aria-describedby=ad-category-path] opens "Kategorie wählen" (a dialog, one level of labels at a time, then
-            "Übernehmen"); a redesigned variant is fieldset#ad-category-picker with radio labels.
+  category  seen live 2026-11-25: the site suggests categories from the TITLE, not the text, as radio labels in
+            fieldset#ad-category-picker ("Elektronik → Weitere Elektronik"); there is no #ad-category-path. Without a
+            title the link "Wähle deine Kategorie" (with one: "Andere Kategorie wählen", after a choice: "Kategorie
+            ändern", a[aria-describedby=ad-category-path]) opens "Kategorie wählen": a native <dialog open> without a
+            role attribute, one level of ul > li > button choices at a time, each with an sr-only ", öffnet
+            Unterkategorien"; below the first level a breadcrumb nav (ol li > button "Alle Kategorien") leads back. A
+            leaf is a button with aria-pressed: clicking it marks it, the level stays, "Übernehmen" is enabled.
   condition a dialog from button[data-kab-condition-trigger=true], a radio per value (new, like_new, ok, alright,
             defect), "Bestätigen". Categories without the attribute have no trigger: nothing is set.
   price     #ad-price-type opens the menu #ad-price-type-menu-option-N (FIXED 0, NEGOTIABLE 1, GIVE_AWAY 2); the amount
@@ -65,7 +69,20 @@ OWN_ADS_PAGES = 50
 PHOTO_MARKERS = "input[name^='adImages'][name$='.url']"
 CAPTCHA = ("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], iframe[src*='cloudflare'], iframe[src*='arkose'], "
            ".g-recaptcha")
-CATEGORY_DIALOG = '[role="dialog"]:not([aria-hidden="true"])'
+# the category picker: a native <dialog open> (no role attribute) or an ARIA dialog, titled "Kategorie wählen"
+CATEGORY_DIALOG = ':is(dialog[open], [role="dialog"]:not([aria-hidden="true"]))'
+CATEGORY_TITLE = re.compile(r"Kategorie wählen|Choose category")
+# a level's choices: ul > li > button. Below the first level the dialog also shows a breadcrumb (nav ol li > button
+# "Alle Kategorien /"), a way back that is not a choice (seen live 2026-11-25)
+CATEGORY_CHOICES = "ul > li > button"
+CATEGORY_OPEN_MS = 8000                  # how long the picker may take to show its first level after the click
+ALL_CATEGORIES = "alle kategorien"       # a generic entry some sessions show alone at the first level
+# a choice's label without its screen-reader-only suffix (", öffnet Unterkategorien") and decorative parts
+CHOICE_LABELS_JS = """els => els.map(el => {
+  const c = el.cloneNode(true);
+  for (const p of c.querySelectorAll('.sr-only, [aria-hidden="true"]')) p.remove();
+  return (c.textContent || '').replace(/\\s+/g, ' ').trim();
+})"""
 CATEGORY_RADIOS = "#ad-category-picker"
 UPSELL_BUTTONS = ("Ohne Top-Anzeige weiter", "Ohne Hochschieben weiter")
 PAID_MARKERS = ("Nächster Schritt", "#myftr-shppngcrt-frm")
@@ -412,35 +429,67 @@ class Upload(_Tab):
             if not await link.count():
                 link = self.page.locator("a").filter(has_text="Kategorie").first
             await link.click()
-            await self.page.wait_for_timeout(800)
-        labels = await self._labels()
+        labels = await self._wait_labels(CATEGORY_OPEN_MS)
+        if len(labels) == 1 and norm_label(labels[0]) == ALL_CATEGORIES:
+            labels = await self.choose_category(labels[0]) or labels
         if not labels:
+            await self._log_no_picker()
             raise ListingError(t("the category list did not open"))
         log.info("kleinanzeigen form: category level has %d options", len(labels))
         return labels
 
-    def _level(self) -> str:
-        """The selector of the current level's labels: the dialog's buttons, else the radio variant's labels."""
-        return f"{CATEGORY_DIALOG} li > button"
+    async def _wait_labels(self, timeout_ms: int) -> list[str]:
+        """The current level's labels, polled until they show or the time is up (the picker renders after the click)."""
+        waited = 0
+        while True:
+            labels = await self._labels()
+            if labels or waited >= timeout_ms:
+                return labels
+            await self.page.wait_for_timeout(250)
+            waited += 250
+
+    async def _log_no_picker(self) -> None:
+        """What the page shows instead of a picker, for the next fix (the selectors are not verified live)."""
+        counts = {}
+        for sel in ("dialog[open]", '[role="dialog"]', CATEGORY_RADIOS, '[id^="cat_"]', "#ad-category-path"):
+            try:
+                counts[sel] = await self.page.locator(sel).count()
+            except Exception:  # noqa: BLE001 - diagnostics only
+                counts[sel] = "?"
+        log.warning("kleinanzeigen form: no category picker at %s; %s", self.page.url, counts)
+
+    def _choices(self):
+        """The locators that may hold the current level's choices, the likeliest first: the titled dialog's buttons,
+        any open dialog's buttons, the radio variant's labels."""
+        dialogs = self.page.locator(CATEGORY_DIALOG)
+        return (dialogs.filter(has_text=CATEGORY_TITLE).locator(CATEGORY_CHOICES),
+                dialogs.locator(CATEGORY_CHOICES),
+                self.page.locator(f"{CATEGORY_RADIOS} label"))
+
+    async def _current(self):
+        """(locator, labels in the locator's order, empty ones included) of the first place with any label."""
+        for loc in self._choices():
+            try:
+                texts = await loc.evaluate_all(CHOICE_LABELS_JS)
+            except Exception:  # noqa: BLE001 - not rendered (yet)
+                continue
+            if any(texts):
+                return loc, texts
+        return None, []
 
     async def _labels(self) -> list[str]:
-        for sel in (self._level(), f"{CATEGORY_RADIOS} label"):
-            texts = [" ".join(x.split()) for x in await self.page.locator(sel).all_inner_texts()]
-            texts = [x for x in texts if x]
-            if texts:
-                return texts
-        return []
+        _, texts = await self._current()
+        return [x for x in texts if x]
 
     async def choose_category(self, label: str) -> list[str] | None:
         """Click one label of the current level. Returns the next level's labels, or None at a leaf (the level did
         not change: the choice is the category, apply_category takes it)."""
-        before = await self._labels()
-        sel = self._level() if await self._visible(CATEGORY_DIALOG) else f"{CATEGORY_RADIOS} label"
-        options = await self.page.locator(sel).all_inner_texts()
-        hit = next((i for i, o in enumerate(options) if norm_label(o) == norm_label(label)), None)
-        if hit is None:
+        loc, options = await self._current()
+        before = [x for x in options if x]
+        hit = next((i for i, o in enumerate(options) if o and norm_label(o) == norm_label(label)), None)
+        if loc is None or hit is None:
             raise ListingError(t("no option '{label}' in the category dialog", label=label))
-        await self.page.locator(sel).nth(hit).click()
+        await loc.nth(hit).click()
         await self.page.wait_for_timeout(700)
         after = await self._labels()
         log.info("kleinanzeigen form: category %r chosen", label)
