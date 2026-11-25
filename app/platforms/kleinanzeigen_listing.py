@@ -146,12 +146,55 @@ class Plan:
     price: float | None
     price_type: str                      # FIXED | NEGOTIABLE | GIVE_AWAY
     condition: str | None                # the form's code: new | like_new | ok | defect; None = no condition set
-    shipping: bool                       # shipping possible (else pickup only)
+    shipping: bool                       # the item ships (willhaben's handover), whatever the form is told
     zip: str | None
     category: list[str] = field(default_factory=list)   # labels, root first; empty = keep the site's detection
     photos: list[str] = field(default_factory=list)     # local file paths
     price_note: str | None = None        # why this price (the Kleinanzeigen analysis's note), kept on the ad
     wh_price: float | None = None        # willhaben's price of the same ad, for "x % above willhaben" on My ads
+    ship_mode: str = "kleinanzeigen"     # SHIP_MODES: how a shipping item is offered on Kleinanzeigen
+
+    @property
+    def form_shipping(self) -> bool:
+        """"Versand möglich" on the form: only Kleinanzeigen's own shipping (Hermes/DHL, sent from Germany); own
+        shipping and pickup are "Nur Abholung" on the form (own shipping is the note in the text)."""
+        return self.shipping and self.ship_mode == "kleinanzeigen"
+
+
+# How an item that ships is offered on Kleinanzeigen. Private ads there have no shipping at the seller's own price any
+# more (seen live 2026-11-25; kleinanzeigen-bot: "Individual shipping ... is no longer supported"): "Versand möglich"
+# is Kleinanzeigen's Hermes/DHL, sent from Germany. Own shipping (from Austria) is therefore "Nur Abholung" on the
+# form and a note at the end of the text with the price for the parcel's size.
+SHIP_MODES = ("own", "pickup", "kleinanzeigen")
+SHIP_SIZES = ("small", "medium", "large")
+# willhaben's PayLivery sizes (insert.PARCEL_SIZES) as the three amounts of the setting
+SIZE_OF_PAYLIVERY = {"XS": "small", "S": "small", "M": "medium", "L": "large"}
+
+
+def ship_size(paylivery_size: str | None) -> str | None:
+    """The setting's size (small / medium / large) of a willhaben PayLivery size; None when unknown (never guessed)."""
+    return SIZE_OF_PAYLIVERY.get(str(paylivery_size or "").strip().upper())
+
+
+def eur(amount: float) -> str:
+    """7.5 -> "7,50 €" (German format, as in the ad text)."""
+    return f"{amount:,.2f}".replace(",", " ").replace(".", ",").replace(" ", ".") + " €"
+
+
+def shipping_note(size: str | None, amounts: dict[str, float | None]) -> str:
+    """The text's note for own shipping: the amount for the parcel's size, or "nach Absprache" when the size or its
+    amount is unknown. German: it is part of the ad."""
+    amount = amounts.get(size) if size else None
+    if amount:
+        return f"Versand aus Österreich möglich: {eur(float(amount))} (Versand durch mich, nicht über Kleinanzeigen)."
+    return "Versand aus Österreich nach Absprache möglich."
+
+
+def with_note(text: str, note: str | None) -> str:
+    """The text with the note at its end; the text is cut first, so the note survives the 4000-character limit."""
+    if not note:
+        return _cut(text, DESCRIPTION_MAX)
+    return f"{_cut(text, DESCRIPTION_MAX - len(note) - 2).rstrip()}\n\n{note}"
 
 
 def ad_url(ad_id: str) -> str:
@@ -175,25 +218,29 @@ def _cut(text: str, limit: int) -> str:
 
 
 def build_plan(*, title: str, description: str, price: float | None, condition_value: str | None,
-               shipping: bool, zip_code: str | None, photos: list[str], category: tuple[str, ...] | list[str] = ()) -> Plan:
+               shipping: bool, zip_code: str | None, photos: list[str], category: tuple[str, ...] | list[str] = (),
+               ship_mode: str = "kleinanzeigen", ship_note: str | None = None) -> Plan:
     """The ad as the posting form takes it. The title is cut to 65 characters, the text to 4000. A price of 0 or none
-    is a giveaway (GIVE_AWAY, no amount), any other price is a fixed price. Raises ListingError when the ad cannot
-    be posted as it is: a title under 10 characters, no text, no photo."""
+    is a giveaway (GIVE_AWAY, no amount), any other price is a fixed price. A shipping item offered with own shipping
+    gets `ship_note` at the end of its text. Raises ListingError when the ad cannot be posted as it is: a title under
+    10 characters, no text, no photo."""
     clean_title = _cut(" ".join(str(title or "").split()), TITLE_MAX)
     if len(clean_title) < TITLE_MIN:
         raise ListingError(t("the title needs {n} characters at least", n=TITLE_MIN))
-    text = _cut(str(description or "").strip(), DESCRIPTION_MAX)
+    text = str(description or "").strip()
     if not text:
         raise ListingError(t("the ad needs a text"))
     files = [str(p) for p in photos or [] if p][:MAX_PHOTOS]
     if not files:
         raise ListingError(t("a Kleinanzeigen ad needs at least one photo"))
+    mode = ship_mode if ship_mode in SHIP_MODES else "kleinanzeigen"
+    text = with_note(text, ship_note if shipping and mode == "own" else None)
     amount = float(price) if price else None
     return Plan(title=clean_title, description=text, price=amount,
                 price_type="FIXED" if amount else "GIVE_AWAY",
                 condition=condition_code(condition_value), shipping=bool(shipping),
                 zip=(str(zip_code).strip() or None) if zip_code else None,
-                category=[str(c) for c in category or []], photos=files)
+                category=[str(c) for c in category or []], photos=files, ship_mode=mode)
 
 
 def _price(value: Any) -> float | None:
@@ -221,7 +268,7 @@ def _zustand(ad: dict[str, Any]) -> str | None:
 
 
 def plan_from_willhaben(ad: dict[str, Any], shipping: dict[str, Any] | None, photos: list[str],
-                        zip_code: str | None) -> Plan:
+                        zip_code: str | None, ship_mode: str = "kleinanzeigen", ship_note: str | None = None) -> Plan:
     """The plan of a willhaben ad (insert.copy_plan's "ad" and "shipping"). The category is left to the site's own
     detection: willhaben's category tree does not name Kleinanzeigen's categories. The condition is the willhaben
     label's value (condition.from_text: "Gebraucht" is used); shipping is possible when the handover includes it."""
@@ -233,7 +280,7 @@ def plan_from_willhaben(ad: dict[str, Any], shipping: dict[str, Any] | None, pho
     return build_plan(title=str(ad.get("heading") or ""), description=insert.description_text(ad.get("description")),
                       price=_price(ad.get("price")), condition_value=value,
                       shipping=bool(handover in ("shipping", "both") or ship.get("shipping") is True),
-                      zip_code=zip_code, photos=list(photos or []))
+                      zip_code=zip_code, photos=list(photos or []), ship_mode=ship_mode, ship_note=ship_note)
 
 
 def ad_id_from_url(url: str | None) -> str | None:
@@ -610,7 +657,7 @@ class Upload(_Tab):
             log.info("kleinanzeigen form: category as the site detected it: %s", await self.detected_category())
         await self.set_condition(plan.condition)
         await self.set_price(plan.price_type, plan.price)
-        await self.set_shipping(plan.shipping)
+        await self.set_shipping(plan.form_shipping)
         await self.set_zip(plan.zip)
         await self.photos(plan.photos)
 

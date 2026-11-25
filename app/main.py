@@ -2126,7 +2126,9 @@ async def myads_page(request: Request, msg: str | None = None, show_hidden: bool
                   hidden_count=len(hidden), show_hidden=show_hidden, sold_count=len(sold), show_sold=show_sold,
                   inactive_count=len(inactive), show_inactive=show_inactive, sections=sections,
                   vinted_ok=site_accounts.state("vinted")["logged_in"] is not False,   # unknown: try it
-                  ka_ok=crosspost_kleinanzeigen.available())
+                  ka_ok=crosspost_kleinanzeigen.available(), ka_ship_default=crosspost_kleinanzeigen.ship_setting(),
+                  ka_ship_labels={"own": t("Own shipping"), "pickup": t("Pickup only"),
+                                  "kleinanzeigen": t("Kleinanzeigen shipping")})
 
 
 def _hx(request: Request) -> bool:
@@ -2445,6 +2447,9 @@ async def myads_vinted_sync(request: Request, ad_id: str):
 async def myads_kleinanzeigen(request: Request, ad_id: str):
     """The own ad on Kleinanzeigen through its posting form, as a background job (services/crosspost_kleinanzeigen.py)."""
     from app.services import crosspost_kleinanzeigen
+    form = await request.form()
+    if "ship" in form:                          # the List form's shipping choice: kept on the ad, empty = the setting
+        crosspost_kleinanzeigen.set_ship(ad_id, str(form.get("ship") or ""))
     return _queued(request, 1 if crosspost_kleinanzeigen.enqueue(ad_id) else 0)
 
 
@@ -3735,8 +3740,15 @@ def _platform_row(p: Any) -> dict[str, Any]:
             "auth_env": (get_settings().kleinanzeigen_api_auth.strip() if p.id == "kleinanzeigen"
                          and st.get("auth_source") == "env" else ""),
             "fb_location": _fb_location() if p.id == "facebook" else None,
-            "ka_post": {"default": get_setting("kleinanzeigen_post_default") == "1",
-                        "zip": get_setting("kleinanzeigen_zip")} if p.id == "kleinanzeigen" else None}
+            "ka_post": _ka_post() if p.id == "kleinanzeigen" else None}
+
+
+def _ka_post() -> dict[str, Any]:
+    """The Kleinanzeigen posting card: the default box, the postcode and how a shipping item is offered there."""
+    from app.services import crosspost_kleinanzeigen as cka
+    return {"default": get_setting("kleinanzeigen_post_default") == "1", "zip": get_setting("kleinanzeigen_zip"),
+            "ship_mode": cka.ship_setting(),
+            "ship": {size: get_setting(f"kleinanzeigen_ship_{size}").replace(".", ",") for size in ("small", "medium", "large")}}
 
 
 def _fb_location() -> dict[str, Any] | None:
@@ -3758,8 +3770,21 @@ async def settings_platform(request: Request, pid: str):
         zip_code = str(form.get("zip") or "").strip()
         if zip_code and not re.fullmatch(r"\d{4,5}", zip_code):
             return back(f"/settings/{p.id}?msg={quote(t('The postcode has 4 or 5 digits'), safe='')}#s-ka-zip")
+        from app.services import crosspost_kleinanzeigen as cka
+        amounts = {}
+        for size in ("small", "medium", "large"):          # only the fields the form has (another form keeps them)
+            if f"ship_{size}" in form:
+                raw = str(form.get(f"ship_{size}") or "").strip()
+                value = cka.parse_amount(raw)
+                if raw and value is None:
+                    return back(f"/settings/{p.id}?msg={quote(t('The shipping amount is not a price'), safe='')}#s-ka-ship")
+                amounts[size] = f"{value:.2f}" if value else ""
         set_setting("kleinanzeigen_post_default", "1" if form.get("post_default") else "0")
         set_setting("kleinanzeigen_zip", zip_code)
+        if form.get("ship_mode") in ("own", "pickup", "kleinanzeigen"):
+            set_setting("kleinanzeigen_ship_mode", str(form.get("ship_mode")))
+        for size, value in amounts.items():
+            set_setting(f"kleinanzeigen_ship_{size}", value)
         return back(f"/settings/{p.id}?msg={quote(t('Changes saved'), safe='')}#s-ka-post")
     set_setting(f"platform_{p.id}_enabled", "1" if form.get("enabled") else "0")
     set_setting(f"platform_{p.id}_product_search", "1" if form.get("product_search") else "0")

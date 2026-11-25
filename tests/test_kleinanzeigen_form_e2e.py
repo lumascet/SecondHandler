@@ -10,7 +10,9 @@ import json
 
 import pytest
 
-from app.db import set_setting
+from sqlmodel import select
+
+from app.db import AdDraft, session, set_setting
 from app.platforms import kleinanzeigen_listing as kl
 from app.services import crosspost_kleinanzeigen as ka
 from tests.test_crosspost_kleinanzeigen import FakeBackend, _ka, _setup
@@ -187,10 +189,22 @@ async def site(monkeypatch):
         await browser.close()
 
 
-async def test_an_ad_goes_through_the_whole_form(monkeypatch, tmp_path, site):
+OWN_NOTE = "Versand aus Österreich möglich: 7,90 € (Versand durch mich, nicht über Kleinanzeigen)."
+
+
+@pytest.mark.parametrize("mode, form_shipping, note", [("own", "no", OWN_NOTE), ("pickup", "no", None),
+                                                       ("kleinanzeigen", "yes", None)])
+async def test_an_ad_goes_through_the_whole_form(monkeypatch, tmp_path, site, mode, form_shipping, note):
     img = _setup(monkeypatch, tmp_path)                 # ad 601 from a published draft: 120 €, "Gebraucht", shipping
     monkeypatch.setattr(kl, "Upload", REAL_UPLOAD)      # the real form, not _setup's fake
     set_setting("kleinanzeigen_zip", "1010")
+    set_setting("kleinanzeigen_ship_mode", mode)
+    set_setting("kleinanzeigen_ship_medium", "7.90")
+    with session() as db:                               # the willhaben ad ships with PayLivery, parcel size M
+        d = db.exec(select(AdDraft).where(AdDraft.wh_ad_id == "601")).first()
+        d.wh_plan = {"shipping": {"handover": "both", "paylivery": True, "size": "M", "carrier": "Post"}}
+        db.add(d)
+        db.commit()
     FakeBackend.answers = [1, 0, 0]          # the detected "Haus & Garten > Werkzeug" does not fit; Elektronik; Notebooks
     steps = []
     job = type("Job", (), {"progress": lambda self, *a: steps.append(a[1])})()
@@ -203,10 +217,11 @@ async def test_an_ad_goes_through_the_whole_form(monkeypatch, tmp_path, site):
     assert ad["category"] == "Elektronik > Notebooks"
     assert ad["condition"] == "ok"                                      # "Gebraucht"
     assert ad["priceType"] == "FIXED" and ad["price"] == "120"
-    assert ad["shipping"] == "yes"
+    assert ad["shipping"] == form_shipping              # "Versand möglich" only for Kleinanzeigen's own shipping
     assert ad["zip"] == "1010" and ad["city"] == "Wien"
     assert ad["photos"] == 1
     assert ad["title"] == "Lenovo ThinkPad T14 i5" and ad["description"].startswith("i5, 16 GB")
+    assert ad["description"] == ("i5, 16 GB, 14 Zoll" + (f"\n\n{note}" if note else ""))
     # Claude saw the cleaned labels: no sr-only suffix, and the breadcrumb is no choice
     assert "Elektronik" in FakeBackend.prompts[1] and "öffnet Unterkategorien" not in FakeBackend.prompts[1]
     assert "Alle Kategorien" not in FakeBackend.prompts[2] and "Notebooks" in FakeBackend.prompts[2]

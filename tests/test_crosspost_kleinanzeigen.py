@@ -202,7 +202,9 @@ async def test_the_published_draft_is_the_source(monkeypatch, tmp_path):
     assert asked == []                                                 # copy_plan never read: the draft is the source
     assert FakeUpload.submitted == ["Lenovo ThinkPad T14 i5"]
     assert ("price", "FIXED", 120.0) in FakeUpload.calls and ("condition", "ok") in FakeUpload.calls   # "Gebraucht"
-    assert ("shipping", True) in FakeUpload.calls and FakeUpload.photo_count == [1]
+    # the default: own shipping from Austria – "Nur Abholung" on the form, the note in the text (no PayLivery size)
+    assert ("shipping", False) in FakeUpload.calls and FakeUpload.photo_count == [1]
+    assert FakeUpload.calls[0] == ("describe", "i5, 16 GB, 14 Zoll\n\nVersand aus Österreich nach Absprache möglich.")
     assert FakeUpload.chosen == [] and FakeUpload.applied == []        # kept as the site detected it
     assert _ka()["id"] == "7001" and _ka()["state"] == "active" and _ka()["category"] == "Elektronik > Computer > Laptops"
     assert _ka()["pending"] is None and _ka()["url"].endswith("/s-anzeige/7001")
@@ -217,7 +219,7 @@ async def test_without_a_draft_willhabens_ad_is_read_and_its_photos_downloaded(m
     FakeBackend.answers = [0]
     await ka.to_kleinanzeigen("601")
     assert asked == [1]
-    assert ("condition", "new") in FakeUpload.calls and ("shipping", True) in FakeUpload.calls
+    assert ("condition", "new") in FakeUpload.calls and ("shipping", False) in FakeUpload.calls   # own shipping
     assert ("zip", "1010") in FakeUpload.calls and FakeUpload.photo_count == [1]
 
 
@@ -709,3 +711,100 @@ async def test_a_free_willhaben_ad_stays_free_on_kleinanzeigen(monkeypatch, tmp_
     _draft_set(kleinanzeigen={"price": 90, "note": "x"})
     plan = await ka._source("601", ka._row("601"), tmp_path, lambda s: None)
     assert plan.price is None and plan.price_type == "GIVE_AWAY"     # a giveaway carries no amount
+
+
+# ------------------------------------------------------------------ shipping: own (from Austria), pickup, Kleinanzeigen's
+def _paylivery_draft(size):
+    with session() as db:
+        d = db.exec(select(AdDraft).where(AdDraft.wh_ad_id == "601")).first()
+        d.wh_plan = {"shipping": {"handover": "both", "paylivery": True, "size": size, "carrier": "Post"}}
+        db.add(d)
+        db.commit()
+
+
+def _described():
+    return next(c[1] for c in FakeUpload.calls if c[0] == "describe")
+
+
+@pytest.mark.parametrize("size, amount", [("XS", "5,50 €"), ("S", "5,50 €"), ("M", "7,90 €"), ("L", "12,00 €")])
+async def test_own_shipping_names_the_amount_for_the_parcel_size(monkeypatch, tmp_path, size, amount):
+    _setup(monkeypatch, tmp_path)
+    _paylivery_draft(size)
+    for k, v in (("small", "5.50"), ("medium", "7.90"), ("large", "12.00")):
+        set_setting(f"kleinanzeigen_ship_{k}", v)
+    FakeUpload.detected, FakeBackend.answers = ["Elektronik"], [0]
+    await ka.to_kleinanzeigen("601")
+    assert _described().endswith(f"Versand aus Österreich möglich: {amount} (Versand durch mich, nicht über Kleinanzeigen).")
+    assert ("shipping", False) in FakeUpload.calls                       # never Kleinanzeigen's Hermes/DHL
+
+
+async def test_a_size_without_an_amount_is_by_arrangement(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _paylivery_draft("L")
+    set_setting("kleinanzeigen_ship_small", "5.50")                     # only small has an amount
+    FakeUpload.detected, FakeBackend.answers = ["Elektronik"], [0]
+    await ka.to_kleinanzeigen("601")
+    assert _described().endswith("Versand aus Österreich nach Absprache möglich.")
+
+
+async def test_kleinanzeigen_shipping_ticks_shipping_on_the_form_without_a_note(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    set_setting("kleinanzeigen_ship_mode", "kleinanzeigen")
+    FakeUpload.detected, FakeBackend.answers = ["Elektronik"], [0]
+    await ka.to_kleinanzeigen("601")
+    assert ("shipping", True) in FakeUpload.calls and _described() == "i5, 16 GB, 14 Zoll"
+
+
+async def test_the_ads_own_choice_wins_over_the_setting(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    set_setting("kleinanzeigen_ship_mode", "kleinanzeigen")
+    ka.set_ship("601", "pickup")
+    FakeUpload.detected, FakeBackend.answers = ["Elektronik"], [0]
+    await ka.to_kleinanzeigen("601")
+    assert ("shipping", False) in FakeUpload.calls and _described() == "i5, 16 GB, 14 Zoll"
+    assert _ka()["ship"] == "pickup"                                     # kept after the posting
+    ka.set_ship("601", "")                                               # back to the setting
+    assert "ship" not in _ka()
+
+
+async def test_a_pickup_item_gets_no_note_in_any_mode(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    with session() as db:
+        d = db.exec(select(AdDraft).where(AdDraft.wh_ad_id == "601")).first()
+        d.wh_plan = {"shipping": {"handover": "pickup"}}
+        db.add(d)
+        db.commit()
+    FakeUpload.detected, FakeBackend.answers = ["Elektronik"], [0]
+    await ka.to_kleinanzeigen("601")
+    assert ("shipping", False) in FakeUpload.calls and _described() == "i5, 16 GB, 14 Zoll"
+
+
+def test_the_list_button_keeps_the_ads_shipping_choice(monkeypatch, tmp_path):
+    from app.main import app
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(ka, "enqueue", lambda ad_id: True)
+    with TestClient(app) as c:
+        c.post("/myads/601/kleinanzeigen", data={"ship": "kleinanzeigen"})
+        assert _ka()["ship"] == "kleinanzeigen"
+        c.post("/myads/601/kleinanzeigen", data={"ship": ""})
+        assert "ship" not in _ka()
+        monkeypatch.setattr(ka, "available", lambda: True)
+        ka.set_ship("601", "pickup")
+        page = c.get("/myads?ad=601").text
+    assert "data-ka-ship" in page and '<option value="pickup" selected>' in page
+    assert "Shipping: as set (Own shipping)" in page or "Versand: wie eingestellt (Eigener Versand)" in page
+
+
+def test_the_settings_card_saves_mode_and_amounts():
+    from app.main import app
+    with TestClient(app) as c:
+        r = c.post("/settings/platform/kleinanzeigen", data={"part": "posting", "zip": "", "ship_mode": "pickup",
+                                                              "ship_small": "5,5", "ship_medium": "", "ship_large": "12"})
+        assert r.status_code in (200, 303)
+        assert get_setting("kleinanzeigen_ship_mode") == "pickup"
+        assert (get_setting("kleinanzeigen_ship_small"), get_setting("kleinanzeigen_ship_medium"),
+                get_setting("kleinanzeigen_ship_large")) == ("5.50", "", "12.00")
+        c.post("/settings/platform/kleinanzeigen", data={"part": "posting", "zip": "", "ship_small": "teuer"})
+        assert get_setting("kleinanzeigen_ship_small") == "5.50"         # not a price: nothing saved
+        page = c.get("/settings/kleinanzeigen").text
+        assert 'name="ship_small" value="5,50"' in page and 'value="pickup" selected' in page

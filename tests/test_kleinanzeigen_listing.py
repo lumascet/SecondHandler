@@ -454,3 +454,35 @@ async def test_no_picker_is_still_an_error(browser_page):
             await up.open_category_dialog()
     finally:
         kl.CATEGORY_OPEN_MS = kl_wait
+
+
+# ------------------------------------------------------------------ own shipping: the note in the text
+def test_paylivery_sizes_map_to_three_amounts_and_unknown_is_none():
+    assert [kl.ship_size(x) for x in ("XS", "S", "m", "L", "XL", None)] == ["small", "small", "medium", "large", None,
+                                                                            None]
+
+
+def test_the_note_names_the_amount_in_german_format():
+    amounts = {"small": 5.5, "medium": None, "large": 1234.5}
+    assert "5,50 €" in kl.shipping_note("small", amounts)
+    assert "1.234,50 €" in kl.shipping_note("large", amounts)
+    assert kl.shipping_note("medium", amounts) == kl.shipping_note(None, amounts) == \
+        "Versand aus Österreich nach Absprache möglich."
+
+
+def test_the_note_survives_the_4000_character_cut():
+    note = kl.shipping_note("small", {"small": 5.5})
+    plan = _plan(description="Wort " * 2000, ship_mode="own", ship_note=note)
+    assert len(plan.description) <= kl.DESCRIPTION_MAX and plan.description.endswith(note)
+
+
+def test_own_shipping_and_pickup_are_pickup_on_the_form():
+    note = "Versand aus Österreich nach Absprache möglich."
+    own = _plan(ship_mode="own", ship_note=note)
+    assert own.shipping and not own.form_shipping and own.description.endswith(note)
+    pickup = _plan(ship_mode="pickup", ship_note=note)
+    assert not pickup.form_shipping and note not in pickup.description
+    ka_ship = _plan(ship_mode="kleinanzeigen", ship_note=note)
+    assert ka_ship.form_shipping and note not in ka_ship.description
+    no_ship = _plan(shipping=False, ship_mode="own", ship_note=note)
+    assert not no_ship.form_shipping and note not in no_ship.description
