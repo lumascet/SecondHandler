@@ -44,5 +44,18 @@
  "Nothing to forget: the ad is not waiting for a check": "Nichts zu vergessen: die Anzeige wartet nicht auf eine Prüfung",
  "Forget": "Vergessen",
  "Drops the record here only: this app stops waiting for the posting, and the ad may be listed again. An ad that is online on Kleinanzeigen stays there – delete it there.": "Entfernt nur den Eintrag hier: die App wartet nicht mehr auf die Anzeige, und sie darf erneut eingestellt werden. Eine Anzeige, die auf Kleinanzeigen online ist, bleibt dort – dort löschen.",
- "the comparable ads were far cheaper – willhaben's price is kept": "die vergleichbaren Anzeigen waren viel billiger – der willhaben-Preis bleibt"
+ "the comparable ads were far cheaper – willhaben's price is kept": "die vergleichbaren Anzeigen waren viel billiger – der willhaben-Preis bleibt",
+ "Shipping on Kleinanzeigen (for ads that ship on willhaben)": "Versand auf Kleinanzeigen (für Anzeigen, die auf willhaben versendet werden)",
+ "Own shipping from Austria (note with the price)": "Eigener Versand aus Österreich (Hinweis mit Preis)",
+ "Kleinanzeigen shipping (Hermes/DHL, sent from Germany)": "Kleinanzeigen-Versand (Hermes/DHL, Versand aus Deutschland)",
+ "Kleinanzeigen has no shipping at your own price for private ads: own shipping is posted as pickup only, with a note at the end of the text. Its price follows the willhaben ad's PayLivery parcel size (XS and S: small, M: medium, L: large); without a size or an amount the note offers shipping by arrangement.": "Kleinanzeigen bietet privaten Anzeigen keinen Versand zum eigenen Preis an: Eigener Versand wird als „Nur Abholung“ eingestellt, mit einem Hinweis am Ende des Textes. Der Preis richtet sich nach der PayLivery-Paketgröße der willhaben-Anzeige (XS und S: klein, M: mittel, L: groß); ohne Größe oder Betrag bietet der Hinweis Versand nach Absprache an.",
+ "Small": "Klein",
+ "Medium": "Mittel",
+ "Large": "Groß",
+ "e.g. 7,50": "z. B. 7,50",
+ "Shipping: as set": "Versand: wie eingestellt",
+ "How the item is offered for shipping on Kleinanzeigen": "Wie der Artikel auf Kleinanzeigen zum Versand angeboten wird",
+ "Own shipping": "Eigener Versand",
+ "Kleinanzeigen shipping": "Kleinanzeigen-Versand",
+ "The shipping amount is not a price": "Der Versandbetrag ist kein Preis"
 }

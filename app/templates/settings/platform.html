@@ -13,6 +13,18 @@
       <p class="text-[12.5px] text-muted">{{ _("An ad from willhaben is posted through Kleinanzeigen's own ad form in the app's browser; the account above must be logged in. Reserving and activating follow the willhaben ad. Nothing is deleted on Kleinanzeigen by itself: a copy is deleted in My ads.") }}</p></div>
     <label id="s-ka-post-default" class="flex cursor-pointer items-center justify-between gap-3"><span class="min-w-0 font-medium">{{ _("Post new ads on Kleinanzeigen too (ticked by default on the draft page)") }}</span><input type="checkbox" class="toggle toggle-primary" name="post_default" {% if site.ka_post.default %}checked{% endif %}></label>
     <label id="s-ka-zip" class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Postcode for the ads (empty: what the form prefills)") }}</span><input name="zip" value="{{ site.ka_post.zip }}" inputmode="numeric" maxlength="5" placeholder="{{ _('4 or 5 digits') }}" class="input w-full min-w-0 bg-base-200 sm:w-48"></label>
+    <div id="s-ka-ship" class="flex flex-col gap-1.5">
+      <label class="flex min-w-0 flex-col gap-1.5"><span class="text-[12.5px] text-muted">{{ _("Shipping on Kleinanzeigen (for ads that ship on willhaben)") }}</span>
+        <select name="ship_mode" class="select w-full min-w-0 bg-base-200 sm:w-80">
+          {% for v, lbl in [('own', _("Own shipping from Austria (note with the price)")), ('pickup', _("Pickup only")), ('kleinanzeigen', _("Kleinanzeigen shipping (Hermes/DHL, sent from Germany)"))] %}
+          <option value="{{ v }}" {% if site.ka_post.ship_mode == v %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
+        </select></label>
+      <p class="text-[12.5px] text-muted">{{ _("Kleinanzeigen has no shipping at your own price for private ads: own shipping is posted as pickup only, with a note at the end of the text. Its price follows the willhaben ad's PayLivery parcel size (XS and S: small, M: medium, L: large); without a size or an amount the note offers shipping by arrangement.") }}</p>
+      <div class="grid grid-cols-3 gap-2 sm:w-80">
+        {% for size, lbl in [('small', _("Small")), ('medium', _("Medium")), ('large', _("Large"))] %}
+        <label class="flex min-w-0 flex-col gap-1"><span class="text-[12.5px] text-muted">{{ lbl }} (€)</span><input name="ship_{{ size }}" value="{{ site.ka_post.ship[size] }}" inputmode="decimal" placeholder="{{ _('e.g. 7,50') }}" class="input w-full min-w-0 bg-base-200"></label>{% endfor %}
+      </div>
+    </div>
     <div><button class="btn btn-primary">{{ _("Save") }}</button></div>
   </form>
   {% endif %}

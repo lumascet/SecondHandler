@@ -383,3 +383,106 @@ async def test_own_ads_running_past_the_page_cap_are_an_error():
     own.page = FakePage(kl.OWN_ADS_URL, answers=answers)
     with pytest.raises(kl.ListingError, match="past"):
         await own.list()
+
+
+# ------------------------------------------------------------------ the category picker, in a real browser
+# A made-up form after the site's redesign as kleinanzeigen-bot reads it: the link opens a native <dialog open> (no
+# role attribute) a moment later, first with only "Alle Kategorien", each choice with an sr-only suffix.
+PICKER_FORM = """<!doctype html><meta charset="utf-8">
+<span id="ad-category-path"></span><a href="#" aria-describedby="ad-category-path" id="open">Ändern</a>
+<dialog id="d"><h2>Kategorie wählen</h2><ul id="list"></ul><button id="apply">Übernehmen</button></dialog>
+<script>
+const tree = {"Alle Kategorien": {"Elektronik": {"Haushaltsgeräte": null, "Weitere Elektronik": null},
+                                  "Haus & Garten": {"Werkzeug": null}}};
+let level = tree;
+function render() {
+  const ul = document.getElementById("list"); ul.innerHTML = "";
+  for (const k of Object.keys(level)) {
+    const li = document.createElement("li"), b = document.createElement("button");
+    b.innerHTML = k + (level[k] ? '<span class="sr-only">, öffnet Unterkategorien</span>' : "")
+                    + '<svg aria-hidden="true"><text>›</text></svg>';
+    b.onclick = () => { if (level[k]) { level = level[k]; render(); } else { b.setAttribute("aria-pressed", "true"); } };
+    li.append(b); ul.append(li);
+  }
+}
+document.getElementById("open").onclick = e => {
+  e.preventDefault();
+  setTimeout(() => { document.getElementById("d").show(); render(); }, 1200);   // later than the old fixed 800 ms
+};
+document.getElementById("apply").onclick = () => document.getElementById("d").close();
+</script>"""
+
+
+@pytest.fixture
+async def browser_page():
+    pw_mod = pytest.importorskip("playwright.async_api")
+    async with pw_mod.async_playwright() as pw:
+        browser = None
+        for kwargs in ({}, {"channel": "chrome"}):              # bundled Chromium, else the installed Google Chrome
+            try:
+                browser = await pw.chromium.launch(**kwargs)
+                break
+            except Exception:  # noqa: BLE001 - not installed under this name
+                continue
+        if browser is None:
+            pytest.skip("no Chromium or Google Chrome for Playwright")
+        page = await browser.new_page()
+        await page.set_content(PICKER_FORM)
+        yield page
+        await browser.close()
+
+
+async def test_the_native_category_dialog_opens_and_is_walked(browser_page):
+    up = kl.Upload()
+    up.page = browser_page
+    labels = await up.open_category_dialog()
+    assert labels == ["Elektronik", "Haus & Garten"]            # past "Alle Kategorien", without the sr-only suffix
+    assert await up.choose_category("Elektronik") == ["Haushaltsgeräte", "Weitere Elektronik"]
+    assert await up.choose_category("Weitere Elektronik") is None    # a leaf: the level stays
+    await up.apply_category()
+    assert not await browser_page.locator("dialog[open]").count()
+
+
+async def test_no_picker_is_still_an_error(browser_page):
+    await browser_page.set_content("<a href='#' aria-describedby='ad-category-path'>Ändern</a>")
+    up = kl.Upload()
+    up.page = browser_page
+    kl_wait = kl.CATEGORY_OPEN_MS
+    try:
+        kl.CATEGORY_OPEN_MS = 500
+        with pytest.raises(kl.ListingError):
+            await up.open_category_dialog()
+    finally:
+        kl.CATEGORY_OPEN_MS = kl_wait
+
+
+# ------------------------------------------------------------------ own shipping: the note in the text
+def test_paylivery_sizes_map_to_three_amounts_and_unknown_is_none():
+    assert [kl.ship_size(x) for x in ("XS", "S", "m", "L", "XL", None)] == ["small", "small", "medium", "large", None,
+                                                                            None]
+
+
+def test_the_note_names_the_amount_in_german_format():
+    amounts = {"small": 5.5, "medium": None, "large": 1234.5}
+    assert "5,50 €" in kl.shipping_note("small", amounts)
+    assert "1.234,50 €" in kl.shipping_note("large", amounts)
+    assert kl.shipping_note("medium", amounts) == kl.shipping_note(None, amounts) == \
+        "Versand aus Österreich nach Absprache möglich."
+
+
+def test_the_note_survives_the_4000_character_cut():
+    note = kl.shipping_note("small", {"small": 5.5})
+    plan = _plan(description="Wort " * 2000, ship_mode="own", ship_note=note)
+    assert len(plan.description) <= kl.DESCRIPTION_MAX and plan.description.endswith(note)
+
+
+def test_own_shipping_and_pickup_are_pickup_on_the_form():
+    note = "Versand aus Österreich nach Absprache möglich."
+    own = _plan(ship_mode="own", ship_note=note)
+    assert own.shipping and not own.form_shipping and own.description.endswith(note)
+    pickup = _plan(ship_mode="pickup", ship_note=note)
+    assert not pickup.form_shipping and note not in pickup.description
+    ka_ship = _plan(ship_mode="kleinanzeigen", ship_note=note)
+    assert ka_ship.form_shipping and note not in ka_ship.description
+    no_ship = _plan(shipping=False, ship_mode="own", ship_note=note)
+    assert not no_ship.form_shipping and note not in no_ship.description

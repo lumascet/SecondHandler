@@ -200,7 +200,12 @@
         <form method="post" action="/myads/{{ a.ad_id }}/kleinanzeigen/forget" hx-post="/myads/{{ a.ad_id }}/kleinanzeigen/forget"><button class="btn btn-xs btn-ghost" title="{{ _('Drops the record here only: this app stops waiting for the posting, and the ad may be listed again. An ad that is online on Kleinanzeigen stays there – delete it there.') }}">{{ _("Forget") }}</button></form>
       {% else %}
         <span class="text-muted">{{ _("No longer on Kleinanzeigen") if ka.id else _("not listed") }}</span>
-        {% if ka_ok %}<form method="post" action="/myads/{{ a.ad_id }}/kleinanzeigen" hx-post="/myads/{{ a.ad_id }}/kleinanzeigen"><button class="btn btn-xs" title="{{ _('Title, text, price, photos and category posted on Kleinanzeigen through its own ad form, in the browser of the app') }}">{{ _("List") }}</button></form>{% endif %}
+        {% if ka_ok %}<form method="post" action="/myads/{{ a.ad_id }}/kleinanzeigen" hx-post="/myads/{{ a.ad_id }}/kleinanzeigen" class="flex flex-wrap items-center gap-1.5">
+          <select name="ship" class="select select-xs" title="{{ _('How the item is offered for shipping on Kleinanzeigen') }}" data-ka-ship>
+            {% for v, lbl in [('', _("Shipping: as set") ~ ' (' ~ ka_ship_labels[ka_ship_default] ~ ')'), ('own', ka_ship_labels.own), ('pickup', ka_ship_labels.pickup), ('kleinanzeigen', ka_ship_labels.kleinanzeigen)] %}
+            <option value="{{ v }}" {% if (ka.ship or '') == v %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
+          </select>
+          <button class="btn btn-xs" title="{{ _('Title, text, price, photos and category posted on Kleinanzeigen through its own ad form, in the browser of the app') }}">{{ _("List") }}</button></form>{% endif %}
       {% endif %}
       {% if ka.price and not ka.pending %}{% set dpct = ((ka.price - ka.wh_price) * 100 / ka.wh_price)|round|int if ka.wh_price else 0 %}<span class="text-muted" data-ka-price{% if ka.price_note %} title="{{ ka.price_note }}"{% endif %}>{{ _("Price there: {price}", price=ka.price|eur) }}{% if dpct > 0 %} · {{ _("{n} % above willhaben", n=dpct) }}{% elif dpct < 0 %} · {{ _("{n} % below willhaben", n=-dpct) }}{% endif %}</span>{% endif %}
       </div>

@@ -5,9 +5,13 @@ The site's flow as read from the open-source kleinanzeigen-bot (Second-Hand-Frie
 publishing_form.py, publishing_submission.py, published_ads.py, delete_flow.py, reserve_flow.py; read 2026-11-06):
   form      https://www.kleinanzeigen.de/p-anzeige-aufgeben-schritt2.html, logged in (else the login page). The form is
             filled in one session and never reloaded: a category change resets it, so the category comes first.
-  category  typing the text (#ad-description) detects one; #ad-category-path shows it. To set another: the link
-            a[aria-describedby=ad-category-path] opens "Kategorie wählen" (a dialog, one level of labels at a time, then
-            "Übernehmen"); a redesigned variant is fieldset#ad-category-picker with radio labels.
+  category  seen live 2026-11-25: the site suggests categories from the TITLE, not the text, as radio labels in
+            fieldset#ad-category-picker ("Elektronik → Weitere Elektronik"); there is no #ad-category-path. Without a
+            title the link "Wähle deine Kategorie" (with one: "Andere Kategorie wählen", after a choice: "Kategorie
+            ändern", a[aria-describedby=ad-category-path]) opens "Kategorie wählen": a native <dialog open> without a
+            role attribute, one level of ul > li > button choices at a time, each with an sr-only ", öffnet
+            Unterkategorien"; below the first level a breadcrumb nav (ol li > button "Alle Kategorien") leads back. A
+            leaf is a button with aria-pressed: clicking it marks it, the level stays, "Übernehmen" is enabled.
   condition a dialog from button[data-kab-condition-trigger=true], a radio per value (new, like_new, ok, alright,
             defect), "Bestätigen". Categories without the attribute have no trigger: nothing is set.
   price     #ad-price-type opens the menu #ad-price-type-menu-option-N (FIXED 0, NEGOTIABLE 1, GIVE_AWAY 2); the amount
@@ -65,7 +69,20 @@ OWN_ADS_PAGES = 50
 PHOTO_MARKERS = "input[name^='adImages'][name$='.url']"
 CAPTCHA = ("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], iframe[src*='cloudflare'], iframe[src*='arkose'], "
            ".g-recaptcha")
-CATEGORY_DIALOG = '[role="dialog"]:not([aria-hidden="true"])'
+# the category picker: a native <dialog open> (no role attribute) or an ARIA dialog, titled "Kategorie wählen"
+CATEGORY_DIALOG = ':is(dialog[open], [role="dialog"]:not([aria-hidden="true"]))'
+CATEGORY_TITLE = re.compile(r"Kategorie wählen|Choose category")
+# a level's choices: ul > li > button. Below the first level the dialog also shows a breadcrumb (nav ol li > button
+# "Alle Kategorien /"), a way back that is not a choice (seen live 2026-11-25)
+CATEGORY_CHOICES = "ul > li > button"
+CATEGORY_OPEN_MS = 8000                  # how long the picker may take to show its first level after the click
+ALL_CATEGORIES = "alle kategorien"       # a generic entry some sessions show alone at the first level
+# a choice's label without its screen-reader-only suffix (", öffnet Unterkategorien") and decorative parts
+CHOICE_LABELS_JS = """els => els.map(el => {
+  const c = el.cloneNode(true);
+  for (const p of c.querySelectorAll('.sr-only, [aria-hidden="true"]')) p.remove();
+  return (c.textContent || '').replace(/\\s+/g, ' ').trim();
+})"""
 CATEGORY_RADIOS = "#ad-category-picker"
 UPSELL_BUTTONS = ("Ohne Top-Anzeige weiter", "Ohne Hochschieben weiter")
 PAID_MARKERS = ("Nächster Schritt", "#myftr-shppngcrt-frm")
@@ -129,12 +146,55 @@ class Plan:
     price: float | None
     price_type: str                      # FIXED | NEGOTIABLE | GIVE_AWAY
     condition: str | None                # the form's code: new | like_new | ok | defect; None = no condition set
-    shipping: bool                       # shipping possible (else pickup only)
+    shipping: bool                       # the item ships (willhaben's handover), whatever the form is told
     zip: str | None
     category: list[str] = field(default_factory=list)   # labels, root first; empty = keep the site's detection
     photos: list[str] = field(default_factory=list)     # local file paths
     price_note: str | None = None        # why this price (the Kleinanzeigen analysis's note), kept on the ad
     wh_price: float | None = None        # willhaben's price of the same ad, for "x % above willhaben" on My ads
+    ship_mode: str = "kleinanzeigen"     # SHIP_MODES: how a shipping item is offered on Kleinanzeigen
+
+    @property
+    def form_shipping(self) -> bool:
+        """"Versand möglich" on the form: only Kleinanzeigen's own shipping (Hermes/DHL, sent from Germany); own
+        shipping and pickup are "Nur Abholung" on the form (own shipping is the note in the text)."""
+        return self.shipping and self.ship_mode == "kleinanzeigen"
+
+
+# How an item that ships is offered on Kleinanzeigen. Private ads there have no shipping at the seller's own price any
+# more (seen live 2026-11-25; kleinanzeigen-bot: "Individual shipping ... is no longer supported"): "Versand möglich"
+# is Kleinanzeigen's Hermes/DHL, sent from Germany. Own shipping (from Austria) is therefore "Nur Abholung" on the
+# form and a note at the end of the text with the price for the parcel's size.
+SHIP_MODES = ("own", "pickup", "kleinanzeigen")
+SHIP_SIZES = ("small", "medium", "large")
+# willhaben's PayLivery sizes (insert.PARCEL_SIZES) as the three amounts of the setting
+SIZE_OF_PAYLIVERY = {"XS": "small", "S": "small", "M": "medium", "L": "large"}
+
+
+def ship_size(paylivery_size: str | None) -> str | None:
+    """The setting's size (small / medium / large) of a willhaben PayLivery size; None when unknown (never guessed)."""
+    return SIZE_OF_PAYLIVERY.get(str(paylivery_size or "").strip().upper())
+
+
+def eur(amount: float) -> str:
+    """7.5 -> "7,50 €" (German format, as in the ad text)."""
+    return f"{amount:,.2f}".replace(",", " ").replace(".", ",").replace(" ", ".") + " €"
+
+
+def shipping_note(size: str | None, amounts: dict[str, float | None]) -> str:
+    """The text's note for own shipping: the amount for the parcel's size, or "nach Absprache" when the size or its
+    amount is unknown. German: it is part of the ad."""
+    amount = amounts.get(size) if size else None
+    if amount:
+        return f"Versand aus Österreich möglich: {eur(float(amount))} (Versand durch mich, nicht über Kleinanzeigen)."
+    return "Versand aus Österreich nach Absprache möglich."
+
+
+def with_note(text: str, note: str | None) -> str:
+    """The text with the note at its end; the text is cut first, so the note survives the 4000-character limit."""
+    if not note:
+        return _cut(text, DESCRIPTION_MAX)
+    return f"{_cut(text, DESCRIPTION_MAX - len(note) - 2).rstrip()}\n\n{note}"
 
 
 def ad_url(ad_id: str) -> str:
@@ -158,25 +218,29 @@ def _cut(text: str, limit: int) -> str:
 
 
 def build_plan(*, title: str, description: str, price: float | None, condition_value: str | None,
-               shipping: bool, zip_code: str | None, photos: list[str], category: tuple[str, ...] | list[str] = ()) -> Plan:
+               shipping: bool, zip_code: str | None, photos: list[str], category: tuple[str, ...] | list[str] = (),
+               ship_mode: str = "kleinanzeigen", ship_note: str | None = None) -> Plan:
     """The ad as the posting form takes it. The title is cut to 65 characters, the text to 4000. A price of 0 or none
-    is a giveaway (GIVE_AWAY, no amount), any other price is a fixed price. Raises ListingError when the ad cannot
-    be posted as it is: a title under 10 characters, no text, no photo."""
+    is a giveaway (GIVE_AWAY, no amount), any other price is a fixed price. A shipping item offered with own shipping
+    gets `ship_note` at the end of its text. Raises ListingError when the ad cannot be posted as it is: a title under
+    10 characters, no text, no photo."""
     clean_title = _cut(" ".join(str(title or "").split()), TITLE_MAX)
     if len(clean_title) < TITLE_MIN:
         raise ListingError(t("the title needs {n} characters at least", n=TITLE_MIN))
-    text = _cut(str(description or "").strip(), DESCRIPTION_MAX)
+    text = str(description or "").strip()
     if not text:
         raise ListingError(t("the ad needs a text"))
     files = [str(p) for p in photos or [] if p][:MAX_PHOTOS]
     if not files:
         raise ListingError(t("a Kleinanzeigen ad needs at least one photo"))
+    mode = ship_mode if ship_mode in SHIP_MODES else "kleinanzeigen"
+    text = with_note(text, ship_note if shipping and mode == "own" else None)
     amount = float(price) if price else None
     return Plan(title=clean_title, description=text, price=amount,
                 price_type="FIXED" if amount else "GIVE_AWAY",
                 condition=condition_code(condition_value), shipping=bool(shipping),
                 zip=(str(zip_code).strip() or None) if zip_code else None,
-                category=[str(c) for c in category or []], photos=files)
+                category=[str(c) for c in category or []], photos=files, ship_mode=mode)
 
 
 def _price(value: Any) -> float | None:
@@ -204,7 +268,7 @@ def _zustand(ad: dict[str, Any]) -> str | None:
 
 
 def plan_from_willhaben(ad: dict[str, Any], shipping: dict[str, Any] | None, photos: list[str],
-                        zip_code: str | None) -> Plan:
+                        zip_code: str | None, ship_mode: str = "kleinanzeigen", ship_note: str | None = None) -> Plan:
     """The plan of a willhaben ad (insert.copy_plan's "ad" and "shipping"). The category is left to the site's own
     detection: willhaben's category tree does not name Kleinanzeigen's categories. The condition is the willhaben
     label's value (condition.from_text: "Gebraucht" is used); shipping is possible when the handover includes it."""
@@ -216,7 +280,7 @@ def plan_from_willhaben(ad: dict[str, Any], shipping: dict[str, Any] | None, pho
     return build_plan(title=str(ad.get("heading") or ""), description=insert.description_text(ad.get("description")),
                       price=_price(ad.get("price")), condition_value=value,
                       shipping=bool(handover in ("shipping", "both") or ship.get("shipping") is True),
-                      zip_code=zip_code, photos=list(photos or []))
+                      zip_code=zip_code, photos=list(photos or []), ship_mode=ship_mode, ship_note=ship_note)
 
 
 def ad_id_from_url(url: str | None) -> str | None:
@@ -412,35 +476,67 @@ class Upload(_Tab):
             if not await link.count():
                 link = self.page.locator("a").filter(has_text="Kategorie").first
             await link.click()
-            await self.page.wait_for_timeout(800)
-        labels = await self._labels()
+        labels = await self._wait_labels(CATEGORY_OPEN_MS)
+        if len(labels) == 1 and norm_label(labels[0]) == ALL_CATEGORIES:
+            labels = await self.choose_category(labels[0]) or labels
         if not labels:
+            await self._log_no_picker()
             raise ListingError(t("the category list did not open"))
         log.info("kleinanzeigen form: category level has %d options", len(labels))
         return labels
 
-    def _level(self) -> str:
-        """The selector of the current level's labels: the dialog's buttons, else the radio variant's labels."""
-        return f"{CATEGORY_DIALOG} li > button"
+    async def _wait_labels(self, timeout_ms: int) -> list[str]:
+        """The current level's labels, polled until they show or the time is up (the picker renders after the click)."""
+        waited = 0
+        while True:
+            labels = await self._labels()
+            if labels or waited >= timeout_ms:
+                return labels
+            await self.page.wait_for_timeout(250)
+            waited += 250
+
+    async def _log_no_picker(self) -> None:
+        """What the page shows instead of a picker, for the next fix (the selectors are not verified live)."""
+        counts = {}
+        for sel in ("dialog[open]", '[role="dialog"]', CATEGORY_RADIOS, '[id^="cat_"]', "#ad-category-path"):
+            try:
+                counts[sel] = await self.page.locator(sel).count()
+            except Exception:  # noqa: BLE001 - diagnostics only
+                counts[sel] = "?"
+        log.warning("kleinanzeigen form: no category picker at %s; %s", self.page.url, counts)
+
+    def _choices(self):
+        """The locators that may hold the current level's choices, the likeliest first: the titled dialog's buttons,
+        any open dialog's buttons, the radio variant's labels."""
+        dialogs = self.page.locator(CATEGORY_DIALOG)
+        return (dialogs.filter(has_text=CATEGORY_TITLE).locator(CATEGORY_CHOICES),
+                dialogs.locator(CATEGORY_CHOICES),
+                self.page.locator(f"{CATEGORY_RADIOS} label"))
+
+    async def _current(self):
+        """(locator, labels in the locator's order, empty ones included) of the first place with any label."""
+        for loc in self._choices():
+            try:
+                texts = await loc.evaluate_all(CHOICE_LABELS_JS)
+            except Exception:  # noqa: BLE001 - not rendered (yet)
+                continue
+            if any(texts):
+                return loc, texts
+        return None, []
 
     async def _labels(self) -> list[str]:
-        for sel in (self._level(), f"{CATEGORY_RADIOS} label"):
-            texts = [" ".join(x.split()) for x in await self.page.locator(sel).all_inner_texts()]
-            texts = [x for x in texts if x]
-            if texts:
-                return texts
-        return []
+        _, texts = await self._current()
+        return [x for x in texts if x]
 
     async def choose_category(self, label: str) -> list[str] | None:
         """Click one label of the current level. Returns the next level's labels, or None at a leaf (the level did
         not change: the choice is the category, apply_category takes it)."""
-        before = await self._labels()
-        sel = self._level() if await self._visible(CATEGORY_DIALOG) else f"{CATEGORY_RADIOS} label"
-        options = await self.page.locator(sel).all_inner_texts()
-        hit = next((i for i, o in enumerate(options) if norm_label(o) == norm_label(label)), None)
-        if hit is None:
+        loc, options = await self._current()
+        before = [x for x in options if x]
+        hit = next((i for i, o in enumerate(options) if o and norm_label(o) == norm_label(label)), None)
+        if loc is None or hit is None:
             raise ListingError(t("no option '{label}' in the category dialog", label=label))
-        await self.page.locator(sel).nth(hit).click()
+        await loc.nth(hit).click()
         await self.page.wait_for_timeout(700)
         after = await self._labels()
         log.info("kleinanzeigen form: category %r chosen", label)
@@ -561,7 +657,7 @@ class Upload(_Tab):
             log.info("kleinanzeigen form: category as the site detected it: %s", await self.detected_category())
         await self.set_condition(plan.condition)
         await self.set_price(plan.price_type, plan.price)
-        await self.set_shipping(plan.shipping)
+        await self.set_shipping(plan.form_shipping)
         await self.set_zip(plan.zip)
         await self.photos(plan.photos)
 

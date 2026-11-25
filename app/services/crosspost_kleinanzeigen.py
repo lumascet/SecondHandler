@@ -25,6 +25,8 @@ Interface used by the rest of the app (ad_creator after a willhaben publish, My 
 - schedule_sync(ad_id): the copy follows the willhaben ad's state, quietly; a no-op for an ad not on Kleinanzeigen
 - scheduled_sync(): the hourly sync of every linked ad (app/scheduler.py)
 - forget(ad_id) -> bool: drop a "check" record (My ads → Forget)
+- set_ship(ad_id, mode) / ship_mode_of(row) / ship_setting(): how a shipping item is offered there (own shipping from
+  Austria as "Nur Abholung" plus a note with the amount for its parcel size, pickup only, or Kleinanzeigen's Hermes/DHL)
 - recover(): after a restart, a step that was on its way is over (a submit that may have gone through: "check")
 
 Not verified against the live site: every selector and text of the posting form and the own-ads page is the
@@ -186,6 +188,62 @@ async def _analysed_price(heading: str | None, condition: str | None, shipping: 
     return float(ka["price"]), ka.get("note")
 
 
+# ------------------------------------------------------------------ shipping
+SHIP_DEFAULT = "own"        # the setting's default: sent from Austria by the owner (Kleinanzeigen's own ships from DE)
+
+
+def ship_setting() -> str:
+    """The global way a shipping item is offered on Kleinanzeigen (kl.SHIP_MODES)."""
+    mode = get_setting("kleinanzeigen_ship_mode")
+    return mode if mode in kl.SHIP_MODES else SHIP_DEFAULT
+
+
+def ship_amounts() -> dict[str, float | None]:
+    """The own-shipping amounts per size (small / medium / large); None where none is set."""
+    return {size: parse_amount(get_setting(f"kleinanzeigen_ship_{size}")) for size in kl.SHIP_SIZES}
+
+
+def parse_amount(raw: Any) -> float | None:
+    """ "7,50" / "7.5" / "7" -> 7.5; None for empty or unreadable text or an amount of 0 or less."""
+    text = str(raw or "").strip().replace("€", "").replace(" ", "").replace(",", ".")
+    try:
+        value = round(float(text), 2)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def ship_mode_of(row: MyAd | None, draft: dict[str, Any] | None = None) -> str:
+    """The way this ad ships on Kleinanzeigen: its own choice (My ads), else its draft's, else the setting."""
+    for own in ((row.kleinanzeigen or {}) if row is not None else {}, (draft or {}).get("kleinanzeigen") or {}):
+        if own.get("ship") in kl.SHIP_MODES:
+            return own["ship"]
+    return ship_setting()
+
+
+def _ship(row: MyAd, draft: dict[str, Any] | None, shipping: dict[str, Any] | None) -> tuple[str, str | None]:
+    """(mode, note) for the plan: the note names the own-shipping amount for the PayLivery parcel size of the ad."""
+    mode = ship_mode_of(row, draft)
+    if mode != "own":
+        return mode, None
+    size = kl.ship_size((shipping or {}).get("size")) if (shipping or {}).get("paylivery") else None
+    return mode, kl.shipping_note(size, ship_amounts())
+
+
+def set_ship(ad_id: str, mode: str | None) -> None:
+    """The ad's own way of shipping on Kleinanzeigen (My ads, with "List"); empty or unknown: the setting again."""
+    with session() as db:
+        row = db.get(MyAd, str(ad_id))
+        if row is None:
+            return
+        ka = {k: v for k, v in (row.kleinanzeigen or {}).items() if k != "ship"}
+        if mode in kl.SHIP_MODES:
+            ka["ship"] = mode
+        row.kleinanzeigen = ka or None
+        db.add(row)
+        db.commit()
+
+
 async def _source(ad_id: str, row: MyAd, tmp: Path, step: Callable[[str], None]) -> kl.Plan:
     """The ad as the posting form takes it: the draft it was published from, else willhaben's own ad (read-only)
     with its photos downloaded into `tmp`. ListingError when there is no price or no photo; copy_plan's error
@@ -198,9 +256,11 @@ async def _source(ad_id: str, row: MyAd, tmp: Path, step: Callable[[str], None])
             raise kl.ListingError(t("the ad has no price on willhaben (a free ad is price 0)"))
         ship = draft["wh_plan"].get("shipping") or {}
         shipping = ship.get("handover") in ("shipping", "both") or ship.get("shipping") is True
+        mode, ship_note = _ship(row, draft, ship)
         plan = kl.build_plan(title=draft["title"] or row.heading or "", description=draft["description"] or "",
                              price=price, condition_value=_condition_value(draft["condition"]),
-                             shipping=shipping, zip_code=zip_code, photos=draft["photos"])
+                             shipping=shipping, zip_code=zip_code, photos=draft["photos"],
+                             ship_mode=mode, ship_note=ship_note)
         plan.price_note, plan.wh_price = note, draft["price"]
         return plan
     from app.services import ad_images
@@ -217,7 +277,8 @@ async def _source(ad_id: str, row: MyAd, tmp: Path, step: Callable[[str], None])
         if p is None:
             raise kl.ListingError(t("Photo {i} of the ad could not be loaded", i=i))
         files.append(str(p))
-    plan = kl.plan_from_willhaben(src["ad"], src["shipping"], files, zip_code)
+    mode, ship_note = _ship(row, None, src["shipping"])
+    plan = kl.plan_from_willhaben(src["ad"], src["shipping"], files, zip_code, ship_mode=mode, ship_note=ship_note)
     plan.wh_price = plan.price
     if plan.price:                       # a giveaway stays one (its price type is set by build_plan from the price)
         step(t("Comparing prices on Kleinanzeigen"))
@@ -282,7 +343,7 @@ async def to_kleinanzeigen(ad_id: str, job: jobs.Job | None = None) -> str:
             path = await _category(up, about, await up.detected_category(), step)
             await up.set_condition(plan.condition)         # False: this category has no condition to set
             await up.set_price(plan.price_type, plan.price)
-            await up.set_shipping(plan.shipping)
+            await up.set_shipping(plan.form_shipping)       # own shipping and pickup: "Nur Abholung"
             await up.set_zip(plan.zip)
             step(t("Uploading {n} photos to Kleinanzeigen", n=len(plan.photos)))
             await up.photos(plan.photos)

@@ -866,6 +866,10 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "kleinanzeigen_api_auth": "",
     "kleinanzeigen_post_default": "0",   # new ads: the "also on Kleinanzeigen" box starts ticked
     "kleinanzeigen_zip": "",             # the postcode for ads posted there (empty: what the form prefills)
+    "kleinanzeigen_ship_mode": "own",    # a shipping item there: own (from Austria, a note in the text) | pickup | kleinanzeigen
+    "kleinanzeigen_ship_small": "",      # own shipping's amount per parcel size (PayLivery XS/S, M, L); empty: "nach Absprache"
+    "kleinanzeigen_ship_medium": "",
+    "kleinanzeigen_ship_large": "",
     "willhaben_app_key": "",
     # the ad pane's "Message the seller": standard questions offered as chips, one per line
     "contact_questions": "Ist der Artikel noch verfügbar?\nIst Versand möglich?\nIst preislich noch etwas machbar?\n"
